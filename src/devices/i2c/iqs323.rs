@@ -206,6 +206,8 @@ pub struct Iqs323 {
     // Device state
     show_reset: bool,
     ati_error: bool,
+    /// Fault: the lock-up check register (0xFE) no longer reads 0xEE.
+    pub lockup: bool,
     ati_until: Option<u64>,
     boot_until: Option<u64>,
     fingers: [bool; 3],
@@ -255,6 +257,7 @@ impl Iqs323 {
             pending_cmd: 0,
             show_reset: true,
             ati_error: false,
+            lockup: false,
             ati_until: None,
             boot_until: None,
             fingers: [false; 3],
@@ -365,6 +368,18 @@ impl Iqs323 {
 
     pub fn event_mode(&self) -> bool {
         self.regs[MM_SYSTEM_CONTROL as usize] as u8 & SC_EVENT_MODE != 0
+    }
+
+    /// Fault: reset on its own (as after a brown-out).
+    pub fn inject_reset(&mut self, now: u64) {
+        self.advance(now);
+        self.reset(now);
+    }
+
+    /// Fault: auto-tuning failed (cleared by the next re-ATI).
+    pub fn inject_ati_error(&mut self, now: u64) {
+        self.advance(now);
+        self.ati_error = true;
     }
 
     pub fn show_reset(&self) -> bool {
@@ -587,6 +602,7 @@ impl Iqs323 {
                 }
             }
             0x19..=0x2F => 0,
+            0xFE | 0xFF if self.lockup => 0x0000,
             0xFE | 0xFF => 0xEEEE,
             a => self.regs[a as usize],
         }

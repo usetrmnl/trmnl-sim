@@ -161,6 +161,39 @@ pub struct Faults {
     /// The TRMNL X modem stops answering AT commands (input is ignored; the ROM loader
     /// still works).
     pub modem_unresponsive: bool,
+    /// The TRMNL X touch controller (IQS323) misbehaves.
+    pub touch_bar: Option<TouchBarFault>,
+}
+
+/// How the IQS323 misbehaves (`Faults::touch_bar`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchBarFault {
+    /// It resets on its own (brown-out), once, when the fault is set: its configuration is
+    /// lost and it reports SHOW_RESET.
+    Reset,
+    /// Its I2C interface locks up: the lock-up check register no longer reads 0xEE.
+    Lockup,
+    /// Auto-tuning (ATI) fails: SYSTEM_STATUS reports ATI_ERROR until the next re-ATI.
+    AtiError,
+}
+
+impl TouchBarFault {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "reset" => TouchBarFault::Reset,
+            "lockup" => TouchBarFault::Lockup,
+            "ati_error" => TouchBarFault::AtiError,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TouchBarFault::Reset => "reset",
+            TouchBarFault::Lockup => "lockup",
+            TouchBarFault::AtiError => "ati_error",
+        }
+    }
 }
 
 impl Faults {
@@ -212,6 +245,9 @@ impl Faults {
         }
         if self.panel_busy_stuck {
             v.push("panel busy stuck".into());
+        }
+        if let Some(t) = self.touch_bar {
+            v.push(format!("touch bar {}", t.name()));
         }
         if self.modem_unresponsive {
             v.push("modem unresponsive".into());

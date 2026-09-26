@@ -274,6 +274,14 @@ impl Board for TrmnlX {
             tps.rail_fault = faults.panel_busy_stuck;
         }
         self.modem.set_unresponsive(faults.modem_unresponsive);
+        let now = self.last_now;
+        let iqs = self.iqs();
+        iqs.lockup = faults.touch_bar == Some(sim_api::TouchBarFault::Lockup);
+        match faults.touch_bar {
+            Some(sim_api::TouchBarFault::Reset) => iqs.inject_reset(now),
+            Some(sim_api::TouchBarFault::AtiError) => iqs.inject_ati_error(now),
+            _ => {}
+        }
         self.modem.set_net_faults(crate::faults::net_faults(&faults.net));
     }
 

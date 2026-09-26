@@ -9,14 +9,15 @@
 //!                 "range": [36864, "0xe000"], "nth": 1, "cut": "before" | "torn" | "after"},
 //!  "i2c_absent": [85, "0x55"],
 //!  "panel_busy_stuck": true,
-//!  "modem_unresponsive": true}
+//!  "modem_unresponsive": true,
+//!  "touch_bar": "reset" | "lockup" | "ati_error"}
 //! ```
 //!
 //! A POSTed object is merged into the current faults: keys that are left out keep their
 //! value, `null` resets one (inside `net` too). Unknown keys are errors.
 
 use serde_json::{Map, Value, json};
-use sim_api::{CutPoint, DnsFault, Faults, FlashOp, NetFaults, PartitionInfo, PowerLoss, TcpCut};
+use sim_api::{CutPoint, DnsFault, Faults, FlashOp, NetFaults, PartitionInfo, PowerLoss, TcpCut, TouchBarFault};
 
 /// Parse a `--faults` argument (a JSON object, as for `POST /faults`).
 pub fn parse_faults(s: &str) -> Result<Faults, String> {
@@ -41,6 +42,15 @@ pub fn merge_faults(base: &Faults, v: &Value) -> Result<Faults, String> {
             "i2c_absent" => f.i2c_absent = if v.is_null() { Vec::new() } else { i2c_addrs(v)? },
             "panel_busy_stuck" => f.panel_busy_stuck = flag(v, k)?,
             "modem_unresponsive" => f.modem_unresponsive = flag(v, k)?,
+            "touch_bar" => {
+                f.touch_bar = match v {
+                    Value::Null => None,
+                    Value::String(s) => {
+                        Some(TouchBarFault::parse(s).ok_or("touch_bar: \"reset\", \"lockup\" or \"ati_error\"")?)
+                    }
+                    _ => return Err("touch_bar: a string".into()),
+                }
+            }
             _ => return Err(format!("unknown fault {k:?}")),
         }
     }
@@ -162,6 +172,7 @@ pub fn faults_json(f: &Faults) -> Value {
         "i2c_absent": f.i2c_absent,
         "panel_busy_stuck": f.panel_busy_stuck,
         "modem_unresponsive": f.modem_unresponsive,
+        "touch_bar": f.touch_bar.map(|t| t.name()),
     })
 }
 

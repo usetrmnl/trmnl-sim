@@ -60,6 +60,34 @@ class FaultsX(unittest.TestCase):
             dev.mock.wait_for_request("/api/display", timeout_s=15)
             self.assertLess(s.status()["boot_count"], 3)
 
+    def touch_bar_fault(self, kind: str):
+        """Asleep, the touch controller starts misbehaving; wake by a tap, then by the timer
+        (with the fault cleared). Returns the console."""
+        with dev.boot_asleep() as s:
+            s.wait(state="deep_sleep", timeout_s=15)
+            s.set_faults(touch_bar=kind)
+            n = len(dev.mock.requests)
+            s.touch("center", 150)
+            dev.mock.wait_for_request("/api/display", after=n, timeout_s=15)
+            s.wait(state="deep_sleep", timeout_s=15, settle_ms=300)
+            s.set_faults(touch_bar=None)
+            n = len(dev.mock.requests)
+            s.wake()
+            dev.mock.wait_for_request("/api/display", after=n, timeout_s=15)
+            s.wait(state="deep_sleep", timeout_s=15)
+            return "\n".join(s.console(0))
+
+    def test_touch_controller_reset_while_asleep(self):
+        # The wake stub reads SHOW_RESET; the IQS323 task reinitializes it (its "IQS323 Task:"
+        # lines go to Serial, which production X builds don't mirror to the log).
+        self.assertIn("wakeup_stub_iqs_status.status: 0x80", self.touch_bar_fault("reset"))
+
+    def test_touch_controller_i2c_lockup(self):
+        self.touch_bar_fault("lockup")
+
+    def test_touch_controller_ati_error(self):
+        self.touch_bar_fault("ati_error")
+
     def test_panel_power_failure(self):
         # The PMIC's power good never comes: the panel gets no drive voltages.
         with dev.boot(faults={"panel_busy_stuck": True}) as s:

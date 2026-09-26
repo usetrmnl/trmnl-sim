@@ -117,6 +117,7 @@ client (`sim.set_faults(...)`) have the full set:
 | I2C device absent | `{"i2c_absent": [85]}` | NACKs everything (X: `0x55` fuel gauge, `0x44` touch bar, `0x20` expander, `0x68` PMIC) |
 | Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held low; X: the PMIC never reports power good |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands (its ROM loader still works) |
+| Touch bar | `{"touch_bar": "reset"}` | X: the IQS323 resets on its own (once, when set; config lost, SHOW_RESET), `"lockup"`: its lock-up check register stops reading 0xEE, `"ati_error"`: ATI_ERROR until the next re-ATI |
 
 `POST /faults` merges into the current faults (`null` clears one, also inside `net`);
 `DELETE /faults` clears all. Faults are the environment, not device state: save points

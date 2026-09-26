@@ -362,6 +362,7 @@ class Simulator:
             i2c_absent: [0x55, ...]
             panel_busy_stuck: bool
             modem_unresponsive: bool
+            touch_bar: "reset" | "lockup" | "ati_error" (TRMNL X IQS323)
         """
         return self._post("/faults", {**(faults or {}), **kw})
 
