@@ -186,9 +186,10 @@ impl VirtualNet {
     }
 
     /// Map a guest-visible destination to the host destination (None = unreachable).
-    fn host_target(&self, dst: Ipv4Addr) -> Option<Ipv4Addr> {
+    fn host_target(&self, dst: Ipv4Addr, port: u16) -> Option<SocketAddrV4> {
         if dst == self.cfg.gateway_ip {
-            Some(Ipv4Addr::LOCALHOST)
+            let port = self.cfg.host_ports.iter().find(|&&(g, _)| g == port).map_or(port, |&(_, h)| h);
+            Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
         } else if self.offline()
             || self.in_subnet(dst)
             || dst.is_broadcast()
@@ -197,7 +198,7 @@ impl VirtualNet {
         {
             None
         } else {
-            Some(dst)
+            Some(SocketAddrV4::new(dst, port))
         }
     }
 
@@ -350,7 +351,7 @@ impl VirtualNet {
             self.handle_dns(ip.src, sport, data);
             return;
         }
-        let Some(target) = self.host_target(ip.dst) else {
+        let Some(target) = self.host_target(ip.dst, dport) else {
             return;
         };
         let key = FlowKey { guest_port: sport, dst: SocketAddrV4::new(ip.dst, dport) };
@@ -358,7 +359,7 @@ impl VirtualNet {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let sock = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
-                    .and_then(|s| s.connect(SocketAddrV4::new(target, dport)).map(|_| s))
+                    .and_then(|s| s.connect(target).map(|_| s))
                     .and_then(|s| s.set_nonblocking(true).map(|_| s))
                 {
                     Ok(s) => s,
@@ -568,13 +569,13 @@ impl VirtualNet {
                 }
                 None => {}
             }
-            let Some(target) = self.host_target(ip.dst) else {
+            let Some(target) = self.host_target(ip.dst, dport) else {
                 let pkt = tcp_rst_ip_packet(ip.dst, dport, ip.src, sport, 0, seq.wrapping_add(1));
                 self.send_ip_to_guest(&pkt);
                 return;
             };
             let (tx, rx) = mpsc::channel();
-            let addr = SocketAddr::V4(SocketAddrV4::new(target, dport));
+            let addr = SocketAddr::V4(target);
             let spawned = std::thread::Builder::new().name("vnet-connect".into()).spawn(move || {
                 let _ = tx.send(TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT));
             });

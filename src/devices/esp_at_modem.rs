@@ -60,6 +60,8 @@ pub struct ModemConfig {
     /// hostname -> IP answered instead of resolving (case-insensitive), applied before the
     /// 10.0.2.2 -> 127.0.0.1 mapping.
     pub dns_overrides: Vec<(String, Ipv4Addr)>,
+    /// (guest port, host port) remaps for 10.0.2.2, as in `vnet::NetConfig::host_ports`.
+    pub host_ports: Vec<(u16, u16)>,
     /// Capacity code of the modem's SPI flash in the ROM loader's READ_ID reply (0x16 = 4 MB).
     pub flash_size_id: u8,
 }
@@ -71,6 +73,7 @@ impl Default for ModemConfig {
             networks: Vec::new(),
             offline: false,
             dns_overrides: Vec::new(),
+            host_ports: Vec::new(),
             flash_size_id: 0x16,
         }
     }
@@ -1044,6 +1047,7 @@ impl EspAtModem {
             head_only,
             offline: self.cfg.offline,
             dns_overrides: self.cfg.dns_overrides.clone(),
+            host_ports: self.cfg.host_ports.clone(),
             faults: self.net_faults.clone(),
         });
         self.op = Op::Http { rx, not_before: t.max(self.now) + self.timing.http_min_ns };

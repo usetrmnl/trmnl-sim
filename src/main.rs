@@ -69,6 +69,11 @@ struct Cli {
     /// Answer DNS for NAME with IP, e.g. --dns api.example.com=10.0.2.2 (repeatable).
     #[arg(long, value_parser = parse_dns)]
     dns: Vec<(String, std::net::Ipv4Addr)>,
+    /// Send the device's connections to 10.0.2.2:GUEST to host port HOST instead, e.g.
+    /// --host-port 8090=51234 for a device onboarded against a server that has since moved
+    /// (repeatable).
+    #[arg(long, value_name = "GUEST=HOST", value_parser = parse_host_port)]
+    host_port: Vec<(u16, u16)>,
     /// ESP32-C3 ROM ELF (default: $TRMNL_SIM_ROM or PlatformIO's tool-esp-rom-elfs).
     #[arg(long, env = "TRMNL_SIM_ROM")]
     rom: Option<PathBuf>,
@@ -124,6 +129,11 @@ fn parse_dns(s: &str) -> Result<(String, std::net::Ipv4Addr), String> {
     Ok((name.to_string(), ip.parse().map_err(|e| format!("{e}"))?))
 }
 
+fn parse_host_port(s: &str) -> Result<(u16, u16), String> {
+    let (guest, host) = s.split_once('=').ok_or("expected GUEST=HOST")?;
+    Ok((guest.parse().map_err(|e| format!("{e}"))?, host.parse().map_err(|e| format!("{e}"))?))
+}
+
 fn parse_mac(s: &str) -> Result<[u8; 6], String> {
     let parts: Vec<u8> =
         s.split([':', '-']).map(|p| u8::from_str_radix(p, 16).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
@@ -170,7 +180,12 @@ fn main() -> Result<()> {
         "halt" => memcheck::Mode::Halt,
         _ => memcheck::Mode::Log,
     });
-    let net = vnet::NetConfig { offline: cli.offline, dns_overrides: cli.dns.clone(), ..Default::default() };
+    let net = vnet::NetConfig {
+        offline: cli.offline,
+        dns_overrides: cli.dns.clone(),
+        host_ports: cli.host_port.clone(),
+        ..Default::default()
+    };
 
     let mut panel = mock_trmnl::Panel::Og;
     let (mut machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
@@ -179,11 +194,7 @@ fn main() -> Result<()> {
                 m[5] = m[5].wrapping_add(2);
                 m
             });
-            let board = board::trmnl_x::TrmnlX::new(
-                modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]),
-                cli.offline,
-                cli.dns.clone(),
-            );
+            let board = board::trmnl_x::TrmnlX::new(modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]), &net);
             let frame = board.panel.frame();
             panel = mock_trmnl::Panel::X;
             let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, Box::new(board), apps, &cli.trace)?;

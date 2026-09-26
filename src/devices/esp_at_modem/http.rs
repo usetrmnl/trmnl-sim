@@ -39,6 +39,7 @@ pub(super) struct HttpJob {
     pub head_only: bool,
     pub offline: bool,
     pub dns_overrides: Vec<(String, Ipv4Addr)>,
+    pub host_ports: Vec<(u16, u16)>,
     pub faults: vnet::NetFaults,
 }
 
@@ -100,7 +101,7 @@ fn run(job: &HttpJob, tx: &SyncSender<HttpMsg>) -> Result<(), String> {
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .tls_config(TlsConfig::builder().disable_verification(local).build())
         .build();
-    let resolver = SimResolver { overrides: job.dns_overrides.clone(), offline };
+    let resolver = SimResolver { overrides: job.dns_overrides.clone(), host_ports: job.host_ports.clone(), offline };
     let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
 
     let resp = if job.head_only {
@@ -180,6 +181,7 @@ pub(super) fn host_target(ip: Ipv4Addr, offline: bool) -> Option<Ipv4Addr> {
 #[derive(Debug)]
 struct SimResolver {
     overrides: Vec<(String, Ipv4Addr)>,
+    host_ports: Vec<(u16, u16)>,
     offline: bool,
 }
 
@@ -210,6 +212,10 @@ impl Resolver for SimResolver {
         }
         let mut out = self.empty();
         for ip in candidates.into_iter().filter_map(|ip| host_target(ip, self.offline)).take(16) {
+            let port = match ip {
+                Ipv4Addr::LOCALHOST => self.host_ports.iter().find(|&&(g, _)| g == port).map_or(port, |&(_, h)| h),
+                _ => port,
+            };
             out.push(SocketAddr::V4(SocketAddrV4::new(ip, port)));
         }
         if out.is_empty() { Err(ureq::Error::ConnectionFailed) } else { Ok(out) }

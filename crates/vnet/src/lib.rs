@@ -62,6 +62,9 @@ pub struct NetConfig {
     /// Hermetic mode: only the gateway (host localhost) is reachable; other
     /// destinations are refused and unknown names don't resolve.
     pub offline: bool,
+    /// (guest port, host port): connections to `gateway_ip`:guest port go to host
+    /// 127.0.0.1:host port instead of the same port (e.g. a server that moved).
+    pub host_ports: Vec<(u16, u16)>,
 }
 
 impl Default for NetConfig {
@@ -74,6 +77,7 @@ impl Default for NetConfig {
             gateway_mac: [0x02, 0, 0, 0, 0, 0x02],
             dns_overrides: Vec::new(),
             offline: false,
+            host_ports: Vec::new(),
         }
     }
 }

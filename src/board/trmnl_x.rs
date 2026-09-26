@@ -40,7 +40,7 @@ pub struct TrmnlX {
 }
 
 impl TrmnlX {
-    pub fn new(modem_mac: [u8; 6], offline: bool, dns_overrides: Vec<(String, std::net::Ipv4Addr)>) -> Self {
+    pub fn new(modem_mac: [u8; 6], net: &vnet::NetConfig) -> Self {
         let modem = EspAtModem::new(ModemConfig {
             mac: modem_mac,
             networks: vec![
@@ -61,8 +61,9 @@ impl TrmnlX {
                     bssid: [0x02, 0x5e, 0x51, 0x00, 0x00, 0x01],
                 },
             ],
-            offline,
-            dns_overrides,
+            offline: net.offline,
+            dns_overrides: net.dns_overrides.clone(),
+            host_ports: net.host_ports.clone(),
             flash_size_id: 0x16,
         });
         let mut b = TrmnlX {

@@ -747,6 +747,17 @@ fn http_offline_and_dns_overrides() {
 }
 
 #[test]
+fn http_host_ports_remap_the_gateway() {
+    let srv = start_server();
+    let mut cfg = home_cfg();
+    cfg.offline = true;
+    cfg.host_ports = vec![(8090, srv.port)];
+    let mut h = connected(cfg);
+    let (ok, body) = h.http_get("http://10.0.2.2:8090/small", "");
+    assert!(ok && body == b"hello world");
+}
+
+#[test]
 fn http_requires_connection_and_reports_busy() {
     let srv = start_server();
     let mut h = H::new(home_cfg());

@@ -399,3 +399,31 @@ fn icmp_ping_gateway() {
     });
     assert!(ok);
 }
+
+#[test]
+fn host_ports_remap_gateway_connections() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        s.write_all(b"moved").unwrap();
+    });
+    // The guest dials port 1 (nothing listens there); host_ports sends it to the server.
+    let mut net = VirtualNet::new(NetConfig { host_ports: vec![(1, port)], ..Default::default() });
+    let mut g = configured_guest(&mut net);
+    let h = connect(&mut g, 4096, 1, 52100);
+    let mut recvd = Vec::new();
+    let ok = g.run_until(&mut net, T, |g| {
+        let s = g.sockets.get_mut::<tcp::Socket>(h);
+        while s.can_recv() {
+            s.recv(|b| {
+                recvd.extend_from_slice(b);
+                (b.len(), ())
+            })
+            .unwrap();
+        }
+        recvd == b"moved"
+    });
+    assert!(ok, "{recvd:?}");
+    server.join().unwrap();
+}
