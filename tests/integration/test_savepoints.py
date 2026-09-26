@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import BUILD, BWRY_BUILD, ProvisionedDevice, big_number, sim
+from support import BUILD, BWRY_BUILD, ProvisionedDevice, Simulator, big_number, sim
 from trmnl_sim import SimError
 
 dev: ProvisionedDevice
@@ -43,8 +43,8 @@ class SavePoints(unittest.TestCase):
         self.eight = dev.mock.set_image("eight", big_number("8"))
         dev.mock.display = {"image": "eight", "refresh_rate": 300}
 
-    def restored(self) -> "sim":
-        return sim(BUILD, restore=saved, extra_args=("--offline",))
+    def restored(self) -> Simulator:
+        return dev.restore(saved)
 
     def test_restores_into_the_same_deep_sleep(self):
         with self.restored() as s:
@@ -109,7 +109,7 @@ class SavePoints(unittest.TestCase):
                 self.skipTest("the device refreshed before it could be paused")
             self.assertFalse(info["deep_sleep"])
         dev.mock.requests.clear()
-        with sim(BUILD, restore=path, extra_args=("--offline",)) as s:
+        with dev.restore(path) as s:
             s.wait_for_console(r"powering on")
             s.wait(console=r"rst:0x1 \(POWERON\)")
             req = dev.mock.wait_for_request("/api/display", timeout_s=120)

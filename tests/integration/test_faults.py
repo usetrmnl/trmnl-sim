@@ -2,46 +2,21 @@
 an access point without internet, slow and lossy links), power loss in the middle of flash
 writes, and a stuck panel. The device must cope: sleep, retry later, and keep booting."""
 
-import shutil
-import tempfile
 import unittest
-from pathlib import Path
 
-from support import BUILD, ProvisionedDevice, MockTrmnl, big_number, close_fixtures, fixture, sim
+from support import BUILD, ProvisionedDevice, big_number, close_fixtures, fixture
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 
-class NamedServerDevice:
+class NamedServerDevice(ProvisionedDevice):
     """Like ProvisionedDevice, but onboarded with the server's host name instead of its IP,
     so every request needs a DNS lookup (answered by the simulator via --dns)."""
 
+    NAME = "named-server"
     HOST = "trmnl-mock.test"
-
-    def __init__(self):
-        self.mock = MockTrmnl()
-        self.mock.device_host = self.HOST
-        self.mock.display = {"image": "default", "refresh_rate": 300}
-        self.dir = Path(tempfile.mkdtemp(prefix="trmnl-named-"))
-        self.template = self.dir / "template.bin"
-        with sim(flash=self.template, erase=True, extra_args=self.args()) as s:
-            s.wait(portal=True, timeout_s=90)
-            s.portal_connect("TRMNL-Sim", "password", server=self.mock.device_url)
-            self.mock.wait_for_request("/api/display", timeout_s=120)
-            s.wait(state="deep_sleep", timeout_s=120)
-        self.mock.requests.clear()
-
-    def args(self):
-        return ("--offline", "--dns", f"{self.HOST}=10.0.2.2")
-
-    def boot(self, **kw):
-        flash = self.dir / f"flash-{len(list(self.dir.iterdir()))}.bin"
-        shutil.copy(self.template, flash)
-        return sim(flash=flash, extra_args=self.args(), **kw)
-
-    def close(self):
-        self.mock.close()
-        shutil.rmtree(self.dir, ignore_errors=True)
+    DEVICE_HOST = HOST
+    SIM_ARGS = ("--offline", "--dns", f"{HOST}=10.0.2.2")
 
 
 dev = fixture(ProvisionedDevice)

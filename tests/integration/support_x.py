@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import setup_cache
 from support import KNOWN_MEMORY_BUGS, MEMCHECK, ROOT, TURBO, MockTrmnl, Simulator
 
 X_BUILD = Path(os.environ.get("TRMNL_X_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/TRMNL_X"))
@@ -28,15 +29,21 @@ def x_sim(**kw) -> Simulator:
 
 
 class ShippedX:
-    """Flash of a TRMNL X straight out of the factory: QA passed, modem flashed, waiting in
-    shipment mode (light sleep until it is docked)."""
+    """A TRMNL X straight out of the factory: QA passed, modem flashed, waiting in shipment
+    mode (light sleep until it is docked). From the setup cache (see setup_cache)."""
 
     def __init__(self):
+        inputs = {"build": setup_cache.build_id(X_BUILD), "memcheck": MEMCHECK, "turbo": TURBO}
+        self.cache, meta = setup_cache.entry("x-shipped", inputs, self._factory)
+        self.template = self.cache / "flash.bin"
+        self.factory_console = meta["console"]
         self.dir = Path(tempfile.mkdtemp(prefix="trmnl-x-"))
-        self.template = self.dir / "shipped.bin"
-        with x_sim(flash=self.template, erase=True, name="x-factory") as s:
+
+    @staticmethod
+    def _factory(out: Path) -> dict:
+        with x_sim(flash=out / "flash.bin", erase=True, name="x-factory") as s:
             s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=180)
-            self.factory_console = s.console(0)
+            return {"console": s.console(0)}
 
     def copy(self, name: str) -> Path:
         flash = self.dir / f"{name}-{len(list(self.dir.iterdir()))}.bin"
@@ -62,21 +69,37 @@ def onboard(s: Simulator, mock: MockTrmnl, ssid: str) -> None:
 
 
 class ProvisionedX:
-    """A mock server plus the flash of an X that completed onboarding against it (on `ssid`)."""
+    """A mock server plus an X that completed onboarding (on `ssid`) against a server like
+    it; see ProvisionedDevice, which this mirrors (`boot`, `boot_asleep`, `restore`)."""
 
     def __init__(self, shipped: ShippedX, ssid: str = SSID_5):
-        self.mock = MockTrmnl()
         self.shipped = shipped
+        self.ssid = ssid
+        inputs = {"shipped": shipped.cache.name, "ssid": ssid, "memcheck": MEMCHECK, "turbo": TURBO}
+        self.cache, meta = setup_cache.entry(f"x-provisioned-{ssid}", inputs, self._onboard)
+        self.mock = MockTrmnl()
         self.mock.display = {"image": "default", "refresh_rate": 300}
-        self.template = shipped.copy("provisioned")
-        with x_sim(flash=self.template, name="x-provision") as s:
-            onboard(s, self.mock, ssid)
-        self.mock.requests.clear()
+        self.host_ports = {meta["port"]: self.mock.port}
+
+    def _onboard(self, out: Path) -> dict:
+        shutil.copy(self.shipped.template, out / "flash.bin")
+        with MockTrmnl() as mock:
+            mock.display = {"image": "default", "refresh_rate": 300}
+            with x_sim(flash=out / "flash.bin", name="x-provision") as s:
+                onboard(s, mock, self.ssid)
+                s.save_point(out / "asleep.trmnlsave", label="onboarded, asleep")
+            return {"port": mock.port}
 
     def boot(self, **kw) -> Simulator:
-        flash = self.shipped.dir / f"prov-{len(list(self.shipped.dir.iterdir()))}.bin"
-        shutil.copy(self.template, flash)
-        return x_sim(flash=flash, **kw)
+        flash = self.shipped.copy("provisioned")
+        shutil.copy(self.cache / "flash.bin", flash)
+        return x_sim(flash=flash, host_ports=self.host_ports, **kw)
+
+    def boot_asleep(self, **kw) -> Simulator:
+        return self.restore(self.cache / "asleep.trmnlsave", **kw)
+
+    def restore(self, path, **kw) -> Simulator:
+        return x_sim(restore=path, host_ports=self.host_ports, **kw)
 
     def close(self):
         self.mock.close()

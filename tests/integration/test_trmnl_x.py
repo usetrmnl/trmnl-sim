@@ -7,7 +7,7 @@ from pathlib import Path
 
 from support import MockTrmnl, big_number, close_fixtures, fixture
 from trmnl_mock import expected_gray, png_image
-from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
+from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -124,7 +124,7 @@ class Provisioned(ProvisionedCase):
             eight = dev().mock.set_png("eight", digits("8"))
             dev().mock.display = {"image": "eight", "refresh_rate": 300}
             dev().mock.requests.clear()
-            with x_sim(restore=path) as s:
+            with dev().restore(path) as s:
                 st = s.wait(state="deep_sleep", timeout_s=30)["status"]
                 self.assertEqual((st["boot_count"], st["docked"], st["charging"]), (boots, True, True))
                 self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])

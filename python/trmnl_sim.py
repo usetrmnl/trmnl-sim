@@ -61,6 +61,9 @@ class Simulator:
         name: label for artifacts. If $TRMNL_SIM_ARTIFACTS is set, the log and final
             screen of every simulator are saved there on close (handy in CI).
         restore: start from this save point file (see `save_point`) instead of booting.
+        host_ports: {guest port: host port}; the device's connections to 10.0.2.2:guest
+            port go to host port instead (`--host-port`), e.g. for a device onboarded
+            against a server that has since moved to another port.
         coverage: record firmware code coverage and write an lcov tracefile here when the
             simulator exits (`--coverage`). If $TRMNL_SIM_COVERAGE is set to a directory,
             every simulator writes one there (`<name>-*.info`); merge them with
@@ -82,6 +85,7 @@ class Simulator:
         startup_timeout_s: float = 30,
         name: Optional[str] = None,
         restore: Optional[str | os.PathLike] = None,
+        host_ports: Optional[dict[int, int]] = None,
         coverage: Optional[str | os.PathLike] = None,
         memcheck: Optional[str] = None,
         memcheck_suppress: tuple[str, ...] = (),
@@ -113,6 +117,8 @@ class Simulator:
             args.append("--turbo")
         if restore:
             args += ["--restore", str(Path(restore).resolve())]
+        for guest, host in (host_ports or {}).items():
+            args += ["--host-port", f"{guest}={host}"]
         cov_dir = os.environ.get("TRMNL_SIM_COVERAGE")
         if coverage is None and cov_dir:
             Path(cov_dir).mkdir(parents=True, exist_ok=True)

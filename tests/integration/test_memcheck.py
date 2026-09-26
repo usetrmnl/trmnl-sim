@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import BUILD, BWRY_BUILD, MockTrmnl, big_number, sim
+import setup_cache
+from support import BUILD, BWRY_BUILD, TURBO, MockTrmnl, big_number, sim
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
@@ -101,19 +102,25 @@ class MemcheckBwry(unittest.TestCase):
             s.assert_no_memory_errors()
 
 
-class MemcheckX(unittest.TestCase):
-    """A factory-fresh X (the QA flow and modem flashing run under memcheck too), then
-    onboarding on 2.4 GHz: WiFi stop/start around the portal is where Arduino once freed a
-    netif the event task still used."""
+class MemcheckXCase(unittest.TestCase):
+    """A factory-fresh X (the QA flow and modem flashing run under memcheck too, once per
+    firmware/simulator: it comes from the setup cache and is only cached if it was clean),
+    then onboarding on 2.4 GHz: WiFi stop/start around the portal is where Arduino once
+    freed a netif the event task still used."""
 
     @classmethod
     def setUpClass(cls):
         if not (X_BUILD / "firmware.elf").exists():
             raise unittest.SkipTest(f"no TRMNL_X build at {X_BUILD} (set TRMNL_X_BUILD)")
+        inputs = {"build": setup_cache.build_id(X_BUILD), "turbo": TURBO}
+        cls.shipped, _ = setup_cache.entry("x-shipped-memcheck", inputs, cls._factory)
         cls.dir = Path(tempfile.mkdtemp(prefix="trmnl-x-memcheck-"))
-        cls.shipped = cls.dir / "shipped.bin"
-        with x_sim(flash=cls.shipped, erase=True, memcheck="halt", name="x-memcheck-factory") as s:
+
+    @staticmethod
+    def _factory(out: Path) -> dict:
+        with x_sim(flash=out / "flash.bin", erase=True, memcheck="halt", name="x-memcheck-factory") as s:
             s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=180)
+        return {}
 
     @classmethod
     def tearDownClass(cls):
@@ -121,9 +128,11 @@ class MemcheckX(unittest.TestCase):
 
     def boot(self, **kw):
         flash = self.dir / f"flash-{len(list(self.dir.iterdir()))}.bin"
-        shutil.copy(self.shipped, flash)
+        shutil.copy(self.shipped / "flash.bin", flash)
         return x_sim(flash=flash, **kw)
 
+
+class MemcheckX(MemcheckXCase):
     def test_onboarding_and_refresh_are_clean(self):
         with MockTrmnl() as mock, self.boot(memcheck="halt") as s:
             mock.set_png("dots", lambda x, y: (x // 8 + y // 8) & 1)
@@ -144,6 +153,9 @@ class MemcheckX(unittest.TestCase):
                 self.assertIn(task, stacks)
             assert_no_low_stacks(self, report)
 
+
+
+class MemcheckXBmp(MemcheckXCase):
     @unittest.expectedFailure
     def test_bmp_image_is_flipped_within_its_buffer(self):
         # display_show_image flips an uncompressed BMP with the panel's dimensions: an

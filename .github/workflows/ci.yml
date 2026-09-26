@@ -122,7 +122,7 @@ jobs:
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
           TRMNL_SIM_COVERAGE: ${{ github.workspace }}/sim-coverage
           FORCE_COLOR: "1"
-        run: python run.py -v
+        run: python run.py -v --no-cache
 
       - name: Collect screen diffs
         if: failure()

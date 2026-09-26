@@ -3,6 +3,7 @@
     python3 run.py                  # discover and run every test_*.py
     python3 run.py test_trmnl_x     # any unittest selectors
     python3 run.py -j 1             # one at a time, in this process
+    python3 run.py --no-cache       # build the devices the tests start from afresh
 
 Each selector (by default, each test_*.py) runs in its own worker process, up to -j N
 (default: the number of CPUs) at a time, slowest modules first. A module that sets
@@ -10,6 +11,11 @@ PARALLEL_BY_CLASS = True (its fixtures are built lazily, see support.fixture) is
 further: each of its classes gets a worker. A worker's output is
 printed in one piece when it finishes, followed by the combined verdict. A single
 selector, or -j 1, runs in-process with the output streamed as usual.
+
+The devices the tests start from (a factory-fresh X, onboarded devices) come from an
+on-disk cache keyed by the firmware, the simulator and the test support code; see
+setup_cache.py. --no-cache (TRMNL_SPEC_NO_CACHE=1) bypasses it, running every setup flow in
+full, as CI does.
 
 Color is on when stderr is a terminal; NO_COLOR=1 turns it off, FORCE_COLOR=1 turns it on
 (e.g. in CI logs, which render ANSI colors).
@@ -153,6 +159,8 @@ def parse_args(argv: list[str]) -> tuple[int, list[str], list[str]]:
             jobs = int(a[2:])
         elif a.startswith("--jobs="):
             jobs = int(a.split("=", 1)[1])
+        elif a == "--no-cache":
+            os.environ["TRMNL_SPEC_NO_CACHE"] = "1"  # read by setup_cache, here and in workers
         elif a.startswith("-"):
             flags.append(a)
             if a in ("-k", "-p", "--pattern", "-s", "--start-directory", "-t", "--top-level-directory"):

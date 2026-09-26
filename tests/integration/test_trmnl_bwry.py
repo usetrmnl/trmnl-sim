@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import BWRY_BUILD, ProvisionedDevice, sim
+from support import BWRY_BUILD, ProvisionedDevice
 from trmnl_mock import BWRY_RGB, color_bars
 
 dev: ProvisionedDevice
@@ -73,7 +73,7 @@ class Bwry(unittest.TestCase):
             dev.mock.requests.clear()
             dev.mock.set_color_png("red", lambda x, y: BWRY_RGB["red"])
             dev.mock.display = {"image": "red", "refresh_rate": 300}
-            with sim(BWRY_BUILD, restore=path, extra_args=("--offline",)) as s:
+            with dev.restore(path) as s:
                 s.wait(state="deep_sleep", timeout_s=30)
                 self.assertEqual(s.status()["board"]["name"], "TRMNL BWRY")
                 self.assertTrue(s.compare_screen(bars, tolerance=0, max_ratio=0)["match"])

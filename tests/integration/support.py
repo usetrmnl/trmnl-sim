@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / "python"))
 from trmnl_mock import MockTrmnl, big_number  # noqa: E402
 from trmnl_sim import Simulator  # noqa: E402
 
+import setup_cache  # noqa: E402
+
 BUILD = Path(os.environ.get("TRMNL_FIRMWARE_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl"))
 BWRY_BUILD = Path(os.environ.get("TRMNL_BWRY_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl_4clr"))
 GOLDEN = HERE / "golden"
@@ -97,28 +99,58 @@ def close_fixtures():
 
 
 class ProvisionedDevice:
-    """A mock API server plus a flash image of a device that already completed
-    onboarding against it. `boot()` starts a simulator from a copy of that flash."""
+    """A mock API server plus a device that already completed onboarding against a server
+    like it: `boot()` powers on a copy of its flash, `boot_asleep()` resumes it in the deep
+    sleep that followed onboarding (a save point), skipping the first refresh cycle.
+
+    The onboarded device comes from the setup cache (see setup_cache). It knows the server
+    by the port of the mock it was onboarded with, so every simulator started here gets
+    `--host-port` to send that port to this fixture's mock."""
+
+    NAME = "provisioned"
+    SIM_ARGS: tuple[str, ...] = ("--offline",)
+    DEVICE_HOST = "10.0.2.2"
 
     def __init__(self, build: Path = BUILD):
         self.build = build
+        inputs = {"build": setup_cache.build_id(build), "memcheck": MEMCHECK, "turbo": TURBO, "args": self.SIM_ARGS, "host": self.DEVICE_HOST}
+        self.cache, meta = setup_cache.entry(f"{self.NAME}-{build.name}", inputs, self._onboard)
         self.mock = MockTrmnl()
-        self.dir = Path(tempfile.mkdtemp(prefix="trmnl-provisioned-"))
-        self.template = self.dir / "template.bin"
+        self.mock.device_host = self.DEVICE_HOST
         self.mock.display = {"image": "default", "refresh_rate": 300}
-        with sim(build, flash=self.template, erase=True, extra_args=("--offline",)) as s:
-            s.wait(portal=True, timeout_s=90)
-            s.portal_connect("TRMNL-Sim", "password", server=self.mock.device_url)
-            self.mock.wait_for_request("/api/display", timeout_s=120)
-            s.wait(state="deep_sleep", timeout_s=120)
-        self.mock.requests.clear()
+        self.host_ports = {meta["port"]: self.mock.port}
+        self.dir = Path(tempfile.mkdtemp(prefix="trmnl-provisioned-"))
+
+    def _onboard(self, out: Path) -> dict:
+        with MockTrmnl() as mock:
+            mock.device_host = self.DEVICE_HOST
+            mock.display = {"image": "default", "refresh_rate": 300}
+            with sim(self.build, flash=out / "flash.bin", erase=True, extra_args=self.SIM_ARGS, name=f"{self.NAME}-setup") as s:
+                s.wait(portal=True, timeout_s=90)
+                s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)
+                mock.wait_for_request("/api/display", timeout_s=120)
+                s.wait(state="deep_sleep", timeout_s=120)
+                s.save_point(out / "asleep.trmnlsave", label="onboarded, asleep")
+            return {"port": mock.port}
+
+    def _sim(self, **kw) -> Simulator:
+        extra = tuple(kw.pop("extra_args", ())) + self.SIM_ARGS
+        return sim(self.build, extra_args=extra, host_ports=self.host_ports, **kw)
 
     def boot(self, **kw) -> Simulator:
         """Power on a copy of the provisioned device."""
         flash = self.dir / f"flash-{len(list(self.dir.iterdir()))}.bin"
-        shutil.copy(self.template, flash)
-        extra = tuple(kw.pop("extra_args", ())) + ("--offline",)
-        return sim(self.build, flash=flash, extra_args=extra, **kw)
+        shutil.copy(self.cache / "flash.bin", flash)
+        return self._sim(flash=flash, **kw)
+
+    def boot_asleep(self, **kw) -> Simulator:
+        """The provisioned device in deep sleep right after onboarding (showing the mock's
+        default image); wake it, press, touch... to carry on."""
+        return self.restore(self.cache / "asleep.trmnlsave", **kw)
+
+    def restore(self, path, **kw) -> Simulator:
+        """A simulator resumed from a save point of this device (reaching this mock)."""
+        return self._sim(restore=path, **kw)
 
     def close(self):
         self.mock.close()
