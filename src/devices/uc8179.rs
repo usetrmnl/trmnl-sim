@@ -63,6 +63,21 @@ fn bwry_stage(i: usize) -> Option<(u64, Option<u8>)> {
 /// rate (it reads as long next to real e-paper); BUSY still lasts the full waveform.
 const ANIMATION_SPEEDUP: u64 = 2;
 
+/// Particle response per frame of drive: each frame towards black moves a pixel this
+/// fraction of the way to full black, each frame towards white this fraction of the way
+/// to white (white particles respond faster). With [`optical`], fitted so bb_epaper's
+/// 4-gray waveforms for the 7.5" panel land on the intended 0/85/170/255 and the OTP
+/// full refresh on solid black and white.
+const K_BLACK: f32 = 0.1425;
+const K_WHITE: f32 = 0.3425;
+
+/// How dark a pixel looks for a particle state (0 = white .. 1 = black): a mild S-curve,
+/// as partly-driven particles scatter less light than their position suggests.
+fn optical(d: f32) -> f32 {
+    const S: f32 = 0.9;
+    (d + S * d * (1.0 - d) * (2.0 * d - 1.0)).clamp(0.0, 1.0)
+}
+
 /// A refresh in progress: a per-pixel drive schedule played out over time.
 struct Refresh {
     start: u64,
@@ -666,25 +681,28 @@ impl Uc8179 {
         v
     }
 
-    /// Net drive (in frames, +black/-white) a schedule applies over frames [from, to).
-    fn drive(s: &[Phase], from: u32, to: u32) -> f32 {
+    /// What a schedule does to a pixel's darkness over frames [from, to), as an affine map
+    /// `d -> a * d + b` (the per-frame particle response is affine, so frames compose).
+    fn response(s: &[Phase], from: u32, to: u32) -> (f32, f32) {
+        let (mut a, mut b) = (1.0f32, 0.0f32);
         let mut t = 0u32;
-        let mut d = 0.0f32;
         for ph in s {
-            let (a, b) = (t.max(from), (t + ph.frames).min(to));
-            if b > a {
-                d += match ph.level {
-                    1 => 1.0,
-                    2 => -1.0,
-                    _ => 0.0,
-                } * (b - a) as f32;
+            let n = ((t + ph.frames).min(to) as i32 - t.max(from) as i32).max(0);
+            // One frame towards black: d += K_BLACK * (1 - d); towards white: d -= K_WHITE * d.
+            let (fa, fb) = match ph.level {
+                1 => (1.0 - K_BLACK, K_BLACK),
+                2 => (1.0 - K_WHITE, 0.0),
+                _ => (1.0, 0.0),
+            };
+            for _ in 0..n {
+                (a, b) = (fa * a, fa * b + fb);
             }
             t += ph.frames;
             if t >= to {
                 break;
             }
         }
-        d
+        (a, b)
     }
 
     /// Advance the refresh animation to `now`.
@@ -700,18 +718,17 @@ impl Uc8179 {
             }
             return;
         }
-        // Particle response per frame of drive; ~20 frames saturates.
-        const RATE: f32 = 1.0 / 20.0;
-        let delta: [f32; 4] = std::array::from_fn(|i| Self::drive(&r.schedules[i], r.frames_done, target) * RATE);
+        let resp: [(f32, f32); 4] = std::array::from_fn(|i| Self::response(&r.schedules[i], r.frames_done, target));
         r.frames_done = target;
         let (x0, y0, x1, _) = r.region;
         let w = x1 - x0;
         let mut frame = self.frame.lock();
         for (i, (&sel, s)) in r.sel.iter().zip(r.start_state.iter_mut()).enumerate() {
-            *s = (*s + delta[sel as usize]).clamp(0.0, 1.0);
+            let (a, b) = resp[sel as usize];
+            *s = a * *s + b;
             let k = (y0 + i / w) * WIDTH + x0 + i % w;
             self.state[k] = *s;
-            frame.pixels[k] = (*s * 255.0) as u8;
+            frame.pixels[k] = (optical(*s) * 255.0).round() as u8;
         }
         frame.generation += 1;
         drop(frame);
@@ -796,5 +813,45 @@ mod tests {
         assert_eq!(first(&p), Some(BWRY_RGB[BWRY_RED as usize].to_vec()));
         assert!(!p.busy_n(BWRY_IMAGE_MS * MS)); // timing unchanged
         assert!(p.busy_n(BWRY_REFRESH_MS * MS));
+    }
+
+    /// A LUT register: rows of (level patterns, 4 frame counts, repeat), zero-padded to 42 bytes.
+    fn lut(rows: &[[u8; 6]]) -> Vec<u8> {
+        let mut v: Vec<u8> = rows.iter().flatten().copied().collect();
+        v.resize(42, 0);
+        v
+    }
+
+    #[test]
+    fn four_gray_waveform_gives_the_intended_levels() {
+        // bb_epaper's epd75_old_gray_init (TRMNL OG 4-gray mode): WW, BW, WB, BB.
+        let luts: [&[[u8; 6]]; 4] = [
+            &[[0x40, 10, 0, 0, 0, 1], [0x90, 20, 20, 10, 0, 1], [0x20, 20, 10, 10, 0, 1], [0xa0, 19, 10, 4, 0, 1]],
+            &[[0x40, 10, 0, 0, 0, 1], [0x90, 25, 25, 0, 0, 1], [0x10, 25, 15, 0, 0, 1], [0x99, 17, 4, 6, 6, 1]],
+            &[[0x40, 10, 0, 0, 0, 1], [0x90, 25, 25, 0, 0, 1], [0x10, 25, 15, 0, 0, 1], [0x99, 16, 6, 8, 3, 1]],
+            &[[0x40, 10, 0, 0, 0, 1], [0x00, 18, 18, 14, 0, 1], [0x40, 18, 22, 0, 0, 1], [0x50, 35, 1, 0, 0, 1]],
+        ];
+        let mut p = Uc8179::new(0);
+        cmd(&mut p, 0, 0x00, &[0x3f]); // PSR: LUTs from registers
+        cmd(&mut p, 0, 0x50, &[0x00, 0x07]);
+        for (i, l) in luts.iter().enumerate() {
+            cmd(&mut p, 0, 0x21 + i as u8, &lut(l));
+        }
+        // Pixels 0..3 of the first row get (old, new) = 00, 01, 10, 11.
+        let mut old = vec![0u8; STRIDE * HEIGHT];
+        let mut new = old.clone();
+        old[0] = 0b0011_0000;
+        new[0] = 0b0101_0000;
+        cmd(&mut p, 0, 0x04, &[]);
+        cmd(&mut p, 0, 0x10, &old);
+        cmd(&mut p, 0, 0x13, &new);
+        cmd(&mut p, 0, 0x12, &[]);
+        p.update(60_000 * MS);
+        let f = p.frame.lock();
+        let mut levels: Vec<u8> = f.pixels[..4].to_vec();
+        levels.sort();
+        for (got, want) in levels.iter().zip([0u8, 85, 170, 255]) {
+            assert!(got.abs_diff(want) <= 3, "levels {levels:?}, want 0/85/170/255");
+        }
     }
 }
