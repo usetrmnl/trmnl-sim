@@ -39,9 +39,8 @@ class RefreshCycle(unittest.TestCase):
 
     def test_timer_wake_fetches_next_image(self):
         expected = dev.mock.set_image("two", big_number("2"))
-        dev.mock.display_queue = [{"image": "default", "refresh_rate": 300}]
         dev.mock.display = {"image": "two", "refresh_rate": 300}
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             n = len(dev.mock.requests)
             s.wake()
@@ -51,7 +50,7 @@ class RefreshCycle(unittest.TestCase):
             self.assertTrue(s.compare_screen(expected, tolerance=64)["match"])
 
     def test_button_press_wakes_and_refreshes(self):
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             n = len(dev.mock.requests)
             s.press(150)
@@ -60,7 +59,7 @@ class RefreshCycle(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_reports_battery_voltage(self):
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.set_battery(3700)
             s.wait(state="deep_sleep", timeout_s=90)
             n = len(dev.mock.requests)
@@ -78,7 +77,7 @@ class RefreshCycle(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_credentials_survive_power_cycle(self):
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             s.power_cycle()
             n = len(dev.mock.requests)
@@ -87,7 +86,7 @@ class RefreshCycle(unittest.TestCase):
             self.assertEqual(dev.mock.count("/api/setup"), 0, "should not re-register")
 
     def test_long_press_resets_wifi(self):
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             s.press(6000)
             s.wait(portal=True, timeout_s=120)
@@ -95,7 +94,7 @@ class RefreshCycle(unittest.TestCase):
     def test_portal_soft_reset_forgets_the_device(self):
         # A long press only forgets WiFi; the portal's Soft Reset also clears the API key,
         # so the next onboarding has to register with /api/setup again.
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             s.press(6000)
             boots = s.wait(portal=True, timeout_s=120)["status"]["boot_count"]
@@ -110,7 +109,7 @@ class RefreshCycle(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_wifi_out_of_range_keeps_running(self):
-        with dev.boot() as s:
+        with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             s.set_wifi(False)
             n = len(dev.mock.requests)

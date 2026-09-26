@@ -143,7 +143,7 @@ class Provisioned(ProvisionedCase):
 
 class TouchAndDock(ProvisionedCase):
     def test_center_tap_wakes_and_refreshes(self):
-        with dev().boot() as s:
+        with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=120)
             n = len(dev().mock.requests)
             s.touch("center", 150)
