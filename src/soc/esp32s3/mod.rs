@@ -912,8 +912,10 @@ impl Machine for Esp32s3 {
     fn realtime_required(&self) -> bool {
         // A light sleep without a timer only ends on an external event (e.g. docking):
         // fast-forwarding it would just burn virtual time.
-        let untimed_sleep = matches!(self.light_sleep, Some((w, opt)) if w.is_none() || opt & (1 << 3) == 0);
-        untimed_sleep || self.hle.wifi.net_busy() || self.bus.board.realtime_required()
+        self.waiting_for_external() || self.hle.wifi.net_busy() || self.bus.board.realtime_required()
+    }
+    fn waiting_for_external(&self) -> bool {
+        matches!(self.light_sleep, Some((w, opt)) if w.is_none() || opt & (1 << 3) == 0)
     }
     fn save_soc(&mut self, rtc: bool) -> SocState {
         SocState {

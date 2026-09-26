@@ -484,6 +484,11 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         anchor_virt = m.now_ns();
                     }
                     match exit {
+                        // Idle until a command (dock, touch...) arrives: nap rather than spin
+                        // through tiny slices; the next slice catches up with wall time.
+                        SliceExit::Reached if realtime && m.waiting_for_external() => {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
                         SliceExit::Reached => {}
                         SliceExit::DeepSleep { timer_ns, gpio_low_mask } => {
                             let wake_at = timer_ns.map(|t| m.now_ns() + t);

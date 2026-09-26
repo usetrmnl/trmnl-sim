@@ -58,6 +58,11 @@ pub trait Machine: Send {
     fn realtime_required(&self) -> bool {
         false
     }
+    /// Nothing happens until something outside the simulation does it (e.g. a light sleep
+    /// that only a GPIO can end): the runner can nap instead of spinning at wall-clock pace.
+    fn waiting_for_external(&self) -> bool {
+        false
+    }
     /// Replace the injected faults. Errors (e.g. an unknown partition) are reported; the
     /// other faults still apply.
     fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String>;
