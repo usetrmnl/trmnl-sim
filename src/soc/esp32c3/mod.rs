@@ -706,6 +706,11 @@ impl Machine for Esp32c3 {
         self.hle.wifi.set_available(on, now);
     }
 
+    fn set_wifi_networks(&mut self, networks: &[sim_api::WifiNetwork]) {
+        let now = self.bus.now_ns();
+        self.hle.wifi.set_networks(networks, now);
+    }
+
     fn realtime_required(&self) -> bool {
         self.hle.wifi.net_busy()
     }

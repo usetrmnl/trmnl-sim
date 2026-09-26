@@ -118,6 +118,11 @@ struct Cli {
     /// Its flash replaces the --flash image.
     #[arg(long, value_name = "FILE")]
     restore: Option<PathBuf>,
+    /// Access points in range of the device's own radio, replacing the defaults: a JSON
+    /// array, e.g. '[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'
+    /// (keys: ssid, password, rssi, channel, open, internet).
+    #[arg(long, value_name = "JSON")]
+    wifi_networks: Option<String>,
     /// Inject faults from the start: JSON as for POST /faults, e.g. '{"net":{"dns":"servfail"}}'
     /// (repeatable; later ones are merged into earlier ones).
     #[arg(long, value_name = "JSON")]
@@ -229,6 +234,11 @@ fn main() -> Result<()> {
             (Box::new(m), frame)
         }
     };
+
+    if let Some(json) = &cli.wifi_networks {
+        let nets = sim_control::wifi::parse_networks_str(json).map_err(|e| anyhow::anyhow!("--wifi-networks: {e}"))?;
+        machine.set_wifi_networks(&nets);
+    }
 
     let fw_id = savepoint::FirmwareId { name: fw.name.clone(), elf_sha256: fw.elf_sha256 };
     if let Some(sp) = &restore {

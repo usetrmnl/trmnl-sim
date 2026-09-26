@@ -103,6 +103,27 @@ pub struct BoardInfo {
 
 // ---- faults -------------------------------------------------------------------------------------
 
+/// An access point in range of the device's own WiFi radio (`Command::SetWifiNetworks`,
+/// `--wifi-networks`). The TRMNL X's 5 GHz modem sees its own, fixed networks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WifiNetwork {
+    pub ssid: String,
+    /// None: any password is accepted.
+    pub password: Option<String>,
+    pub rssi: i8,
+    pub channel: u8,
+    /// No encryption (otherwise WPA2-PSK).
+    pub open: bool,
+    /// Whether joining it actually gets you online.
+    pub internet: bool,
+}
+
+impl WifiNetwork {
+    pub fn new(ssid: &str) -> Self {
+        WifiNetwork { ssid: ssid.into(), password: None, rssi: -54, channel: 6, open: false, internet: true }
+    }
+}
+
 /// Faults injected into the simulated device on demand (`Command::SetFaults`). All off by
 /// default; each field is independent.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -405,6 +426,9 @@ pub enum Command {
     WakeFromSleep,
     /// Enable/disable the simulated access point the device joins.
     SetWifiAvailable(bool),
+    /// Replace the access points in range (the defaults: "TRMNL-Sim", any password,
+    /// -54 dBm, and "Neighbors WiFi", password "hunter2hunter2", -81 dBm).
+    SetWifiNetworks(Vec<WifiNetwork>),
     /// Run as fast as possible (true) or pace to wall-clock time (false).
     SetTurbo(bool),
     Pause(bool),

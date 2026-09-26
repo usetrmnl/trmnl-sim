@@ -319,6 +319,11 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                     });
                     ports.status.lock().wifi_available = on;
                 }
+                Command::SetWifiNetworks(nets) => {
+                    m.set_wifi_networks(&nets);
+                    let names: Vec<&str> = nets.iter().map(|n| n.ssid.as_str()).collect();
+                    ports.console.lock().push_sim(&format!("WiFi networks in range: {}", names.join(", ")));
+                }
                 Command::SetTurbo(t) => {
                     turbo = t;
                     ports.status.lock().turbo = t;

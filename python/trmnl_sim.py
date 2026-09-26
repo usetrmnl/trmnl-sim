@@ -82,6 +82,7 @@ class Simulator:
         binary: Optional[str | os.PathLike] = None,
         extra_args: tuple[str, ...] = (),
         faults: Optional[dict] = None,
+        networks: Optional[list[dict]] = None,
         startup_timeout_s: float = 30,
         name: Optional[str] = None,
         restore: Optional[str | os.PathLike] = None,
@@ -130,6 +131,8 @@ class Simulator:
             args += ["--coverage", str(self.coverage_path)]
         if faults:
             args += ["--faults", json.dumps(faults)]
+        if networks is not None:
+            args += ["--wifi-networks", json.dumps(networks)]
         if memcheck:
             args.append(f"--memcheck={memcheck}")
             if memcheck_suppress:
@@ -290,6 +293,11 @@ class Simulator:
 
     def set_wifi(self, available: bool) -> None:
         self._post("/wifi", {"available": available})
+
+    def set_networks(self, networks: list[dict]) -> None:
+        """Replace the access points in range: dicts with "ssid" and optionally "password"
+        (None: any), "rssi", "channel", "open", "internet" (see --wifi-networks)."""
+        self._post("/wifi", {"networks": networks})
 
     def set_battery(self, mv: int) -> None:
         self._post("/battery", {"mv": mv})

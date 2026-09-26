@@ -309,6 +309,32 @@ impl WifiState {
         }
     }
 
+    /// Replace the access points in range. An association with an AP that is gone (or
+    /// whose password changed) drops, as when it goes out of range.
+    pub fn set_networks(&mut self, networks: &[sim_api::WifiNetwork], now: u64) {
+        let current = self.connected.map(|i| self.networks[i].clone());
+        self.networks = networks
+            .iter()
+            .map(|n| SimAp {
+                ssid: n.ssid.clone(),
+                password: n.password.clone(),
+                rssi: n.rssi,
+                channel: n.channel,
+                authmode: if n.open { 0 } else { 3 },
+                internet: n.internet,
+            })
+            .collect();
+        if let Some(ap) = current {
+            let same = |a: &SimAp| a.ssid == ap.ssid && a.password == ap.password && a.authmode == ap.authmode;
+            self.connected = self.networks.iter().position(same);
+            if self.connected.is_none() {
+                let d = self.disconnected_event(Some(&ap), REASON_BEACON_TIMEOUT);
+                self.post(now + 100 * MS, EV_STA_DISCONNECTED, d);
+                self.net.reset();
+            }
+        }
+    }
+
     /// Frames lwIP sent on an interface.
     fn tx(&mut self, ifx: usize, frame: &[u8]) {
         self.stats.tx_frames += 1;

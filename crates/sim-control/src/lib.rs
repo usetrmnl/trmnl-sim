@@ -14,7 +14,7 @@
 //! | POST   | `/reset`               |                                                | |
 //! | POST   | `/power-cycle`         |                                                | |
 //! | POST   | `/wake`                |                                                | |
-//! | POST   | `/wifi`                | `{"available": false}`                         | |
+//! | POST   | `/wifi`                | `{"available": false}`, `{"networks": [...]}` (see [`wifi`]) | |
 //! | POST   | `/battery`             | `{"mv": 3300}`                                 | |
 //! | POST   | `/turbo`               | `{"on": true}`                                 | |
 //! | POST   | `/pause`               | `{"on": true}`                                 | |
@@ -37,6 +37,7 @@
 
 pub mod faults;
 mod mock;
+pub mod wifi;
 
 use std::net::SocketAddr;
 use std::thread::JoinHandle;
@@ -169,8 +170,17 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             ok()
         }
         (Method::Post, "/wifi") => {
-            let on = body_json(body)?["available"].as_bool().ok_or("need {\"available\": bool}")?;
-            h.send(Command::SetWifiAvailable(on));
+            let b = body_json(body)?;
+            let (on, nets) = (b["available"].as_bool(), b.get("networks"));
+            if on.is_none() && nets.is_none() {
+                return Err("need {\"available\": bool} and/or {\"networks\": [...]}".into());
+            }
+            if let Some(nets) = nets {
+                h.send(Command::SetWifiNetworks(wifi::parse_networks(nets)?));
+            }
+            if let Some(on) = on {
+                h.send(Command::SetWifiAvailable(on));
+            }
             ok()
         }
         (Method::Post, "/battery") => {

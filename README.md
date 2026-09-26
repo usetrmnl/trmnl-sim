@@ -214,6 +214,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--memcheck-suppress F,..` | Tolerate known memory bugs: ignore violations with one of these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
+| `--wifi-networks JSON` | Access points in range of the device's own radio, replacing the defaults, e.g. `'[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'` (keys: `ssid`, `password` (null: any), `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
 
 The simulated WiFi environment has two networks: **TRMNL-Sim** (any password
@@ -416,7 +417,7 @@ Useful pieces:
 | `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap; returns after lift |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
-| `POST /wifi {"available": bool}` | network in or out of range |
+| `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points in range (as `--wifi-networks`) |
 | `POST /battery {"mv": N}` | |
 | `POST /turbo {"on": bool}`, `/pause {"on": bool}` | |
 | `POST /debug` | dump CPU state (registers, backtrace, current FreeRTOS task) and board diagnostics to the console |
