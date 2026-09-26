@@ -44,12 +44,16 @@ class FileCov:
 
 Coverage = dict[str, FileCov]
 
+# What tests/integration/run.py names its merge of a coverage directory.
+MERGED = "merged.info"
+
 
 def tracefiles(inputs: list[str], exclude: Path | None = None) -> list[Path]:
     out: list[Path] = []
     for i in inputs:
         p = Path(i)
-        found = sorted(p.glob("*.info")) if p.is_dir() else [p]
+        # A directory means the per-simulator tracefiles, not an earlier merge of them.
+        found = sorted(f for f in p.glob("*.info") if f.name != MERGED) if p.is_dir() else [p]
         out += [f for f in found if exclude is None or f.resolve() != exclude.resolve()]
     return out
 
