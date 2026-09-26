@@ -12,6 +12,7 @@ Standard library only. Typical use:
         sim.wait(wifi_connected=True)
         sim.press(1200)                                   # 1.2 s button hold (virtual time)
         sim.wait_for_console(r"deep sleep")
+        sim.set_net_faults(dns="servfail")                # inject faults (see set_faults)
 
 Every GUI action has a method here; see `Simulator` for the full list.
 """
@@ -50,6 +51,8 @@ class Simulator:
         gui: show the window too.
         binary: path to the trmnl-sim executable (default: $TRMNL_SIM_BIN or target/release/trmnl-sim).
         extra_args: more CLI arguments.
+        faults: faults injected from the start (as for `set_faults`), e.g.
+            {"power_loss": {"partition": "nvs"}}.
         name: label for artifacts. If $TRMNL_SIM_ARTIFACTS is set, the log and final
             screen of every simulator are saved there on close (handy in CI).
         restore: start from this save point file (see `save_point`) instead of booting.
@@ -70,6 +73,7 @@ class Simulator:
         gui: bool = False,
         binary: Optional[str | os.PathLike] = None,
         extra_args: tuple[str, ...] = (),
+        faults: Optional[dict] = None,
         startup_timeout_s: float = 30,
         name: Optional[str] = None,
         restore: Optional[str | os.PathLike] = None,
@@ -110,6 +114,8 @@ class Simulator:
         self.coverage_path = Path(coverage) if coverage else None
         if self.coverage_path:
             args += ["--coverage", str(self.coverage_path)]
+        if faults:
+            args += ["--faults", json.dumps(faults)]
         args += list(extra_args)
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(args, stdout=self._log, stderr=subprocess.STDOUT)
@@ -186,6 +192,13 @@ class Simulator:
         out = json.loads(data or b"{}")
         if code != 200:
             raise SimError(f"POST {path} -> {code}: {out.get('error', out)}")
+        return out
+
+    def _delete(self, path: str) -> dict:
+        code, _, data = self._request("DELETE", path)
+        out = json.loads(data or b"{}")
+        if code != 200:
+            raise SimError(f"DELETE {path} -> {code}: {out.get('error', out)}")
         return out
 
     def _get_json(self, path: str) -> dict:
@@ -288,6 +301,46 @@ class Simulator:
     def save_points(self) -> list[dict]:
         """The in-memory save points, oldest first."""
         return self._get_json("/savepoints")["savepoints"]
+
+    # ---- faults -------------------------------------------------------------------------------------
+
+    def faults(self) -> dict:
+        """Current faults: {"faults", "summary", "power_losses", "flash": {"programs", "erases"},
+        "partitions": [{"label", "type", "subtype", "offset", "size"}]}."""
+        return self._get_json("/faults")
+
+    def set_faults(self, faults: Optional[dict] = None, **kw) -> dict:
+        """Merge faults into the current ones (keys left out are kept, None clears one):
+
+            net: {latency_ms, loss (0..1), bandwidth_bps, dns ("servfail" | "nxdomain" |
+                  "empty" | "timeout"), no_internet, offline,
+                  tcp_cut: {after_bytes, stall, port}}
+            power_loss: {op ("any" | "program" | "erase"), partition ("nvs", "otadata",
+                         "ota_0", "spiffs", ...), range: [start, end], nth, cut
+                         ("before" | "torn" | "after")}
+            i2c_absent: [0x55, ...]
+            panel_busy_stuck: bool
+            modem_unresponsive: bool
+        """
+        return self._post("/faults", {**(faults or {}), **kw})
+
+    def set_net_faults(self, **kw) -> dict:
+        """Shortcut for set_faults(net={...}), e.g. set_net_faults(latency_ms=300, loss=0.1)."""
+        return self.set_faults(net=kw)
+
+    def arm_power_loss(self, partition: Optional[str] = None, *, op: str = "any", nth: int = 1,
+                       cut: str = "before", range: Optional[tuple[int, int]] = None) -> dict:
+        """Cut power at the `nth` flash `op` into `partition` / `range` (one-shot). With
+        cut="torn" the interrupted program/erase is left half done."""
+        spec: dict = {"op": op, "nth": nth, "cut": cut}
+        if partition:
+            spec["partition"] = partition
+        if range:
+            spec["range"] = list(range)
+        return self.set_faults(power_loss=spec)
+
+    def clear_faults(self) -> dict:
+        return self._delete("/faults")
 
     # ---- observation ------------------------------------------------------------------------------
 

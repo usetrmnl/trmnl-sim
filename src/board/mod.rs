@@ -61,6 +61,9 @@ pub trait Board: Send {
     fn set_docked(&mut self, _docked: bool) {}
     /// Show (true) or hide the display's refresh flashes.
     fn set_refresh_flashing(&mut self, _on: bool) {}
+    /// Apply the peripheral faults this board has (I2C devices absent, panel stuck, modem
+    /// unresponsive, the modem's network faults).
+    fn set_faults(&mut self, _faults: &sim_api::Faults) {}
     /// The battery is currently charging.
     fn charging(&self) -> bool {
         false

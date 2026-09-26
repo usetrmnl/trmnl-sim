@@ -50,6 +50,8 @@ pub struct Tps65185 {
     rails_since: Option<u64>,
     /// Time from power-up to all rails in regulation.
     pub pg_delay_ns: u64,
+    /// Fault: the rails never come up (power good never asserts).
+    pub rail_fault: bool,
 }
 
 impl Default for Tps65185 {
@@ -69,6 +71,7 @@ impl Tps65185 {
             i2c_active: false,
             rails_since: None,
             pg_delay_ns: 1_000_000,
+            rail_fault: false,
         }
     }
 
@@ -98,7 +101,7 @@ impl Tps65185 {
 
     /// High-voltage panel rails (VPOS/VNEG/VDDH/VEE, VCOM) are up and in regulation.
     pub fn rails_on(&self, now: u64) -> bool {
-        self.rails_since.is_some_and(|t| now >= t + self.pg_delay_ns)
+        !self.rail_fault && self.rails_since.is_some_and(|t| now >= t + self.pg_delay_ns)
     }
 
     /// Level of the PWR_GOOD pin (to TCA9535 P1_6).

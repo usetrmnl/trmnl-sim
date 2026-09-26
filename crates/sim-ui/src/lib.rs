@@ -5,6 +5,7 @@
 
 mod console;
 mod device;
+mod faults;
 mod server;
 mod touch;
 
@@ -85,12 +86,12 @@ struct Pending<T> {
     since: Instant,
 }
 
-impl<T: PartialEq + Copy> Pending<T> {
+impl<T: PartialEq + Clone> Pending<T> {
     const TIMEOUT: Duration = Duration::from_millis(1500);
 
     fn resolve(slot: &mut Option<Self>, actual: T) -> T {
         match slot {
-            Some(p) if p.value != actual && p.since.elapsed() < Self::TIMEOUT => p.value,
+            Some(p) if p.value != actual && p.since.elapsed() < Self::TIMEOUT => p.value.clone(),
             _ => {
                 *slot = None;
                 actual
@@ -144,6 +145,7 @@ struct SimApp {
     pause_pending: Option<Pending<bool>>,
     /// A save point command waiting for the emulator's answer (true = restore).
     savepoint_reply: Option<(crossbeam_channel::Receiver<Result<SavePointInfo, String>>, bool)>,
+    faults_pending: Option<Pending<sim_api::Faults>>,
     notice: Option<Notice>,
     server: Option<ServerPanel>,
     show_server: bool,
@@ -179,6 +181,7 @@ impl SimApp {
             wifi_pending: None,
             pause_pending: None,
             savepoint_reply: None,
+            faults_pending: None,
             notice: None,
         }
     }
@@ -593,6 +596,8 @@ impl SimApp {
                 ui.toggle_value(&mut self.show_server, "🖧 Mock server panel")
                     .on_hover_text("The built-in TRMNL server: serve your own images to the device");
             }
+
+            self.faults_section(ui);
 
             section(ui, "Battery");
             let mut mv = Pending::resolve(&mut self.battery_pending, self.status.battery_mv);

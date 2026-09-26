@@ -103,6 +103,10 @@ impl Board for TrmnlOg {
         self.panel.flashing = on;
     }
 
+    fn set_faults(&mut self, faults: &sim_api::Faults) {
+        self.panel.busy_stuck = faults.panel_busy_stuck;
+    }
+
     fn set_button(&mut self, down: bool) {
         self.button_down = down;
     }

@@ -9,6 +9,12 @@ The simulated device reaches the host as 10.0.2.2, so point the device at
     ...
     req = mock.wait_for_request("/api/display")
     assert req.headers["Battery-Voltage"].startswith("4.")
+
+HTTP-level faults are per path (exact, or a prefix ending in "*"):
+
+    mock.set_fault("/api/display", status=500)           # every /api/display answers 500
+    mock.set_fault("/images/*", truncate=1000, times=1)  # the next image stops after 1000 bytes
+    mock.clear_faults()
 """
 
 from __future__ import annotations
@@ -243,6 +249,11 @@ class MockTrmnl:
         self.setup: Optional[dict] = {}
         self.display: dict = {"image": "default", "refresh_rate": 900}
         self.display_queue: list[dict] = []
+        self.faults: dict[str, dict] = {}
+        # How the device names this server. Use a hostname (with the simulator's
+        # `--dns NAME=10.0.2.2`) to make the device resolve it, e.g. for DNS fault tests.
+        self.device_host = "10.0.2.2"
+        self._closing = threading.Event()
         self._cv = threading.Condition()
         self.set_image("default", big_number("0"))
         mock = self
@@ -254,19 +265,52 @@ class MockTrmnl:
                 pass
 
             def _handle(self):
+                try:
+                    self._serve()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the device went away (e.g. a power-loss fault mid-download)
+
+            def _serve(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else b""
                 rec = RecordedRequest(self.command, self.path.split("?")[0], Headers(self.headers.items()), body)
                 with mock._cv:
                     mock.requests.append(rec)
                     mock._cv.notify_all()
+                fault = mock._take_fault(rec.path) or {}
+                if fault.get("hang"):
+                    mock._closing.wait(300)
+                    return
+                if fault.get("delay"):
+                    mock._closing.wait(fault["delay"])
+                if fault.get("close"):
+                    self.close_connection = True
+                    return
                 code, ctype, payload = mock._respond(rec)
+                if fault.get("status") is not None:
+                    code, ctype, payload = fault["status"], "text/plain", f"fault: HTTP {fault['status']}".encode()
+                if fault.get("body") is not None:
+                    body = fault["body"]
+                    payload = body.encode() if isinstance(body, str) else bytes(body)
+                ctype = fault.get("content_type") or ctype
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
+                # A truncated body still announces its full length, like a connection that dies.
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Connection", "close")
                 self.end_headers()
-                self.wfile.write(payload)
+                if fault.get("truncate") is not None:
+                    payload = payload[: fault["truncate"]]
+                rate = fault.get("rate")
+                if rate:
+                    step = max(1, rate // 20)
+                    for i in range(0, len(payload), step):
+                        self.wfile.write(payload[i:i + step])
+                        self.wfile.flush()
+                        if mock._closing.wait(step / rate):
+                            return
+                else:
+                    self.wfile.write(payload)
 
             do_GET = do_POST = _handle
 
@@ -278,13 +322,14 @@ class MockTrmnl:
     # URLs as seen from the device (10.0.2.2 is the host) and from the host.
     @property
     def device_url(self) -> str:
-        return f"http://10.0.2.2:{self.port}"
+        return f"http://{self.device_host}:{self.port}"
 
     @property
     def host_url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
     def close(self) -> None:
+        self._closing.set()
         self.httpd.shutdown()
         self.httpd.server_close()
 
@@ -327,6 +372,43 @@ class MockTrmnl:
         self.images[name + ".png"] = png_palette(lambda x, y: bwry_quantize(*color(x, y)), palette, width, height)
         self._stamp(name)
         return expected_bwry(color, width, height)
+
+    def set_fault(self, path: str, *, status: Optional[int] = None, body: Optional[str | bytes] = None,
+                  content_type: Optional[str] = None, delay: float = 0, hang: bool = False,
+                  truncate: Optional[int] = None, rate: Optional[int] = None, close: bool = False,
+                  times: Optional[int] = None) -> None:
+        """Make requests to `path` (exact, or a prefix ending in "*", e.g. "/images/*") misbehave:
+
+            status: answer with this HTTP status (and a short text body)
+            body: answer with this body instead (e.g. malformed JSON: '{"status": 0, "image_')
+            content_type: override the Content-Type
+            delay: seconds to wait before answering (longer than the device's timeout = a timeout)
+            hang: never answer (until the mock is closed)
+            truncate: send only this many bytes of the body (Content-Length is still the full
+                size), then close the connection
+            rate: send the body at this many bytes per second (a slow download)
+            close: close the connection without answering
+            times: only the next N matching requests (default: until cleared)
+        """
+        spec = {"status": status, "body": body, "content_type": content_type, "delay": delay, "hang": hang,
+                "truncate": truncate, "rate": rate, "close": close, "times": times}
+        with self._cv:
+            self.faults[path] = spec
+
+    def clear_faults(self) -> None:
+        with self._cv:
+            self.faults.clear()
+
+    def _take_fault(self, path: str) -> Optional[dict]:
+        with self._cv:
+            for pattern, spec in self.faults.items():
+                if pattern == path or (pattern.endswith("*") and path.startswith(pattern[:-1])):
+                    if spec["times"] is not None:
+                        spec["times"] -= 1
+                        if spec["times"] <= 0:
+                            del self.faults[pattern]
+                    return spec
+        return None
 
     def set_file(self, path: str, content_type: str, data: bytes) -> str:
         """Serve arbitrary bytes (e.g. a firmware binary for OTA tests); returns the device URL."""

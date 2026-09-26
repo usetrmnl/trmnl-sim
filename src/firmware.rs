@@ -331,6 +331,22 @@ pub fn find_partition(flash: &[u8], ptype: u8, subtype: u8) -> Option<(u32, u32)
     None
 }
 
+/// Every entry of the partition table at 0x8000.
+pub fn partitions(flash: &[u8]) -> Vec<sim_api::PartitionInfo> {
+    let Some(table) = flash.get(0x8000..0x8c00) else { return Vec::new() };
+    table
+        .chunks(32)
+        .take_while(|e| e[0] == 0xAA && e[1] == 0x50)
+        .map(|e| sim_api::PartitionInfo {
+            label: String::from_utf8_lossy(&e[12..28]).trim_end_matches('\0').to_string(),
+            kind: e[2],
+            subtype: e[3],
+            offset: u32::from_le_bytes(e[4..8].try_into().unwrap()),
+            size: u32::from_le_bytes(e[8..12].try_into().unwrap()),
+        })
+        .collect()
+}
+
 /// Segments of an ESP image at `off`: (entry, [(load addr, bytes)]).
 /// Load address and contents of each segment of an ESP image.
 pub type Segments = Vec<(u32, Vec<u8>)>;

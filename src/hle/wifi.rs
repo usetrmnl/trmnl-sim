@@ -10,7 +10,7 @@
 use std::collections::VecDeque;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use vnet::{ApClient, NetConfig, VirtualNet};
+use vnet::{ApClient, NetConfig, NetFaults, VirtualNet};
 
 use super::{Flow, HleCtx, Hooks, MAGIC_BASE};
 use crate::firmware::Symbols;
@@ -88,6 +88,8 @@ pub struct WifiState {
     pub base_mac: [u8; 6],
     pub portal_forward: SocketAddr,
     pub net_config: NetConfig,
+    /// Injected network faults (survive chip resets, like the rest of the "air").
+    net_faults: NetFaults,
 
     task_created: bool,
     mode: u32,
@@ -132,6 +134,7 @@ impl WifiState {
             base_mac,
             portal_forward: "127.0.0.1:8080".parse().unwrap(),
             net_config: NetConfig::default(),
+            net_faults: NetFaults::default(),
             task_created: false,
             mode: 0,
             started: false,
@@ -154,12 +157,13 @@ impl WifiState {
     /// The chip reset: the driver state is gone (the "air" is not).
     pub fn reset(&mut self) {
         let keep = (self.available, self.networks.clone(), self.base_mac, self.portal_forward, self.net_config.clone());
-        let abi = self.abi;
+        let (abi, faults) = (self.abi, self.net_faults.clone());
         *self = WifiState::new(keep.2);
         self.set_abi(abi);
         self.available = keep.0;
         self.networks = keep.1;
         self.portal_forward = keep.3;
+        self.net_faults = faults;
         self.set_net_config(keep.4);
     }
 
@@ -171,7 +175,13 @@ impl WifiState {
 
     pub fn set_net_config(&mut self, cfg: NetConfig) {
         self.net = VirtualNet::new(cfg.clone());
+        self.net.set_faults(self.net_faults.clone());
         self.net_config = cfg;
+    }
+
+    pub fn set_net_faults(&mut self, faults: NetFaults) {
+        self.net.set_faults(faults.clone());
+        self.net_faults = faults;
     }
 
     /// Guest time must track wall time: host-side network activity is in flight,

@@ -97,6 +97,241 @@ pub struct BoardInfo {
     pub has_5ghz: bool,
     /// The panel's refresh flashes can be switched off (`Command::SetRefreshFlashing`).
     pub has_refresh_flashing: bool,
+    /// A fuel gauge on I2C (TRMNL X: BQ27427 at 0x55) that `Faults::i2c_absent` can remove.
+    pub has_fuel_gauge: bool,
+}
+
+// ---- faults -------------------------------------------------------------------------------------
+
+/// Faults injected into the simulated device on demand (`Command::SetFaults`). All off by
+/// default; each field is independent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Faults {
+    pub net: NetFaults,
+    /// Cut power when the firmware does a matching flash program/erase (one-shot: cleared
+    /// once it fires).
+    pub power_loss: Option<PowerLoss>,
+    /// 7-bit I2C addresses whose device is gone: every transfer to them NACKs.
+    pub i2c_absent: Vec<u8>,
+    /// The display never finishes: UC8179 BUSY held low (OG/BWRY); on the TRMNL X, whose
+    /// parallel panel has no BUSY line, the PMIC never reports power good.
+    pub panel_busy_stuck: bool,
+    /// The TRMNL X modem stops answering AT commands (input is ignored; the ROM loader
+    /// still works).
+    pub modem_unresponsive: bool,
+}
+
+impl Faults {
+    pub fn is_empty(&self) -> bool {
+        *self == Faults::default()
+    }
+
+    /// One line for logs, e.g. "latency 300 ms, DNS servfail, power loss at program #1 in nvs".
+    pub fn summary(&self) -> String {
+        let n = &self.net;
+        let mut v = Vec::new();
+        if n.latency_ms > 0 {
+            v.push(format!("latency {} ms", n.latency_ms));
+        }
+        if n.loss > 0.0 {
+            v.push(format!("loss {:.0}%", n.loss * 100.0));
+        }
+        if let Some(b) = n.bandwidth_bps {
+            v.push(format!("bandwidth {b} B/s"));
+        }
+        if let Some(d) = n.dns {
+            v.push(format!("DNS {}", d.name()));
+        }
+        if n.no_internet {
+            v.push("no internet".into());
+        }
+        if n.offline {
+            v.push("offline".into());
+        }
+        if let Some(c) = n.tcp_cut {
+            let port = c.port.map(|p| format!(" to port {p}")).unwrap_or_default();
+            let how = if c.stall { "stall" } else { "reset" };
+            v.push(format!("TCP {how} after {} bytes{port}", c.after_bytes));
+        }
+        if let Some(p) = &self.power_loss {
+            let mut w = format!("power loss at {} #{}", p.op.name(), p.nth);
+            if let Some(name) = &p.partition {
+                w += &format!(" in {name}");
+            }
+            if let Some((a, b)) = p.range {
+                w += &format!(" in {a:#x}..{b:#x}");
+            }
+            w += &format!(" (cut {})", p.cut.name());
+            v.push(w);
+        }
+        if !self.i2c_absent.is_empty() {
+            let a: Vec<String> = self.i2c_absent.iter().map(|a| format!("{a:#04x}")).collect();
+            v.push(format!("I2C absent {}", a.join(" ")));
+        }
+        if self.panel_busy_stuck {
+            v.push("panel busy stuck".into());
+        }
+        if self.modem_unresponsive {
+            v.push("modem unresponsive".into());
+        }
+        if v.is_empty() { "none".into() } else { v.join(", ") }
+    }
+}
+
+/// Network faults, applied to the S3/C3's own WiFi path (the `vnet` router) and, where
+/// they make sense, to the TRMNL X modem's host-side HTTP requests.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NetFaults {
+    /// Extra delay on every packet towards the device (so round trips grow by this much).
+    pub latency_ms: u32,
+    /// Probability (0..=1) of dropping each packet, in each direction.
+    pub loss: f64,
+    /// Link rate limit in bytes per second, each direction.
+    pub bandwidth_bps: Option<u64>,
+    pub dns: Option<DnsFault>,
+    /// The access point works (association, DHCP) but nothing is routed beyond it: DNS goes
+    /// unanswered and connections (even to the host, 10.0.2.2) time out.
+    pub no_internet: bool,
+    /// Only the host (10.0.2.2) is reachable, like `--offline`.
+    pub offline: bool,
+    pub tcp_cut: Option<TcpCut>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsFault {
+    /// Answer SERVFAIL.
+    ServFail,
+    /// Answer NXDOMAIN (no such name).
+    NxDomain,
+    /// Answer NOERROR without addresses.
+    Empty,
+    /// Never answer.
+    Timeout,
+}
+
+impl DnsFault {
+    pub const ALL: [DnsFault; 4] = [DnsFault::ServFail, DnsFault::NxDomain, DnsFault::Empty, DnsFault::Timeout];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DnsFault::ServFail => "servfail",
+            DnsFault::NxDomain => "nxdomain",
+            DnsFault::Empty => "empty",
+            DnsFault::Timeout => "timeout",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<DnsFault> {
+        DnsFault::ALL.into_iter().find(|d| d.name().eq_ignore_ascii_case(s))
+    }
+}
+
+/// Cut TCP connections (opened after the fault is set) once `after_bytes` of data went
+/// towards the device on them. On the TRMNL X modem path, bytes of HTTP body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TcpCut {
+    pub after_bytes: u64,
+    /// Stall silently (the connection stays open, no more data) instead of sending a RST.
+    pub stall: bool,
+    /// Only connections to this destination port.
+    pub port: Option<u16>,
+}
+
+/// Which flash operations a [`PowerLoss`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlashOp {
+    #[default]
+    Any,
+    Program,
+    Erase,
+}
+
+impl FlashOp {
+    pub fn name(self) -> &'static str {
+        match self {
+            FlashOp::Any => "any",
+            FlashOp::Program => "program",
+            FlashOp::Erase => "erase",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<FlashOp> {
+        [FlashOp::Any, FlashOp::Program, FlashOp::Erase].into_iter().find(|o| o.name() == s)
+    }
+}
+
+/// How much of the operation that loses power gets done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CutPoint {
+    /// Power fails as the operation starts: nothing changes.
+    #[default]
+    Before,
+    /// Halfway: the first half of a page program lands, or the first half of an erase
+    /// (a torn page / half-erased sector, as on real NOR flash).
+    Torn,
+    /// Right after the operation completed.
+    After,
+}
+
+impl CutPoint {
+    pub fn name(self) -> &'static str {
+        match self {
+            CutPoint::Before => "before",
+            CutPoint::Torn => "torn",
+            CutPoint::After => "after",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<CutPoint> {
+        [CutPoint::Before, CutPoint::Torn, CutPoint::After].into_iter().find(|c| c.name() == s)
+    }
+}
+
+/// Cut power at the `nth` flash operation matching `op` and the address filters (a named
+/// partition and/or a byte range; an operation matches if it overlaps them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PowerLoss {
+    pub op: FlashOp,
+    /// Partition label from the partition table, e.g. "nvs", "otadata", "app1", "spiffs".
+    pub partition: Option<String>,
+    /// Flash byte range `[start, end)`.
+    pub range: Option<(u32, u32)>,
+    /// 1 = the first matching operation (counted from when the fault is set).
+    pub nth: u32,
+    pub cut: CutPoint,
+}
+
+impl Default for PowerLoss {
+    fn default() -> Self {
+        PowerLoss { op: FlashOp::Any, partition: None, range: None, nth: 1, cut: CutPoint::Before }
+    }
+}
+
+/// A partition table entry, for front-ends (`Status::partitions`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionInfo {
+    pub label: String,
+    /// 0 = app, 1 = data.
+    pub kind: u8,
+    pub subtype: u8,
+    pub offset: u32,
+    pub size: u32,
+}
+
+impl PartitionInfo {
+    /// Look up a partition by label, or by the usual aliases (`ota_0`, `ota_1`, ... for the
+    /// app slots, `littlefs` for the filesystem partition, `factory`).
+    pub fn find<'a>(parts: &'a [PartitionInfo], name: &str) -> Option<&'a PartitionInfo> {
+        if let Some(p) = parts.iter().find(|p| p.label.eq_ignore_ascii_case(name)) {
+            return Some(p);
+        }
+        let (kind, subtype) = match name.to_ascii_lowercase().as_str() {
+            "factory" => (0, 0),
+            "littlefs" | "fat" => (1, 0x82),
+            n => (0, 0x10 + n.strip_prefix("ota_")?.parse::<u8>().ok().filter(|&i| i < 16)?),
+        };
+        parts.iter().find(|p| p.kind == kind && p.subtype == subtype)
+    }
 }
 
 /// A save point the emulator keeps in memory (see `Command::SavePoint`).
@@ -166,6 +401,8 @@ pub enum Command {
     /// Run as fast as possible (true) or pace to wall-clock time (false).
     SetTurbo(bool),
     Pause(bool),
+    /// Replace the set of injected faults.
+    SetFaults(Faults),
     /// Write CPU state and board diagnostics to the console (as [sim] lines).
     DumpDebug,
     /// Take a save point into a new in-memory slot, and also write it to `path` if given.
@@ -243,6 +480,15 @@ pub struct Status {
     pub turbo: bool,
     /// In-memory save points, oldest first.
     pub savepoints: Vec<SavePointInfo>,
+    /// Faults currently injected.
+    pub faults: Faults,
+    /// Times power was cut by a `Faults::power_loss` trigger.
+    pub power_losses: u64,
+    /// Flash page programs and erases since the simulator started.
+    pub flash_programs: u64,
+    pub flash_erases: u64,
+    /// The flash's partition table.
+    pub partitions: Vec<PartitionInfo>,
 }
 
 impl Default for Status {
@@ -271,6 +517,11 @@ impl Default for Status {
             firmware: String::new(),
             turbo: false,
             savepoints: Vec::new(),
+            faults: Faults::default(),
+            power_losses: 0,
+            flash_programs: 0,
+            flash_erases: 0,
+            partitions: Vec::new(),
         }
     }
 }

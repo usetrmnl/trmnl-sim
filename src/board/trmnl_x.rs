@@ -229,6 +229,7 @@ impl Board for TrmnlX {
             has_touchbar: true,
             has_dock: true,
             has_5ghz: true,
+            has_fuel_gauge: true,
             ..Default::default()
         }
     }
@@ -252,6 +253,15 @@ impl Board for TrmnlX {
 
     fn charging(&self) -> bool {
         self.charging_now()
+    }
+
+    fn set_faults(&mut self, faults: &sim_api::Faults) {
+        self.i2c.absent = faults.i2c_absent.clone();
+        if let Some(tps) = self.i2c.device_mut::<Tps65185>() {
+            tps.rail_fault = faults.panel_busy_stuck;
+        }
+        self.modem.set_unresponsive(faults.modem_unresponsive);
+        self.modem.set_net_faults(crate::faults::net_faults(&faults.net));
     }
 
     fn set_battery_mv(&mut self, mv: u32) {

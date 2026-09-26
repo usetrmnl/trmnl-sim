@@ -45,6 +45,7 @@ fn main() -> anyhow::Result<()> {
                 has_touchbar: true,
                 has_dock: true,
                 has_5ghz: true,
+                has_fuel_gauge: true,
                 ..Default::default()
             }
         } else {
@@ -55,6 +56,7 @@ fn main() -> anyhow::Result<()> {
                 has_dock: false,
                 has_5ghz: false,
                 has_refresh_flashing: false,
+                has_fuel_gauge: false,
             }
         };
     }
@@ -278,6 +280,7 @@ impl Fake {
                 self.p.status.lock().turbo = on;
             }
             Command::Pause(p) => self.paused = p,
+            Command::SetFaults(f) => self.p.status.lock().faults = f,
             Command::DumpDebug => self.log("[demo] no CPU to dump"),
             Command::SavePoint { reply, .. } | Command::RestoreSavePoint { reply, .. } => {
                 if let Some(tx) = reply {

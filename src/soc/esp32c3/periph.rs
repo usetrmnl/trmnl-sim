@@ -415,7 +415,11 @@ impl C3Bus {
             }
             _ if a == UART0 + 0x0C || a == UART1 + 0x0C => self.irq_dirty = true,
 
-            _ if a == SPI1 => self.spi1_command(v),
+            _ if a == SPI1 => {
+                self.spi1_command(v);
+                // A power-loss fault fired: make the run loop stop right after this store.
+                self.irq_dirty |= self.flash.power_lost().is_some();
+            }
 
             // GPIO
             _ if a == GPIO + 0x04 => self.gpio_set(self.p.gpio_out, v, now),

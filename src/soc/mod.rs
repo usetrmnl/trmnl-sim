@@ -17,6 +17,9 @@ pub enum SliceExit {
     DeepSleep { timer_ns: Option<u64>, gpio_low_mask: u64 },
     /// The emulator cannot continue.
     Halted(String),
+    /// A power-loss fault fired during a flash operation (described); the device has no
+    /// power until it is reset with `ResetKind::PowerOn`.
+    PowerLoss(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,6 +58,13 @@ pub trait Machine: Send {
     fn realtime_required(&self) -> bool {
         false
     }
+    /// Replace the injected faults. Errors (e.g. an unknown partition) are reported; the
+    /// other faults still apply.
+    fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String>;
+    /// Flash (page programs, erases) so far.
+    fn flash_stats(&self) -> (u64, u64);
+    /// The partition table in flash.
+    fn partitions(&self) -> Vec<sim_api::PartitionInfo>;
     /// In light sleep: `Some(wake time)` (`Some(None)` = no timer armed).
     fn light_sleep(&self) -> Option<Option<u64>> {
         None

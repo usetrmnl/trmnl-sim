@@ -4,11 +4,17 @@
 //! Addressing follows the rest of the simulator (see the `vnet` crate): `dns_overrides` first,
 //! then `10.0.2.2` means host `127.0.0.1`. Other addresses in 10.0.2.0/24 and loopback are
 //! unreachable; in `offline` mode everything except 10.0.2.2 is (unknown names don't resolve).
+//!
+//! Network faults (`vnet::NetFaults`) are applied at the HTTP level: DNS failures and "no
+//! internet" fail the request (after a timeout where the real modem would wait), latency
+//! delays the response, the bandwidth limit throttles the body, and a TCP cut truncates the
+//! body after N bytes (reset, or a stall until the client's timeout). Packet loss is not
+//! modelled here (TCP would hide it, apart from delays).
 
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ureq::config::Config;
 use ureq::http::Uri;
@@ -21,6 +27,10 @@ const USER_AGENT: &str = "ESP32 HTTP Client/1.0";
 /// Largest `+HTTPCLIENT:<n>,` chunk we emit.
 pub(super) const CHUNK: usize = 2048;
 const HOST_GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
+/// How long the modem waits for a connection (or a DNS answer) before giving up.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long it waits for more data on an open connection.
+const RECV_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub(super) struct HttpJob {
@@ -29,6 +39,7 @@ pub(super) struct HttpJob {
     pub head_only: bool,
     pub offline: bool,
     pub dns_overrides: Vec<(String, Ipv4Addr)>,
+    pub faults: vnet::NetFaults,
 }
 
 pub(super) enum HttpMsg {
@@ -58,6 +69,21 @@ pub(super) fn spawn(job: HttpJob) -> Receiver<HttpMsg> {
 
 fn run(job: &HttpJob, tx: &SyncSender<HttpMsg>) -> Result<(), String> {
     let uri: Uri = job.url.parse().map_err(|e| format!("bad url: {e}"))?;
+    let faults = &job.faults;
+    let offline = job.offline || faults.offline;
+    let by_name =
+        uri.host().is_some_and(|h| h.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>().is_err());
+    if faults.no_internet {
+        std::thread::sleep(CONNECT_TIMEOUT);
+        return Err("fault: no internet (timed out)".into());
+    }
+    if let Some(dns) = faults.dns.filter(|_| by_name) {
+        if dns == vnet::DnsFault::Timeout {
+            std::thread::sleep(CONNECT_TIMEOUT);
+        }
+        return Err(format!("fault: DNS lookup failed ({dns:?})"));
+    }
+    std::thread::sleep(faults.latency);
     // ESP-AT does not verify server certificates unless a CA is configured (it isn't, on the
     // TRMNL X). We keep verification for the real internet, but a local dev server reached
     // through 10.0.2.2 usually has a self-signed certificate, so skip it there.
@@ -74,7 +100,7 @@ fn run(job: &HttpJob, tx: &SyncSender<HttpMsg>) -> Result<(), String> {
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .tls_config(TlsConfig::builder().disable_verification(local).build())
         .build();
-    let resolver = SimResolver { overrides: job.dns_overrides.clone(), offline: job.offline };
+    let resolver = SimResolver { overrides: job.dns_overrides.clone(), offline };
     let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
 
     let resp = if job.head_only {
@@ -96,13 +122,34 @@ fn run(job: &HttpJob, tx: &SyncSender<HttpMsg>) -> Result<(), String> {
     tx.send(HttpMsg::Status(status)).map_err(|_| "cancelled")?;
     // Like ESP-AT, the body is printed whatever the status; the final result code reflects it.
     let mut reader = resp.into_body().into_reader();
+    let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("https") { 443 } else { 80 });
+    let mut cut = faults.tcp_cut.filter(|c| c.port.is_none_or(|p| p == port)).map(|c| (c.after_bytes, c));
+    let started = Instant::now();
+    let mut received = 0u64;
     loop {
-        let mut buf = vec![0u8; CHUNK];
+        if let Some((0, c)) = cut {
+            if c.stall {
+                std::thread::sleep(RECV_TIMEOUT);
+                return Err(format!("fault: connection stalled after {} bytes (timed out)", c.after_bytes));
+            }
+            return Err(format!("fault: connection reset after {} bytes", c.after_bytes));
+        }
+        let limit = cut.map_or(CHUNK, |(left, _)| left.min(CHUNK as u64) as usize);
+        let mut buf = vec![0u8; limit];
         let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
         }
         buf.truncate(n);
+        if let Some((left, _)) = &mut cut {
+            *left -= n as u64;
+        }
+        received += n as u64;
+        if let Some(bps) = faults.bandwidth.filter(|&b| b > 0) {
+            // Throttle: this much data can't have arrived before now.
+            let due = started + Duration::from_nanos(received * 1_000_000_000 / bps);
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
+        }
         tx.send(HttpMsg::Data(buf)).map_err(|_| "cancelled")?;
     }
     if (200..300).contains(&status) { Ok(()) } else { Err(format!("HTTP status {status}")) }

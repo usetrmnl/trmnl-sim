@@ -1,6 +1,6 @@
 //! `VirtualNet`: slirp-style router + NAT for a guest station interface.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -11,10 +11,10 @@ use smoltcp::phy::Medium;
 use smoltcp::socket::tcp::{self, State};
 use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpListenEndpoint};
 
-use crate::NetConfig;
 use crate::bridge::{Bridge, PumpResult, new_tcp_socket};
 use crate::device::QueueDevice;
 use crate::packet::*;
+use crate::{DnsFault, NetConfig, NetFaults};
 
 const MTU: usize = 1500;
 const LEASE_SECS: u32 = 7200;
@@ -71,6 +71,16 @@ pub struct VirtualNet {
     dns_tx: Sender<DnsResult>,
     dns_rx: Receiver<DnsResult>,
     dns_inflight: HashSet<(u16, u16)>,
+
+    faults: NetFaults,
+    /// Frames on their way to / from the guest while latency or a bandwidth limit applies,
+    /// with the time they arrive; and when each direction's link is free again.
+    downlink: VecDeque<(Instant, Vec<u8>)>,
+    uplink: VecDeque<(Instant, Vec<u8>)>,
+    down_free: Instant,
+    up_free: Instant,
+    /// Packet-loss dice (xorshift64, fixed seed so runs are repeatable).
+    rng: u64,
 }
 
 impl VirtualNet {
@@ -92,7 +102,22 @@ impl VirtualNet {
             dns_tx,
             dns_rx,
             dns_inflight: HashSet::new(),
+            faults: NetFaults::default(),
+            downlink: VecDeque::new(),
+            uplink: VecDeque::new(),
+            down_free: Instant::now(),
+            up_free: Instant::now(),
+            rng: 0x2545_f491_4f6c_dd1d,
         }
+    }
+
+    /// Replace the injected faults. Frames already queued keep their delivery time.
+    pub fn set_faults(&mut self, faults: NetFaults) {
+        self.faults = faults;
+    }
+
+    pub fn faults(&self) -> &NetFaults {
+        &self.faults
     }
 
     fn make_iface(cfg: &NetConfig, start: Instant) -> (QueueDevice, Interface) {
@@ -120,6 +145,8 @@ impl VirtualNet {
     pub fn busy(&self) -> bool {
         !self.tcp.is_empty()
             || !self.dns_inflight.is_empty()
+            || !self.downlink.is_empty()
+            || !self.uplink.is_empty()
             || self.udp.values().any(|f| f.last.elapsed() < std::time::Duration::from_secs(2))
     }
 
@@ -141,6 +168,8 @@ impl VirtualNet {
         self.tcp.clear(); // drops host streams
         self.udp.clear();
         self.dns_inflight.clear();
+        self.downlink.clear();
+        self.uplink.clear();
         self.sockets = SocketSet::new(vec![]);
         let (device, iface) = Self::make_iface(&self.cfg, self.start);
         self.device = device;
@@ -160,7 +189,7 @@ impl VirtualNet {
     fn host_target(&self, dst: Ipv4Addr) -> Option<Ipv4Addr> {
         if dst == self.cfg.gateway_ip {
             Some(Ipv4Addr::LOCALHOST)
-        } else if self.cfg.offline
+        } else if self.offline()
             || self.in_subnet(dst)
             || dst.is_broadcast()
             || dst.is_multicast()
@@ -170,6 +199,29 @@ impl VirtualNet {
         } else {
             Some(dst)
         }
+    }
+
+    fn offline(&self) -> bool {
+        self.cfg.offline || self.faults.offline
+    }
+
+    /// Roll the packet-loss dice.
+    fn lose(&mut self) -> bool {
+        if self.faults.loss <= 0.0 {
+            return false;
+        }
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        ((self.rng >> 11) as f64 / (1u64 << 53) as f64) < self.faults.loss
+    }
+
+    /// When a frame of `len` bytes entering a link now is fully across it (bandwidth limit).
+    fn link_time(bandwidth: Option<u64>, free: &mut Instant, now: Instant, len: usize) -> Instant {
+        let Some(bps) = bandwidth.filter(|&b| b > 0) else { return now };
+        let start = (*free).max(now);
+        *free = start + Duration::from_nanos(len as u64 * 1_000_000_000 / bps);
+        *free
     }
 
     fn send_ip_to_guest(&mut self, ip_packet: &[u8]) {
@@ -182,6 +234,19 @@ impl VirtualNet {
 
     /// An Ethernet frame transmitted by the guest.
     pub fn from_guest(&mut self, frame: &[u8]) {
+        if self.lose() {
+            return;
+        }
+        if self.faults.bandwidth.is_some() || !self.uplink.is_empty() {
+            let now = Instant::now();
+            let at = Self::link_time(self.faults.bandwidth, &mut self.up_free, now, frame.len());
+            self.uplink.push_back((at, frame.to_vec()));
+            return;
+        }
+        self.handle_frame(frame);
+    }
+
+    fn handle_frame(&mut self, frame: &[u8]) {
         if frame.len() < ETH_HDR {
             return;
         }
@@ -278,7 +343,7 @@ impl VirtualNet {
             self.handle_dhcp(data);
             return;
         }
-        if ip.src.is_unspecified() {
+        if ip.src.is_unspecified() || self.faults.no_internet {
             return;
         }
         if ip.dst == self.cfg.dns_ip && dport == 53 {
@@ -390,7 +455,14 @@ impl VirtualNet {
         let guest = SocketAddrV4::new(src, sport);
         let opcode = (q.flags >> 11) & 0xf;
         let immediate = |rcode, ans: &[Ipv4Addr]| build_dns_response(&q, rcode, ans);
-        let resp = if opcode != 0 {
+        let resp = if let Some(fault) = self.faults.dns {
+            match fault {
+                DnsFault::ServFail => Some(immediate(RCODE_SERVFAIL, &[])),
+                DnsFault::NxDomain => Some(immediate(RCODE_NXDOMAIN, &[])),
+                DnsFault::Empty => Some(immediate(RCODE_NOERROR, &[])),
+                DnsFault::Timeout => return,
+            }
+        } else if opcode != 0 {
             Some(immediate(RCODE_NOTIMP, &[]))
         } else if q.qclass != 1 || q.qtype != 1 {
             // Non-A queries (AAAA, ...): empty NOERROR answer.
@@ -403,7 +475,7 @@ impl VirtualNet {
                 Some(immediate(RCODE_NOERROR, &[*ip]))
             } else if let Ok(ip) = name.parse::<Ipv4Addr>() {
                 Some(immediate(RCODE_NOERROR, &[ip]))
-            } else if self.cfg.offline {
+            } else if self.offline() {
                 Some(immediate(RCODE_NXDOMAIN, &[]))
             } else {
                 None
@@ -467,7 +539,7 @@ impl VirtualNet {
 
     fn handle_tcp(&mut self, ip: &Ipv4<'_>) {
         let d = ip.payload;
-        if d.len() < 20 || ip.src.is_unspecified() {
+        if d.len() < 20 || ip.src.is_unspecified() || self.faults.no_internet {
             return;
         }
         let sport = u16::from_be_bytes([d[0], d[1]]);
@@ -541,7 +613,10 @@ impl VirtualNet {
             self.tcp.remove(&key);
             let stream = res.and_then(Bridge::new);
             match stream {
-                Ok(bridge) => {
+                Ok(mut bridge) => {
+                    if let Some(cut) = self.faults.tcp_cut.filter(|c| c.port.is_none_or(|p| p == key.dst.port())) {
+                        bridge.set_cut(cut);
+                    }
                     let mut sock = new_tcp_socket();
                     let ep = IpListenEndpoint { addr: Some(IpAddress::Ipv4(*key.dst.ip())), port: key.dst.port() };
                     if sock.listen(ep).is_err() {
@@ -587,6 +662,11 @@ impl VirtualNet {
 
     /// Non-blocking: service host sockets and timers, return frames to deliver to the guest.
     pub fn poll(&mut self) -> Vec<Vec<u8>> {
+        let now = Instant::now();
+        while self.uplink.front().is_some_and(|(at, _)| *at <= now) {
+            let (_, f) = self.uplink.pop_front().unwrap();
+            self.handle_frame(&f);
+        }
         self.poll_tcp_pending();
         let now = self.now();
         self.iface.poll(now, &mut self.device, &mut self.sockets);
@@ -597,7 +677,8 @@ impl VirtualNet {
 
         let mut out = std::mem::take(&mut self.out);
         let tx = std::mem::take(&mut self.device.tx);
-        if let Some(mac) = self.guest_mac {
+        // No internet: established connections go quiet too.
+        if let Some(mac) = self.guest_mac.filter(|_| !self.faults.no_internet) {
             for p in tx {
                 let mut f = Vec::with_capacity(ETH_HDR + p.len());
                 eth_header(&mut f, mac, self.cfg.gateway_mac, ETHERTYPE_IPV4);
@@ -605,7 +686,30 @@ impl VirtualNet {
                 out.push(f);
             }
         }
-        out
+        self.shape_downlink(out)
+    }
+
+    /// Apply loss, the bandwidth limit and latency to frames for the guest; returns the
+    /// frames due now.
+    fn shape_downlink(&mut self, frames: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        let f = &self.faults;
+        if f.loss <= 0.0 && f.bandwidth.is_none() && f.latency.is_zero() && self.downlink.is_empty() {
+            return frames;
+        }
+        let now = Instant::now();
+        for frame in frames {
+            if self.lose() {
+                continue;
+            }
+            let at =
+                Self::link_time(self.faults.bandwidth, &mut self.down_free, now, frame.len()) + self.faults.latency;
+            self.downlink.push_back((at, frame));
+        }
+        let mut due = Vec::new();
+        while self.downlink.front().is_some_and(|(at, _)| *at <= now) {
+            due.push(self.downlink.pop_front().unwrap().1);
+        }
+        due
     }
 }
 

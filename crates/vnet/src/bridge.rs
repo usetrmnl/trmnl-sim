@@ -6,6 +6,8 @@ use std::net::{Shutdown, TcpStream};
 use smoltcp::socket::tcp::{self, State};
 use smoltcp::time::Duration;
 
+use crate::TcpCut;
+
 pub(crate) const TCP_BUF: usize = 64 * 1024;
 
 /// Create a smoltcp TCP socket with the buffer sizes/options used on both sides.
@@ -25,6 +27,8 @@ pub(crate) struct Bridge {
     host_wr_shut: bool,
     /// Whether the smoltcp socket has ever reached a synchronized state.
     synced: bool,
+    /// Fault: bytes still allowed towards the peer before the connection is cut.
+    cut: Option<(u64, TcpCut)>,
 }
 
 pub(crate) enum PumpResult {
@@ -37,7 +41,12 @@ impl Bridge {
     pub fn new(stream: TcpStream) -> std::io::Result<Self> {
         stream.set_nonblocking(true)?;
         let _ = stream.set_nodelay(true);
-        Ok(Self { stream, host_eof: false, host_wr_shut: false, synced: false })
+        Ok(Self { stream, host_eof: false, host_wr_shut: false, synced: false, cut: None })
+    }
+
+    /// Cut the connection after `cut.after_bytes` more bytes towards the peer.
+    pub fn set_cut(&mut self, cut: TcpCut) {
+        self.cut = Some((cut.after_bytes, cut));
     }
 
     pub fn pump(&mut self, sock: &mut tcp::Socket<'_>) -> PumpResult {
@@ -71,14 +80,36 @@ impl Bridge {
         }
 
         // host -> peer
+        if let Some((0, cut)) = self.cut {
+            // Cut: stall forever, or reset once everything allowed through was acknowledged.
+            if !cut.stall && sock.send_queue() == 0 {
+                log::debug!("vnet: fault: resetting a connection after {} bytes", cut.after_bytes);
+                // The RST goes out on the next interface poll; the socket is dropped after.
+                sock.abort();
+                let _ = self.stream.shutdown(Shutdown::Both);
+            }
+            return PumpResult::Alive;
+        }
         if !self.host_eof && sock.may_send() {
             while sock.can_send() {
-                let res = sock.send(|buf| match self.stream.read(buf) {
-                    Ok(0) => (0, Ok(true)),
-                    Ok(n) => (n, Ok(false)),
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => (0, Err(None)),
-                    Err(e) if e.kind() == ErrorKind::Interrupted => (0, Ok(false)),
-                    Err(e) => (0, Err(Some(e))),
+                let allowed = self.cut.map_or(usize::MAX, |(left, _)| left.min(usize::MAX as u64) as usize);
+                if allowed == 0 {
+                    break;
+                }
+                let res = sock.send(|buf| {
+                    let n = buf.len().min(allowed);
+                    match self.stream.read(&mut buf[..n]) {
+                        Ok(0) => (0, Ok(true)),
+                        Ok(n) => {
+                            if let Some((left, _)) = &mut self.cut {
+                                *left -= n as u64;
+                            }
+                            (n, Ok(false))
+                        }
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => (0, Err(None)),
+                        Err(e) if e.kind() == ErrorKind::Interrupted => (0, Ok(false)),
+                        Err(e) => (0, Err(Some(e))),
+                    }
                 });
                 match res {
                     Ok(Ok(false)) => continue,

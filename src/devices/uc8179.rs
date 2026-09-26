@@ -123,6 +123,8 @@ pub struct Uc8179 {
     bwry_refresh: Option<(u64, usize)>,
     pub frame: SharedFrame,
     pub refresh_count: u64,
+    /// Fault: BUSY_N held low forever (the controller never finishes).
+    pub busy_stuck: bool,
 }
 
 impl Uc8179 {
@@ -163,6 +165,7 @@ impl Uc8179 {
             flashing: true,
             frame: Arc::new(Mutex::new(frame)),
             refresh_count: 0,
+            busy_stuck: false,
         }
     }
 
@@ -299,7 +302,7 @@ impl Uc8179 {
 
     /// BUSY_N output: low while busy.
     pub fn busy_n(&self, now: u64) -> bool {
-        now >= self.busy_until
+        !self.busy_stuck && now >= self.busy_until
     }
 
     /// Next time the panel wants to be polled (for refresh animation / busy release).

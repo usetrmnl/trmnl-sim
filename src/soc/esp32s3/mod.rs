@@ -454,6 +454,7 @@ impl Esp32s3 {
 
     fn reset_internal(&mut self, power_on: bool) {
         self.bus.flash.flush().ok();
+        self.bus.flash.restore_power();
         let reason = self.bus.p.reset_reason;
         let wake = self.bus.p.wakeup_cause;
         self.bus.p.chip_reset(!power_on);
@@ -604,6 +605,9 @@ impl Machine for Esp32s3 {
                             self.parked[core] = !b;
                         }
                         Err(exit) => return exit,
+                    }
+                    if let Some(msg) = self.bus.flash.power_lost() {
+                        return SliceExit::PowerLoss(msg.to_string());
                     }
                     if self.bus.p.reset_request.is_some() || !self.requests.is_empty() {
                         break;
@@ -871,5 +875,17 @@ impl Machine for Esp32s3 {
         self.bus.p.systimer.reset_counters(s.now_ns);
         self.boots = s.boots;
         Ok(())
+    }
+
+    fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String> {
+        crate::faults::apply(faults, &mut self.bus.flash, &mut self.hle.wifi, self.bus.board.as_mut())
+    }
+
+    fn flash_stats(&self) -> (u64, u64) {
+        (self.bus.flash.programs, self.bus.flash.erases)
+    }
+
+    fn partitions(&self) -> Vec<sim_api::PartitionInfo> {
+        firmware::partitions(&self.bus.flash.data)
     }
 }

@@ -60,6 +60,8 @@ pub struct I2cBus {
     participants: Vec<usize>,
     /// Log every event at `trace` level.
     pub trace: bool,
+    /// Fault: addresses whose device is gone (never ACKs).
+    pub absent: Vec<u8>,
 }
 
 impl I2cBus {
@@ -95,7 +97,7 @@ impl I2cBus {
 
     /// START or repeated START with a 7-bit address. Returns ACK.
     pub fn start(&mut self, now: u64, addr: u8, read: bool) -> bool {
-        self.target = self.devices.iter().position(|d| d.address() == addr);
+        self.target = self.devices.iter().position(|d| d.address() == addr && !self.absent.contains(&addr));
         let ack = match self.target {
             Some(i) => {
                 if !self.participants.contains(&i) {

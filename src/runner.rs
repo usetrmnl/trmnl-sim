@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use sim_api::{Command, CoverageSummary, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
+use sim_api::{Command, CoverageSummary, Faults, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
 
 use crate::coverage::Reporter;
 use crate::savepoint::{FirmwareId, SavePoint, SavedPower, StateReader, StateWriter};
@@ -30,6 +30,8 @@ pub struct RunnerOptions {
     pub restore: Option<SavePoint>,
     /// Write code coverage when the run ends (and on request); the machine records it.
     pub coverage: Option<Reporter>,
+    /// Faults injected from the start (`--faults`).
+    pub faults: Faults,
 }
 
 /// How a run ended.
@@ -177,11 +179,17 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
     let mut touch_release_at: Option<(u64, sim_api::TouchZone)> = None;
     let mut touches_done = 0u64;
     let mut slots = Slots::default();
+    let mut faults = Faults::default();
+    let mut power_losses = 0u64;
     ports.status.lock().board = m.board().info();
+    if !opts.faults.is_empty() {
+        faults = set_faults(m.as_mut(), &ports, opts.faults.clone());
+    }
     {
         let mut st = ports.status.lock();
         st.firmware = opts.firmware_name.clone();
         st.turbo = turbo;
+        st.partitions = m.partitions();
     }
     if let Some(sp) = &opts.restore {
         // The power-on boot being replaced printed its ROM banner already.
@@ -189,6 +197,8 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
         match apply_savepoint(m.as_mut(), sp, &opts.firmware) {
             Ok(p) => {
                 power = p;
+                // Faults are the environment, not device state: they stay.
+                let _ = m.set_faults(&faults);
                 ports.console.lock().push_sim(&describe_restore(sp));
                 let mut st = ports.status.lock();
                 st.battery_mv = sp.battery_mv;
@@ -302,6 +312,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                     ports.status.lock().turbo = t;
                     rebase = true;
                 }
+                Command::SetFaults(f) => faults = set_faults(m.as_mut(), &ports, f),
                 Command::DumpDebug => {
                     let now = m.now_ns();
                     let text = format!("{}\n{}", m.debug_dump(), m.board().diagnostics(now));
@@ -361,6 +372,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                     };
                     let result = loaded.and_then(|(sp, info)| {
                         power = apply_savepoint(m.as_mut(), &sp, &opts.firmware).map_err(|e| format!("{e:#}"))?;
+                        let _ = m.set_faults(&faults);
                         ports.console.lock().push_sim(&describe_restore(&sp));
                         // Inputs in progress end with the old device.
                         if release_at.take().is_some() {
@@ -480,6 +492,20 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                             anchor_wall = Instant::now();
                             anchor_virt = m.now_ns();
                         }
+                        SliceExit::PowerLoss(what) => {
+                            // Power comes straight back, like PowerCycle.
+                            ports.console.lock().push_sim(&format!("power lost: {what}"));
+                            power_losses += 1;
+                            faults.power_loss = None;
+                            {
+                                let mut st = ports.status.lock();
+                                st.faults = faults.clone();
+                                st.power_losses = power_losses;
+                            }
+                            m.reset(ResetKind::PowerOn);
+                            anchor_wall = Instant::now();
+                            anchor_virt = m.now_ns();
+                        }
                         SliceExit::Halted(msg) => {
                             ports.console.lock().push_sim(&format!("HALTED: {msg}"));
                             halted_msg = msg;
@@ -556,6 +582,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             let (busy, refreshes) = m.board().display_status(now);
             let charging = m.board().charging();
             let net = m.net_status();
+            let (programs, erases) = m.flash_stats();
             if net.portal_url != last_portal {
                 if let Some(u) = &net.portal_url {
                     ports
@@ -576,6 +603,8 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             st.charging = charging;
             st.display_refreshes = refreshes;
             st.boot_count = m.boot_count();
+            st.flash_programs = programs;
+            st.flash_erases = erases;
             st.state = match power {
                 _ if paused => RunState::Paused,
                 Power::On => match m.light_sleep() {
@@ -645,4 +674,16 @@ fn write_coverage(
         cov.clear();
     }
     Ok(summary)
+}
+
+/// Apply faults to the machine and publish them; returns what is in effect (without a
+/// power-loss trigger that couldn't be armed).
+fn set_faults(m: &mut dyn Machine, ports: &SimPorts, mut f: Faults) -> Faults {
+    if let Err(e) = m.set_faults(&f) {
+        ports.console.lock().push_sim(&format!("fault not armed: {e}"));
+        f.power_loss = None;
+    }
+    ports.console.lock().push_sim(&format!("faults: {}", f.summary()));
+    ports.status.lock().faults = f.clone();
+    f
 }

@@ -5,6 +5,7 @@ mod arch;
 mod board;
 mod coverage;
 mod devices;
+mod faults;
 mod firmware;
 mod hle;
 mod periph;
@@ -101,6 +102,10 @@ struct Cli {
     /// Its flash replaces the --flash image.
     #[arg(long, value_name = "FILE")]
     restore: Option<PathBuf>,
+    /// Inject faults from the start: JSON as for POST /faults, e.g. '{"net":{"dns":"servfail"}}'
+    /// (repeatable; later ones are merged into earlier ones).
+    #[arg(long, value_name = "JSON")]
+    faults: Vec<String>,
 }
 
 fn parse_dns(s: &str) -> Result<(String, std::net::Ipv4Addr), String> {
@@ -214,6 +219,10 @@ fn main() -> Result<()> {
         }
         None => None,
     };
+    let mut faults = sim_api::Faults::default();
+    for f in &cli.faults {
+        faults = sim_control::faults::merge_faults_str(&faults, f).map_err(|e| anyhow::anyhow!("--faults: {e}"))?;
+    }
 
     let frame_for_shot = frame.clone();
     let (handle, ports) = sim_api::channel(frame);
@@ -228,6 +237,7 @@ fn main() -> Result<()> {
         firmware: fw_id,
         restore,
         coverage,
+        faults,
     };
     let mock = mock_trmnl::MockServer::new(panel);
     let status = handle.status.clone();

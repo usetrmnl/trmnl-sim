@@ -26,6 +26,10 @@
 //!   forward host `TcpListener`s to ports on the guest's AP address so a desktop browser can
 //!   reach the captive portal.
 //!
+//! [`VirtualNet`] can also inject faults ([`NetFaults`]): latency, packet loss, a bandwidth
+//! limit, DNS failures, an access point without internet, and TCP connections cut after N
+//! bytes (RST or a silent stall).
+//!
 //! Both types are single-threaded state machines: feed guest frames with `from_guest`, call
 //! `poll()` frequently, and deliver the returned frames to the guest.
 
@@ -36,6 +40,7 @@ mod packet;
 mod vnet;
 
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 pub use ap::ApClient;
 pub use vnet::VirtualNet;
@@ -71,4 +76,44 @@ impl Default for NetConfig {
             offline: false,
         }
     }
+}
+
+/// Faults injected into a [`VirtualNet`] (all off by default). They apply to packets from the
+/// moment they are set; `tcp_cut` applies to connections opened afterwards.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NetFaults {
+    /// Added to every frame towards the guest (round trips grow by this much).
+    pub latency: Duration,
+    /// Probability (0..=1) of dropping a frame, independently in each direction.
+    pub loss: f64,
+    /// Link rate in bytes per second, each direction; frames queue behind each other.
+    pub bandwidth: Option<u64>,
+    pub dns: Option<DnsFault>,
+    /// ARP and DHCP work, nothing else is routed: DNS goes unanswered and every other
+    /// packet (to the internet and to the gateway/host) is dropped silently.
+    pub no_internet: bool,
+    /// Like [`NetConfig::offline`], switchable at runtime.
+    pub offline: bool,
+    pub tcp_cut: Option<TcpCut>,
+}
+
+/// How the DNS server fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DnsFault {
+    ServFail,
+    NxDomain,
+    /// NOERROR with no answers.
+    Empty,
+    /// No response at all.
+    Timeout,
+}
+
+/// Cut a TCP connection once `after_bytes` of payload went to the guest on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TcpCut {
+    pub after_bytes: u64,
+    /// Stop delivering data but keep the connection open, instead of a RST.
+    pub stall: bool,
+    /// Only connections to this destination port.
+    pub port: Option<u16>,
 }

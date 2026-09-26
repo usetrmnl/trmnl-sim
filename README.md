@@ -95,6 +95,43 @@ portal is forwarded to **http://127.0.0.1:8080/**; open it in a browser, pick
 **TRMNL-Sim** (any password is accepted) and choose the server. To use your own
 device's account, run with its MAC: `--mac D8:3B:DA:12:34:56`.
 
+### Fault injection
+
+The simulator can inject faults that are hard to produce on hardware. The side panel's
+**Faults** section has the common ones: internet down, no internet behind the access
+point, a slow (300 ms, 16 kB/s) or lossy (10%) link, failing DNS, a power cut in the
+middle of the next NVS write, a missing fuel gauge (X), a stuck panel, and an unresponsive
+modem (X). The [control API](#control-api) (`POST /faults`), `--faults JSON` and the Python
+client (`sim.set_faults(...)`) have the full set:
+
+| Fault | JSON (`POST /faults`, `--faults`) | |
+|---|---|---|
+| Latency | `{"net": {"latency_ms": 300}}` | added to every packet towards the device |
+| Packet loss | `{"net": {"loss": 0.1}}` | each packet, each direction |
+| Bandwidth | `{"net": {"bandwidth_bps": 16000}}` | bytes per second, each direction |
+| DNS failure | `{"net": {"dns": "servfail"}}` | or `nxdomain`, `empty` (no addresses), `timeout` (no answer) |
+| No internet | `{"net": {"no_internet": true}}` | WiFi and DHCP work; DNS and all connections (even to 10.0.2.2) time out |
+| Internet down | `{"net": {"offline": true}}` | only the host is reachable, like `--offline` |
+| Cut connections | `{"net": {"tcp_cut": {"after_bytes": 20000, "stall": false, "port": 8080}}}` | TCP connections opened afterwards get a RST (or with `stall`, silently stop) after N bytes towards the device; `port` is optional |
+| Power loss | `{"power_loss": {"partition": "nvs", "op": "program", "nth": 3, "cut": "torn"}}` | cut power at the `nth` flash `op` (`any`, `program`, `erase`) in a partition (label, or `ota_0`/`ota_1`/`littlefs`) and/or `"range": [start, end]`, then restore it (like Power-cycle). `cut`: `before` (nothing written), `torn` (half the page program / half the erase lands, as on real NOR flash) or `after`. One-shot |
+| I2C device absent | `{"i2c_absent": [85]}` | NACKs everything (X: `0x55` fuel gauge, `0x44` touch bar, `0x20` expander, `0x68` PMIC) |
+| Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held low; X: the PMIC never reports power good |
+| Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands (its ROM loader still works) |
+
+`POST /faults` merges into the current faults (`null` clears one, also inside `net`);
+`DELETE /faults` clears all. Faults are the environment, not device state: save points
+don't record them and they stay in effect across a restore. Network faults apply to the S3/C3's own WiFi (the `vnet`
+router) and, on the TRMNL X's 5 GHz path, to the modem's host-side HTTP requests: DNS
+failure and no internet fail the request (after the modem's 10 s timeout where it would
+wait), latency delays the response, the bandwidth limit throttles the body, and a cut
+truncates the body after N bytes (a stall times out after 30 s); packet loss isn't applied
+there. HTTP-level faults (500s, malformed JSON, truncated or slow bodies, timeouts) are set
+per path on the Python mock server: `mock.set_fault("/api/display", status=500)`.
+
+`[sim] power lost: program #3 at 0xa060 (+0x40) in partition nvs, cut torn` marks a
+power cut on the console; `GET /faults` also lists the partition table and counts flash
+programs and erases (to pick an `nth`). `RUST_LOG=flash=trace` logs every program/erase.
+
 ### Built-in mock server
 
 To drive the device's content yourself, without an account on trmnl.app, use the
@@ -175,6 +212,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--coverage-include P,..` | Only report source files whose path starts with one of these, e.g. `src/,lib/` |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
+| `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
 
 The simulated WiFi environment has two networks: **TRMNL-Sim** (any password
 works) and **Neighbors WiFi** (password `hunter2hunter2`), at −54 and −81 dBm. The
@@ -263,6 +301,14 @@ no `TRMNL_X` build):
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
   refreshing over 5 GHz.
 
+Fault injection ([test_faults.py](tests/integration/test_faults.py) on the OG,
+[test_faults_x.py](tests/integration/test_faults_x.py) on the X): HTTP 500 and malformed
+JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
+modem path); slow, high-latency and lossy links; DNS failure; an access point without
+internet; power loss mid-write in NVS (torn pages), in otadata and during an OTA (the old
+firmware keeps booting); a stuck panel or failed PMIC; a missing fuel gauge; an
+unresponsive modem.
+
 | Env var | |
 |---|---|
 | `TRMNL_FIRMWARE_BUILD` | TRMNL OG build dir (default `../trmnl-firmware/.pio/build/trmnl`) |
@@ -288,7 +334,10 @@ Two standard-library Python modules live in [python/](python):
   panel's four first, since the OG-family PNG decoder can't take 800 px truecolor rows), with
   server-style `plugin-<id>-<timestamp>` filenames the X uses for its image cache, and
   returns the PNG you should expect on screen. Request header lookups are
-  case-insensitive.
+  case-insensitive. `set_fault(path, status=, body=, delay=, hang=, truncate=, rate=,
+  close=, times=)` makes a path (or a `prefix*`) misbehave: an HTTP error, a malformed
+  body, a timeout, a body cut short, a slow download or a dropped connection;
+  `device_host` lets the device reach it by a name (with `--dns NAME=10.0.2.2`).
 - **`sim.mock`** (`trmnl_sim.BuiltinServer`) drives the simulator's
   [built-in server](#built-in-mock-server) instead, so no second server is needed:
   `start()` returns the device URL, `add_image(name, png_or_jpeg_bytes, current=True)`
@@ -345,6 +394,9 @@ Useful pieces:
   `tests/integration/support_x.py` does the same for the X: `ShippedX` is a device fresh
   from the factory (QA done, modem flashed, in shipment mode) and `ProvisionedX`
   onboards a copy of it on 5 GHz (or `ssid=SSID_24`).
+- `sim.set_faults(net={...}, power_loss={...}, ...)`, `sim.set_net_faults(dns="servfail")`,
+  `sim.arm_power_loss("nvs", cut="torn")`, `sim.clear_faults()` and `sim.faults()` inject
+  [faults](#fault-injection); `Simulator(..., faults={...})` starts with them.
 
 ### Control API
 
@@ -378,6 +430,8 @@ Useful pieces:
 | `POST /restore {"path": str}` or `{"id": N}` | restore from a file or an in-memory save point; 409 on failure (e.g. another firmware build) |
 | `GET /savepoints` | the in-memory save points |
 | `POST /coverage {"path": "x.info", "reset": bool}` | with `--coverage`: write the lcov tracefile now (default path: the `--coverage` file), then optionally start over; returns `lines_found`/`lines_hit`/`functions_found`/`functions_hit`/`files` |
+| `GET /faults` | injected faults, `summary`, `power_losses`, flash `programs`/`erases`, the partition table |
+| `POST /faults {...}`, `DELETE /faults` | merge [faults](#fault-injection) into the current ones; clear them all |
 
 ### Code coverage
 

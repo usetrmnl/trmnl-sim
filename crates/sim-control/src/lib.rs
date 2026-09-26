@@ -28,9 +28,13 @@
 //! | GET    | `/savepoints`          |                                                | `{"savepoints": [...]}` (in-memory slots) |
 //! | POST   | `/coverage`            | `{"path": "out.info", "reset": false}` (both optional) write lcov now | `{"ok", "path", "lines_found", "lines_hit", ...}` |
 //! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
+//! | GET    | `/faults`              |                                                | faults, partitions, flash counters |
+//! | POST   | `/faults`              | faults JSON, merged into the current ones (see [`faults`]) | as GET |
+//! | DELETE | `/faults`              | clear all faults                               | as GET |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
 
+pub mod faults;
 mod mock;
 
 use std::net::SocketAddr;
@@ -230,6 +234,18 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             let list: Vec<Value> = h.status.lock().savepoints.iter().map(savepoint_json).collect();
             Ok(json_reply(200, json!({ "savepoints": list })))
         }
+        (Method::Get, "/faults") => Ok(json_reply(200, faults_status(h))),
+        (Method::Post, "/faults") => {
+            let current = h.status.lock().faults.clone();
+            let f = faults::merge_faults(&current, &body_json(body)?)?;
+            faults::validate(&f, &h.status.lock().partitions)?;
+            set_faults(h, f)?;
+            Ok(json_reply(200, faults_status(h)))
+        }
+        (Method::Delete, "/faults") => {
+            set_faults(h, sim_api::Faults::default())?;
+            Ok(json_reply(200, faults_status(h)))
+        }
         (Method::Get, "/console") => {
             let since = qget(q, "since").unwrap_or(0u64);
             let c = h.console.lock();
@@ -320,6 +336,8 @@ fn status_json(h: &SimHandle) -> Value {
         "boot_count": st.boot_count,
         "firmware": st.firmware,
         "turbo": st.turbo,
+        "faults": st.faults.summary(),
+        "power_losses": st.power_losses,
         "console_total": total,
     })
 }
@@ -346,6 +364,45 @@ fn savepoint_call(h: &SimHandle, cmd: impl FnOnce(sim_api::SavePointReply) -> Co
         Ok(Ok(info)) => json_reply(200, json!({ "ok": true, "savepoint": savepoint_json(&info) })),
         Ok(Err(e)) => err(409, e),
         Err(_) => err(500, "the emulator did not answer"),
+    }
+}
+
+// ---- faults --------------------------------------------------------------------------------------
+
+fn faults_status(h: &SimHandle) -> Value {
+    let st = h.status.lock();
+    let parts: Vec<Value> = st
+        .partitions
+        .iter()
+        .map(|p| json!({"label": p.label, "type": p.kind, "subtype": p.subtype, "offset": p.offset, "size": p.size}))
+        .collect();
+    json!({
+        "ok": true,
+        "faults": faults::faults_json(&st.faults),
+        "summary": st.faults.summary(),
+        "power_losses": st.power_losses,
+        "flash": {"programs": st.flash_programs, "erases": st.flash_erases},
+        "partitions": parts,
+    })
+}
+
+/// Send new faults and wait until the emulator applied them (or a power loss it arms
+/// already fired).
+fn set_faults(h: &SimHandle, f: sim_api::Faults) -> Result<(), String> {
+    let losses = h.status.lock().power_losses;
+    h.send(Command::SetFaults(f.clone()));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        {
+            let st = h.status.lock();
+            if st.faults == f || st.power_losses > losses {
+                return Ok(());
+            }
+        }
+        if Instant::now() > deadline {
+            return Err("timed out waiting for the faults to apply".into());
+        }
+        std::thread::sleep(Duration::from_millis(2));
     }
 }
 

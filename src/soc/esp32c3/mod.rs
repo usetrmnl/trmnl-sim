@@ -362,6 +362,7 @@ impl Esp32c3 {
 
     fn reset_internal(&mut self, power_on: bool) {
         self.bus.flash.flush().ok();
+        self.bus.flash.restore_power();
         let reason = self.bus.p.reset_reason;
         let wake = self.bus.p.wakeup_cause;
         self.bus.p.chip_reset(!power_on);
@@ -466,6 +467,9 @@ impl Machine for Esp32c3 {
                     }
                 }
                 if self.bus.irq_dirty {
+                    if self.bus.flash.power_lost().is_some() {
+                        break;
+                    }
                     self.update_irq();
                     if let Some(r) = self.bus.p.reset_request.take() {
                         self.handle_reset_request(r);
@@ -479,6 +483,9 @@ impl Machine for Esp32c3 {
                     self.irq_counts[line as usize] += 1;
                     self.trap_depth = 0;
                 }
+            }
+            if let Some(msg) = self.bus.flash.power_lost() {
+                return SliceExit::PowerLoss(msg.to_string());
             }
             if let Some(r) = self.bus.p.reset_request.take() {
                 self.handle_reset_request(r);
@@ -628,6 +635,18 @@ impl Machine for Esp32c3 {
 
     fn realtime_required(&self) -> bool {
         self.hle.wifi.net_busy()
+    }
+
+    fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String> {
+        crate::faults::apply(faults, &mut self.bus.flash, &mut self.hle.wifi, self.bus.board.as_mut())
+    }
+
+    fn flash_stats(&self) -> (u64, u64) {
+        (self.bus.flash.programs, self.bus.flash.erases)
+    }
+
+    fn partitions(&self) -> Vec<sim_api::PartitionInfo> {
+        firmware::partitions(&self.bus.flash.data)
     }
 
     fn net_status(&self) -> NetStatus {

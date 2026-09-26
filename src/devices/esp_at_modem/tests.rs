@@ -766,6 +766,48 @@ fn http_requires_connection_and_reports_busy() {
     assert!(!h.m.busy());
 }
 
+#[test]
+fn http_network_faults() {
+    let srv = start_server();
+    let mut cfg = home_cfg();
+    cfg.dns_overrides = vec![("api.trmnl.test".into(), Ipv4Addr::new(10, 0, 2, 2))];
+    let mut h = connected(cfg);
+    let big = format!("http://10.0.2.2:{}/big", srv.port);
+
+    // DNS failure: names fail, IP literals (which need no lookup) still work.
+    h.m.set_net_faults(vnet::NetFaults { dns: Some(vnet::DnsFault::ServFail), ..Default::default() });
+    let (ok, _) = h.http_get(&format!("http://api.trmnl.test:{}/small", srv.port), "");
+    assert!(!ok);
+    let (ok, body) = h.http_get(&format!("http://10.0.2.2:{}/small", srv.port), "");
+    assert!(ok && body == b"hello world");
+
+    // A cut connection: the body stops after N bytes and the request fails.
+    let cut = vnet::TcpCut { after_bytes: 10_000, stall: false, port: None };
+    h.m.set_net_faults(vnet::NetFaults { tcp_cut: Some(cut), ..Default::default() });
+    let (ok, body) = h.http_get(&big, "");
+    assert!(!ok);
+    assert_eq!(body.len(), 10_000);
+    assert!(body == big_body(300_000)[..10_000]);
+
+    // Bandwidth: 300 kB at 1 MB/s takes at least 0.3 s.
+    h.m.set_net_faults(vnet::NetFaults { bandwidth: Some(1_000_000), ..Default::default() });
+    let t = std::time::Instant::now();
+    let (ok, body) = h.http_get(&big, "");
+    assert!(ok && body.len() == 300_000);
+    assert!(t.elapsed() >= Duration::from_millis(300), "{:?}", t.elapsed());
+}
+
+#[test]
+fn unresponsive_modem_ignores_commands() {
+    let mut h = connected(home_cfg());
+    h.m.set_unresponsive(true);
+    h.cmd("AT");
+    assert!(h.run_for(2000).is_empty());
+    h.m.set_unresponsive(false);
+    h.cmd("AT");
+    assert!(h.wait_for("OK", 100).is_some());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Power
 // ---------------------------------------------------------------------------------------------

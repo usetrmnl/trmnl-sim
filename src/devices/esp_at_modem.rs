@@ -276,6 +276,9 @@ pub struct EspAtModem {
 
     // Survives power cycles.
     wifi_available: bool,
+    /// Faults: AT input is ignored; network faults for the HTTP client.
+    unresponsive: bool,
+    net_faults: vnet::NetFaults,
     flash: Option<Vec<u8>>,
     stats: ModemStats,
 }
@@ -315,6 +318,8 @@ impl EspAtModem {
             rom: rom::RomLoader::default(),
             rom_free_at: 0,
             wifi_available: true,
+            unresponsive: false,
+            net_faults: vnet::NetFaults::default(),
             flash: None,
             stats: ModemStats::default(),
         }
@@ -351,6 +356,9 @@ impl EspAtModem {
         self.advance(now_ns);
         match self.mode {
             Mode::Off => {}
+            Mode::At if self.unresponsive => {
+                log::debug!(target: "modem", "fault: ignoring {} bytes", data.len());
+            }
             Mode::At if !self.ready => {
                 let room = RX_FIFO.saturating_sub(self.boot_fifo.len());
                 self.boot_fifo.extend_from_slice(&data[..data.len().min(room)]);
@@ -401,6 +409,17 @@ impl EspAtModem {
             let conn_gen = self.conn_gen;
             self.schedule(self.now + self.timing.reconnect_ns, Ev::Reconnect { conn_gen });
         }
+    }
+
+    /// Fault: stop answering AT commands (everything the host sends is ignored; replies
+    /// already on their way still arrive). The ROM loader is unaffected.
+    pub fn set_unresponsive(&mut self, on: bool) {
+        self.unresponsive = on;
+    }
+
+    /// Network faults for the HTTP requests started from now on.
+    pub fn set_net_faults(&mut self, faults: vnet::NetFaults) {
+        self.net_faults = faults;
     }
 
     pub fn connected_ssid(&self) -> Option<String> {
@@ -1025,6 +1044,7 @@ impl EspAtModem {
             head_only,
             offline: self.cfg.offline,
             dns_overrides: self.cfg.dns_overrides.clone(),
+            faults: self.net_faults.clone(),
         });
         self.op = Op::Http { rx, not_before: t.max(self.now) + self.timing.http_min_ns };
         true
