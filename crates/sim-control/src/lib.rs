@@ -23,6 +23,9 @@
 //! | POST   | `/wait`                | see [`WaitSpec`]                               | `{"ok", ...}` or 408 |
 //! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` (gray; RGB on color panels) |
 //! | POST   | `/screenshot/compare`  | PNG body; `?x=&y=&w=&h=&tolerance=&max_ratio=` | `{"match", "diff_pixels", "diff_ratio"}` |
+//! | POST   | `/savepoint`           | `{"path": "/abs/file.trmnlsave", "label": "..."}` (both optional) | `{"ok", "savepoint"}`; 409 if not possible |
+//! | POST   | `/restore`             | `{"path": "..."}` or `{"id": 3}` (in-memory slot) | `{"ok", "savepoint"}`; 409 on failure |
+//! | GET    | `/savepoints`          |                                                | `{"savepoints": [...]}` (in-memory slots) |
 //! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
@@ -34,7 +37,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use sim_api::{Command, RunState, SimHandle, Status, TouchZone};
+use sim_api::{Command, RunState, SavePointInfo, SavePointSource, SimHandle, Status, TouchZone};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub fn serve(handle: SimHandle, addr: SocketAddr) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
@@ -184,6 +187,25 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             h.send(Command::Quit);
             ok()
         }
+        (Method::Post, "/savepoint") => {
+            let b = body_json(body)?;
+            let path = b["path"].as_str().map(std::path::PathBuf::from);
+            let label = b["label"].as_str().map(str::to_string);
+            Ok(savepoint_call(h, |reply| Command::SavePoint { label, path, reply: Some(reply) }))
+        }
+        (Method::Post, "/restore") => {
+            let b = body_json(body)?;
+            let from = match (b["path"].as_str(), b["id"].as_u64()) {
+                (Some(p), _) => SavePointSource::File(p.into()),
+                (None, Some(id)) => SavePointSource::Slot(id as u32),
+                _ => return Err("need {\"path\": str} or {\"id\": n}".into()),
+            };
+            Ok(savepoint_call(h, |reply| Command::RestoreSavePoint { from, reply: Some(reply) }))
+        }
+        (Method::Get, "/savepoints") => {
+            let list: Vec<Value> = h.status.lock().savepoints.iter().map(savepoint_json).collect();
+            Ok(json_reply(200, json!({ "savepoints": list })))
+        }
         (Method::Get, "/console") => {
             let since = qget(q, "since").unwrap_or(0u64);
             let c = h.console.lock();
@@ -276,6 +298,31 @@ fn status_json(h: &SimHandle) -> Value {
         "turbo": st.turbo,
         "console_total": total,
     })
+}
+
+// ---- save points -------------------------------------------------------------------------------
+
+fn savepoint_json(i: &SavePointInfo) -> Value {
+    json!({
+        "id": i.id,
+        "label": i.label,
+        "deep_sleep": i.deep_sleep,
+        "sim_time_s": i.sim_time_ns as f64 / 1e9,
+        "wake_at_s": i.wake_at_ns.map(|n| n as f64 / 1e9),
+        "path": i.path.as_ref().map(|p| p.display().to_string()),
+        "bytes": i.bytes,
+    })
+}
+
+/// Send a save point command and wait for the emulator's answer.
+fn savepoint_call(h: &SimHandle, cmd: impl FnOnce(sim_api::SavePointReply) -> Command) -> Reply {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    h.send(cmd(tx));
+    match rx.recv_timeout(Duration::from_secs(120)) {
+        Ok(Ok(info)) => json_reply(200, json!({ "ok": true, "savepoint": savepoint_json(&info) })),
+        Ok(Err(e)) => err(409, e),
+        Err(_) => err(500, "the emulator did not answer"),
+    }
 }
 
 // ---- button ---------------------------------------------------------------------------------------

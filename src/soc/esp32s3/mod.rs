@@ -15,6 +15,7 @@ use crate::board::Board;
 use crate::devices::spi_flash::SpiFlash;
 use crate::firmware::{self, Symbols};
 use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MAGIC_BASE, MachineRequest};
+use crate::savepoint::SocState;
 
 use super::{Machine, NetStatus, Output, ResetKind, SliceExit};
 use bus::S3Bus;
@@ -787,5 +788,63 @@ impl Machine for Esp32s3 {
         // fast-forwarding it would just burn virtual time.
         let untimed_sleep = matches!(self.light_sleep, Some((w, opt)) if w.is_none() || opt & (1 << 3) == 0);
         untimed_sleep || self.hle.wifi.net_busy() || self.bus.board.realtime_required()
+    }
+    fn save_soc(&mut self, rtc: bool) -> SocState {
+        SocState {
+            mac: self.bus.p.mac,
+            now_ns: self.bus.now_ns(),
+            boots: self.boots,
+            rtc_ticks_base: self.bus.p.rtc_ticks_base,
+            rtc_regs: if rtc { self.bus.p.rtc_regs() } else { Vec::new() },
+            rtc_mem: if rtc { vec![self.bus.rtc_slow.to_vec(), self.bus.rtc_fast.to_vec()] } else { Vec::new() },
+            mmu: if rtc { self.bus.mmu.to_vec() } else { Vec::new() },
+            flash: self.bus.flash.data.clone(),
+        }
+    }
+
+    fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()> {
+        if s.flash.len() != self.bus.flash.data.len() {
+            anyhow::bail!("save point has {} bytes of flash, this device {}", s.flash.len(), self.bus.flash.data.len());
+        }
+        let rtc_ok = s.rtc_mem.is_empty()
+            || (s.rtc_mem.len() == 2
+                && s.rtc_mem[0].len() == self.bus.rtc_slow.len()
+                && s.rtc_mem[1].len() == self.bus.rtc_fast.len());
+        if !rtc_ok || !(s.mmu.is_empty() || s.mmu.len() == self.bus.mmu.len()) {
+            anyhow::bail!("save point RTC memory / MMU doesn't fit an ESP32-S3");
+        }
+        self.bus.flash.data.copy_from_slice(&s.flash);
+        self.bus.flash.dirty = true;
+        self.bus.flash.flush()?;
+        self.bus.p.mac = s.mac;
+        self.hle.wifi.base_mac = s.mac;
+        self.hle.chip_reset();
+        self.hooks.clear_pending();
+        self.requests.clear();
+        self.light_sleep = None;
+        self.pending_halt = None;
+        self.recent_resets.clear();
+        self.appcpu_boot_addr = None;
+        self.in_wake_stub = false;
+        self.bus.p.chip_reset(false);
+        self.bus.p.set_rtc_regs(&s.rtc_regs);
+        self.bus.p.rtc_ticks_base = s.rtc_ticks_base;
+        self.bus.rtc_slow.fill(0);
+        self.bus.rtc_fast.fill(0);
+        if let [slow, fast] = &s.rtc_mem[..] {
+            self.bus.rtc_slow.copy_from_slice(slow);
+            self.bus.rtc_fast.copy_from_slice(fast);
+        }
+        self.bus.mmu.fill(bus::MMU_INVALID);
+        if !s.mmu.is_empty() {
+            self.bus.mmu.copy_from_slice(&s.mmu);
+        }
+        let cycles = self.bus.clock.cycles;
+        self.bus.clock = crate::soc::esp32c3::bus::Clock::new(40_000_000);
+        self.bus.clock.cycles = cycles;
+        self.bus.clock.set_base(s.now_ns);
+        self.bus.p.systimer.reset_counters(s.now_ns);
+        self.boots = s.boots;
+        Ok(())
     }
 }

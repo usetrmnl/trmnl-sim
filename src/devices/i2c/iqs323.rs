@@ -54,6 +54,7 @@
 //! by the wake stub; the release then raises its own event.
 
 use super::I2cDevice;
+use crate::savepoint::{StateReader, StateWriter};
 
 pub const ADDR: u8 = 0x44;
 pub const PRODUCT_NUMBER: u16 = 1106;
@@ -616,6 +617,71 @@ impl Iqs323 {
 impl I2cDevice for Iqs323 {
     fn address(&self) -> u8 {
         ADDR
+    }
+
+    /// Registers (configuration, events enabled for touch wake) and the RDY window /
+    /// event latches. No finger is down after a restore.
+    fn save_state(&self, w: &mut StateWriter) {
+        w.u16s(&self.regs);
+        w.u8(self.ptr);
+        w.bool(self.hi);
+        w.bool(self.expect_ptr);
+        w.u8(self.pending_cmd);
+        for v in [self.show_reset, self.ati_error, self.slider_event, self.unreported_event, self.window_open] {
+            w.bool(v);
+        }
+        for v in self.press_latched {
+            w.bool(v);
+        }
+        w.u8(self.gesture_latch);
+        w.opt_u64(self.ati_until);
+        w.opt_u64(self.boot_until);
+        w.u64(self.window_opened_at);
+        w.opt_u64(self.open_at);
+        w.opt_u64(self.stream_next);
+        w.opt_u64(self.soc_low_since);
+    }
+
+    fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        let regs = r.u16s()?;
+        if regs.len() != self.regs.len() {
+            anyhow::bail!("save point IQS323 registers are corrupt");
+        }
+        self.regs.copy_from_slice(&regs);
+        self.ptr = r.u8()?;
+        self.hi = r.bool()?;
+        self.expect_ptr = r.bool()?;
+        self.pending_cmd = r.u8()?;
+        for v in [
+            &mut self.show_reset,
+            &mut self.ati_error,
+            &mut self.slider_event,
+            &mut self.unreported_event,
+            &mut self.window_open,
+        ] {
+            *v = r.bool()?;
+        }
+        for v in &mut self.press_latched {
+            *v = r.bool()?;
+        }
+        self.gesture_latch = r.u8()?;
+        self.ati_until = r.opt_u64()?;
+        self.boot_until = r.opt_u64()?;
+        self.window_opened_at = r.u64()?;
+        self.open_at = r.opt_u64()?;
+        self.stream_next = r.opt_u64()?;
+        self.soc_low_since = r.opt_u64()?;
+        self.in_txn = false;
+        self.window_at_start = false;
+        self.txn_bytes_written = 0;
+        self.txn_first_byte = None;
+        self.txn_read_any = false;
+        self.txn_read_status = false;
+        self.txn_read_gestures = false;
+        self.fingers = [false; 3];
+        self.down_since = None;
+        self.hold_fired = false;
+        Ok(())
     }
 
     fn start(&mut self, now: u64, read: bool) -> bool {

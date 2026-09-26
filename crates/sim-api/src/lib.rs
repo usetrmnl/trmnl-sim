@@ -2,6 +2,7 @@
 //! Front-ends only see this module; they never touch the machine directly.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -98,6 +99,36 @@ pub struct BoardInfo {
     pub has_refresh_flashing: bool,
 }
 
+/// A save point the emulator keeps in memory (see `Command::SavePoint`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavePointInfo {
+    /// Slot number, for `SavePointSource::Slot`.
+    pub id: u32,
+    pub label: String,
+    /// Taken in deep sleep (restores into that sleep). Otherwise only non-volatile state
+    /// was kept, and restoring powers the device on.
+    pub deep_sleep: bool,
+    /// Virtual time when it was taken.
+    pub sim_time_ns: u64,
+    /// Deep-sleep wake time (virtual ns), if a timer was armed.
+    pub wake_at_ns: Option<u64>,
+    /// The file it was saved to or loaded from.
+    pub path: Option<PathBuf>,
+    /// Compressed size in bytes.
+    pub bytes: usize,
+}
+
+/// Where to restore a save point from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SavePointSource {
+    /// An in-memory slot (`SavePointInfo::id`).
+    Slot(u32),
+    File(PathBuf),
+}
+
+/// Answer to a save point command: what was saved / restored, or why not.
+pub type SavePointReply = Sender<Result<SavePointInfo, String>>;
+
 /// Requests from the front-end to the emulator thread.
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -137,6 +168,19 @@ pub enum Command {
     Pause(bool),
     /// Write CPU state and board diagnostics to the console (as [sim] lines).
     DumpDebug,
+    /// Take a save point into a new in-memory slot, and also write it to `path` if given.
+    /// Full state in deep sleep; at other times only what survives a battery pull.
+    SavePoint {
+        label: Option<String>,
+        path: Option<PathBuf>,
+        reply: Option<SavePointReply>,
+    },
+    /// Replace the device with a save point (from a slot, or a file, which is also added
+    /// as a slot). It must come from the same firmware build.
+    RestoreSavePoint {
+        from: SavePointSource,
+        reply: Option<SavePointReply>,
+    },
     Quit,
 }
 
@@ -190,6 +234,8 @@ pub struct Status {
     pub presses_done: u64,
     pub firmware: String,
     pub turbo: bool,
+    /// In-memory save points, oldest first.
+    pub savepoints: Vec<SavePointInfo>,
 }
 
 impl Default for Status {
@@ -217,6 +263,7 @@ impl Default for Status {
             presses_done: 0,
             firmware: String::new(),
             turbo: false,
+            savepoints: Vec::new(),
         }
     }
 }

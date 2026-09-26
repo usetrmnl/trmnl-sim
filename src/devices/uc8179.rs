@@ -12,6 +12,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use sim_api::{Frame, SharedFrame};
 
+use crate::savepoint::{StateReader, StateWriter, read_f32s_into};
+
 pub const WIDTH: usize = 800;
 pub const HEIGHT: usize = 480;
 const STRIDE: usize = WIDTH / 8;
@@ -174,6 +176,108 @@ impl Uc8179 {
         p.bwry = Some(vec![BWRY_WHITE * 0x55; WIDTH * HEIGHT / 4]);
         p.frame.lock().rgb = Some(vec![255; WIDTH * HEIGHT * 3]);
         p
+    }
+
+    /// Save point state: the image on the glass, and with `powered` the controller's
+    /// registers and image RAM (for later differential refreshes). A refresh in progress
+    /// is not saved (the caller waits for BUSY to end).
+    pub fn save_state(&self, w: &mut StateWriter, powered: bool) {
+        w.f32s(&self.state);
+        {
+            let frame = self.frame.lock();
+            w.bytes(&frame.pixels);
+            w.opt_bytes(frame.rgb.as_deref());
+        }
+        w.u64(self.refresh_count);
+        if !powered {
+            return;
+        }
+        for v in [self.cs, self.dc, self.sck, self.rst, self.partial_mode, self.powered, self.asleep] {
+            w.bool(v);
+        }
+        w.u8(self.shift);
+        w.u8(self.nbits);
+        w.u8(self.cmd);
+        w.bytes(&self.args);
+        w.u64(self.data_ptr as u64);
+        w.bytes(&self.old);
+        w.bytes(&self.new);
+        w.bytes(self.luts.as_flattened());
+        w.u8(self.psr);
+        w.bytes(&self.cdi);
+        w.u8(self.pll);
+        let (x0, y0, x1, y1) = self.window;
+        w.u32s(&[x0 as u32, y0 as u32, x1 as u32, y1 as u32]);
+        w.u8(self.cascade);
+        w.u8(self.forced_temp);
+        w.u64(self.busy_until);
+        w.u8(self.temperature_c as u8);
+        w.opt_bytes(self.bwry.as_deref());
+    }
+
+    /// Load `save_state` output. Without `powered` the controller comes back as after
+    /// power-on, showing the saved image.
+    pub fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
+        let mut fresh = if self.is_bwry() { Self::new_bwry(self.rev) } else { Self::new(self.rev) };
+        fresh.frame = self.frame.clone();
+        fresh.flashing = self.flashing;
+        fresh.temperature_c = self.temperature_c;
+        *self = fresh;
+        read_f32s_into(r, &mut self.state)?;
+        {
+            let mut frame = self.frame.lock();
+            r.fill_u8(&mut frame.pixels)?;
+            let rgb = r.opt_bytes()?;
+            if rgb.is_some() != frame.rgb.is_some() {
+                anyhow::bail!("save point display is of a different panel type");
+            }
+            if let (Some(dst), Some(src)) = (frame.rgb.as_mut(), rgb) {
+                if dst.len() != src.len() {
+                    anyhow::bail!("save point display is of a different panel type");
+                }
+                dst.copy_from_slice(src);
+            }
+            frame.generation += 1;
+        }
+        self.refresh_count = r.u64()?;
+        if !powered {
+            return Ok(());
+        }
+        for v in [
+            &mut self.cs,
+            &mut self.dc,
+            &mut self.sck,
+            &mut self.rst,
+            &mut self.partial_mode,
+            &mut self.powered,
+            &mut self.asleep,
+        ] {
+            *v = r.bool()?;
+        }
+        self.shift = r.u8()?;
+        self.nbits = r.u8()?;
+        self.cmd = r.u8()?;
+        self.args = r.bytes()?.to_vec();
+        self.data_ptr = r.u64()? as usize;
+        r.fill_u8(&mut self.old)?;
+        r.fill_u8(&mut self.new)?;
+        r.fill_u8(self.luts.as_flattened_mut())?;
+        self.psr = r.u8()?;
+        self.cdi = r.array()?;
+        self.pll = r.u8()?;
+        let win = r.u32s()?;
+        let [x0, y0, x1, y1] = win[..] else { anyhow::bail!("save point display window is corrupt") };
+        self.window = (x0 as usize, y0 as usize, x1 as usize, y1 as usize);
+        self.cascade = r.u8()?;
+        self.forced_temp = r.u8()?;
+        self.busy_until = r.u64()?;
+        self.temperature_c = r.u8()? as i8;
+        match (&mut self.bwry, r.opt_bytes()?) {
+            (Some(dst), Some(src)) if dst.len() == src.len() => dst.copy_from_slice(src),
+            (None, None) => {}
+            _ => anyhow::bail!("save point display is of a different panel type"),
+        }
+        Ok(())
     }
 
     /// Hardware reset (RST pin low). Display contents survive: it's e-paper.

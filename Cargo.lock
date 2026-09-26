@@ -3521,6 +3521,7 @@ dependencies = [
 name = "sim-control"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "log",
  "mock-trmnl",
  "png",
@@ -3535,6 +3536,7 @@ name = "sim-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "eframe",
  "egui",
  "egui_kittest",
@@ -3980,6 +3982,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "env_logger",
+ "flate2",
  "log",
  "mock-trmnl",
  "num-bigint",

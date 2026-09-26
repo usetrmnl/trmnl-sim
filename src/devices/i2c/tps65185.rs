@@ -12,6 +12,7 @@
 //! STOP (write-then-read in separate transactions) and repeated START.
 
 use super::I2cDevice;
+use crate::savepoint::{StateReader, StateWriter};
 
 pub const ADDR: u8 = 0x68;
 
@@ -146,6 +147,25 @@ impl Tps65185 {
 impl I2cDevice for Tps65185 {
     fn address(&self) -> u8 {
         ADDR
+    }
+
+    fn save_state(&self, w: &mut StateWriter) {
+        w.bytes(&self.regs);
+        w.u8(self.ptr);
+        for v in [self.expect_ptr, self.wakeup, self.pwrup, self.i2c_active] {
+            w.bool(v);
+        }
+        w.opt_u64(self.rails_since);
+    }
+
+    fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        self.regs = r.array()?;
+        self.ptr = r.u8()?;
+        for v in [&mut self.expect_ptr, &mut self.wakeup, &mut self.pwrup, &mut self.i2c_active] {
+            *v = r.bool()?;
+        }
+        self.rails_since = r.opt_u64()?;
+        Ok(())
     }
 
     fn start(&mut self, _now: u64, read: bool) -> bool {

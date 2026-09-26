@@ -279,6 +279,11 @@ impl Fake {
             }
             Command::Pause(p) => self.paused = p,
             Command::DumpDebug => self.log("[demo] no CPU to dump"),
+            Command::SavePoint { reply, .. } | Command::RestoreSavePoint { reply, .. } => {
+                if let Some(tx) = reply {
+                    let _ = tx.send(Err("the demo has no device to save".into()));
+                }
+            }
             Command::Quit => {}
         }
     }

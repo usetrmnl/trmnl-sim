@@ -84,6 +84,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use sim_api::{Frame, SharedFrame};
 
+use crate::savepoint::{StateReader, StateWriter, read_f32s_into};
+
 /// Fraction of the remaining distance to black one black push covers.
 pub const PUSH_RATE_BLACK: f32 = 0.64;
 /// Fraction of the remaining distance to white one white push covers.
@@ -294,6 +296,46 @@ impl ParallelEpd {
         s.powered = self.powered;
         s.output_enabled = self.oe;
         s
+    }
+
+    /// Save point state: the particles (and with `powered`, the push direction memory and
+    /// the row-control pins). An update in progress is not saved (the caller waits for it).
+    pub fn save_state(&self, w: &mut StateWriter, powered: bool) {
+        w.f32s(&self.state);
+        w.bytes(&self.pixels);
+        w.u64(self.stats.updates);
+        if powered {
+            w.bytes(&self.last_dir);
+            for v in [self.powered, self.oe, self.spv, self.ckv, self.le] {
+                w.bool(v);
+            }
+            w.u64(self.last_scan_end_ns);
+        }
+    }
+
+    /// Load `save_state` output; without `powered` the panel is unpowered and idle. Stats
+    /// other than the update count restart from zero.
+    pub fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
+        let mut fresh = ParallelEpd::new(self.geom);
+        fresh.frame = self.frame.clone();
+        *self = fresh;
+        read_f32s_into(r, &mut self.state)?;
+        r.fill_u8(&mut self.pixels)?;
+        self.stats.updates = r.u64()?;
+        if powered {
+            r.fill_u8(&mut self.last_dir)?;
+            for v in [&mut self.powered, &mut self.oe, &mut self.spv, &mut self.ckv, &mut self.le] {
+                *v = r.bool()?;
+            }
+            self.stats.output_enabled = self.oe;
+            self.last_scan_end_ns = r.u64()?;
+        }
+        let mut f = self.frame.lock();
+        f.width = self.geom.width;
+        f.height = self.geom.height;
+        f.pixels = self.pixels.clone();
+        f.generation += 1;
+        Ok(())
     }
 
     /// High voltages (source/gate rails, VCOM) on or off.

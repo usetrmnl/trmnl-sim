@@ -3,6 +3,7 @@
 
 use super::Board;
 use crate::devices::uc8179::Uc8179;
+use crate::savepoint::{StateReader, StateWriter};
 
 pub struct Pins {
     pub sck: u8,
@@ -112,5 +113,18 @@ impl Board for TrmnlOg {
 
     fn display_status(&self, now: u64) -> (bool, u64) {
         (!self.panel.busy_n(now), self.panel.refresh_count)
+    }
+    fn save_state(&self, w: &mut StateWriter, powered: bool) {
+        w.u32(self.battery_mv);
+        w.u64(self.out);
+        w.u64(self.oe);
+        w.section(|w| self.panel.save_state(w, powered));
+    }
+
+    fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
+        self.battery_mv = r.u32()?;
+        self.out = r.u64()?;
+        self.oe = r.u64()?;
+        r.section(|r| self.panel.restore_state(r, powered))
     }
 }

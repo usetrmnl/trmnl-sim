@@ -8,6 +8,7 @@ mod firmware;
 mod hle;
 mod periph;
 mod runner;
+mod savepoint;
 mod soc;
 
 use std::path::PathBuf;
@@ -83,6 +84,10 @@ struct Cli {
     /// Panel revision returned by the UC8179 REV command.
     #[arg(long, default_value = "0x0a0c1b2c", value_parser = parse_u32)]
     panel_rev: u32,
+    /// Start from a save point file (taken with this firmware build) instead of booting.
+    /// Its flash replaces the --flash image.
+    #[arg(long, value_name = "FILE")]
+    restore: Option<PathBuf>,
 }
 
 fn parse_dns(s: &str) -> Result<(String, std::net::Ipv4Addr), String> {
@@ -106,6 +111,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let fw = firmware::Firmware::from_build_dir(&cli.build_dir)?;
+    let restore = cli.restore.as_deref().map(savepoint::SavePoint::load).transpose()?;
     let flash_path = cli.flash.clone().unwrap_or_else(|| cli.build_dir.join("sim-flash.bin"));
     let flash_data = firmware::prepare_flash(&flash_path, fw.flash_size, &fw, cli.erase)?;
     let flash = SpiFlash::new(flash_data, Some(flash_path.clone()));
@@ -134,7 +140,7 @@ fn main() -> Result<()> {
     let net = vnet::NetConfig { offline: cli.offline, dns_overrides: cli.dns.clone(), ..Default::default() };
 
     let mut panel = mock_trmnl::Panel::Og;
-    let (machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
+    let (mut machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
         firmware::CHIP_ESP32S3 => {
             let modem_mac = cli.mac.map(|mut m| {
                 m[5] = m[5].wrapping_add(2);
@@ -174,6 +180,13 @@ fn main() -> Result<()> {
         }
     };
 
+    let fw_id = savepoint::FirmwareId { name: fw.name.clone(), elf_sha256: fw.elf_sha256 };
+    if let Some(sp) = &restore {
+        sp.check_compatible(&fw_id, &machine.board().info().name)?;
+        if cli.mac.is_some_and(|m| m != sp.soc.mac) {
+            eprintln!("trmnl-sim: the save point's MAC replaces --mac");
+        }
+    }
     let frame_for_shot = frame.clone();
     let (handle, ports) = sim_api::channel(frame);
     let opts = runner::RunnerOptions {
@@ -184,6 +197,8 @@ fn main() -> Result<()> {
         profile: cli.profile,
         firmware_name: fw.name.clone(),
         exit_on_halt: cli.headless && cli.control.is_none(),
+        firmware: fw_id,
+        restore,
     };
     let mock = mock_trmnl::MockServer::new(panel);
     let status = handle.status.clone();

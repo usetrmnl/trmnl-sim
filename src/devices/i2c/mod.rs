@@ -16,6 +16,8 @@
 
 use std::any::Any;
 
+use crate::savepoint::{StateReader, StateWriter};
+
 pub mod bq27427;
 pub mod iqs323;
 pub mod tca9535;
@@ -38,6 +40,13 @@ pub trait I2cDevice: Any + Send {
     /// Earliest future time at which the device changes state on its own.
     fn next_event_ns(&self, _now_ns: u64) -> Option<u64> {
         None
+    }
+    /// Save point state (see `savepoint`): what the chip keeps while the board stays
+    /// powered (registers, configuration). Never called with a transaction open.
+    fn save_state(&self, _w: &mut StateWriter) {}
+    /// Load `save_state` output; a transaction in progress is dropped.
+    fn restore_state(&mut self, _r: &mut StateReader) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 
@@ -148,6 +157,30 @@ impl I2cBus {
 
     pub fn next_event_ns(&self, now: u64) -> Option<u64> {
         self.devices.iter().filter_map(|d| d.next_event_ns(now)).min()
+    }
+
+    /// Every device's save point state, in attachment order.
+    pub fn save_state(&self, w: &mut StateWriter) {
+        w.u32(self.devices.len() as u32);
+        for d in &self.devices {
+            w.u8(d.address());
+            w.section(|w| d.save_state(w));
+        }
+    }
+
+    pub fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        if r.u32()? as usize != self.devices.len() {
+            anyhow::bail!("save point has a different set of I2C devices");
+        }
+        self.target = None;
+        self.participants.clear();
+        for d in &mut self.devices {
+            if r.u8()? != d.address() {
+                anyhow::bail!("save point has a different set of I2C devices");
+            }
+            r.section(|r| d.restore_state(r))?;
+        }
+        Ok(())
     }
 
     // ---- Whole-transaction conveniences (tests, simple callers) ----

@@ -52,6 +52,7 @@ class Simulator:
         extra_args: more CLI arguments.
         name: label for artifacts. If $TRMNL_SIM_ARTIFACTS is set, the log and final
             screen of every simulator are saved there on close (handy in CI).
+        restore: start from this save point file (see `save_point`) instead of booting.
     """
 
     def __init__(
@@ -67,6 +68,7 @@ class Simulator:
         extra_args: tuple[str, ...] = (),
         startup_timeout_s: float = 30,
         name: Optional[str] = None,
+        restore: Optional[str | os.PathLike] = None,
     ):
         self.build_dir = Path(build_dir)
         self._tmpdir = tempfile.mkdtemp(prefix="trmnl-sim-")
@@ -92,10 +94,17 @@ class Simulator:
             args += ["--mac", mac]
         if turbo:
             args.append("--turbo")
+        if restore:
+            args += ["--restore", str(Path(restore).resolve())]
         args += list(extra_args)
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(args, stdout=self._log, stderr=subprocess.STDOUT)
-        self.base = self._discover_url(startup_timeout_s)
+        try:
+            self.base = self._discover_url(startup_timeout_s)
+        except BaseException:
+            self.proc.kill()
+            self._log.close()
+            raise
 
     # ---- lifecycle ------------------------------------------------------------------------
 
@@ -229,6 +238,29 @@ class Simulator:
 
     def pause(self, on: bool = True) -> None:
         self._post("/pause", {"on": on})
+
+    # ---- save points -------------------------------------------------------------------------------
+
+    def save_point(self, path: Optional[str | os.PathLike] = None, label: Optional[str] = None) -> dict:
+        """Take a save point: in deep sleep the full device state, otherwise only what survives
+        a battery pull (flash, screen). Kept in memory (see `save_points`) and, with `path`,
+        written to that file for `restore` or `Simulator(restore=...)`. Returns its info
+        (`id`, `label`, `deep_sleep`, `sim_time_s`, `wake_at_s`, `path`, `bytes`)."""
+        body: dict[str, Any] = {}
+        if path is not None:
+            body["path"] = str(Path(path).resolve())
+        if label is not None:
+            body["label"] = label
+        return self._post("/savepoint", body, timeout=150)["savepoint"]
+
+    def restore(self, path: Optional[str | os.PathLike] = None, id: Optional[int] = None) -> dict:
+        """Replace the device with a save point from a file or an in-memory slot `id`."""
+        body = {"path": str(Path(path).resolve())} if path is not None else {"id": id}
+        return self._post("/restore", body, timeout=150)["savepoint"]
+
+    def save_points(self) -> list[dict]:
+        """The in-memory save points, oldest first."""
+        return self._get_json("/savepoints")["savepoints"]
 
     # ---- observation ------------------------------------------------------------------------------
 

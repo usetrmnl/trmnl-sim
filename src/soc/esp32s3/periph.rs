@@ -218,14 +218,23 @@ impl Periph {
         self.store[((a - PERIPH_BASE) / 4) as usize] = v;
     }
 
+    /// The RTC_CNTL register block (what `chip_reset` keeps through deep sleep).
+    pub fn rtc_regs(&self) -> Vec<u32> {
+        (RTC_CNTL..RTC_CNTL + 0x400).step_by(4).map(|a| self.store_get(a)).collect()
+    }
+
+    pub fn set_rtc_regs(&mut self, regs: &[u32]) {
+        for (i, v) in regs.iter().take(0x400 / 4).enumerate() {
+            self.store_set(RTC_CNTL + 4 * i as u32, *v);
+        }
+    }
+
     /// Reset register state as a chip reset would (RTC domain kept unless power-on).
     pub fn chip_reset(&mut self, keep_rtc: bool) {
-        let rtc: Vec<u32> = (RTC_CNTL..RTC_CNTL + 0x400).step_by(4).map(|a| self.store_get(a)).collect();
+        let rtc = self.rtc_regs();
         self.store.fill(0);
         if keep_rtc {
-            for (i, v) in rtc.into_iter().enumerate() {
-                self.store_set(RTC_CNTL + 4 * i as u32, v);
-            }
+            self.set_rtc_regs(&rtc);
         }
         self.intc = Intc::default();
         self.systimer = Systimer::default();

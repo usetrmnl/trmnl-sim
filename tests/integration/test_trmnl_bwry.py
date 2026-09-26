@@ -1,8 +1,10 @@
 """TRMNL BWRY (`trmnl_4clr`): the OG board with a 4-color black/white/yellow/red panel."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
-from support import BWRY_BUILD, ProvisionedDevice
+from support import BWRY_BUILD, ProvisionedDevice, sim
 from trmnl_mock import BWRY_RGB, color_bars
 
 dev: ProvisionedDevice
@@ -59,6 +61,27 @@ class Bwry(unittest.TestCase):
             t0 = s.status()["sim_time_s"]
             st = s.wait(state="deep_sleep", timeout_s=120)["status"]
             self.assertGreater(st["sim_time_s"] - t0, 15)  # the 4-color update alone is ~16 s
+    def test_save_point_keeps_the_color_image(self):
+        bars = dev.mock.set_color_png("bars", color_bars)
+        dev.mock.display = {"image": "bars", "refresh_rate": 300}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bwry.trmnlsave"
+            with dev.boot() as s:
+                dev.mock.wait_for_request("/images/bars.png", timeout_s=120)
+                s.wait(state="deep_sleep", timeout_s=120)
+                s.save_point(path)
+            dev.mock.requests.clear()
+            dev.mock.set_color_png("red", lambda x, y: BWRY_RGB["red"])
+            dev.mock.display = {"image": "red", "refresh_rate": 300}
+            with sim(BWRY_BUILD, restore=path, extra_args=("--offline",)) as s:
+                s.wait(state="deep_sleep", timeout_s=30)
+                self.assertEqual(s.status()["board"]["name"], "TRMNL BWRY")
+                self.assertTrue(s.compare_screen(bars, tolerance=0, max_ratio=0)["match"])
+                s.wake()
+                dev.mock.wait_for_request("/images/red.png", timeout_s=120)
+                s.wait(state="deep_sleep", timeout_s=120)
+                self.assertEqual(s.screenshot(region=(0, 0, 8, 8))[25], 2)
+                self.assertNotIn("/api/setup", [r.path for r in dev.mock.requests])
 
 if __name__ == "__main__":
     unittest.main()

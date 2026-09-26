@@ -13,6 +13,7 @@ use crate::devices::i2c::tca9535::{Tca9535, pins};
 use crate::devices::i2c::tps65185::Tps65185;
 use crate::devices::i2c::{BitBangI2cSlave, I2cBus};
 use crate::devices::parallel_epd::{PanelGeometry, ParallelEpd};
+use crate::savepoint::{StateReader, StateWriter};
 
 // S3 GPIOs
 const GPIO_IQS_RDY: u8 = 3;
@@ -40,13 +41,6 @@ pub struct TrmnlX {
 
 impl TrmnlX {
     pub fn new(modem_mac: [u8; 6], offline: bool, dns_overrides: Vec<(String, std::net::Ipv4Addr)>) -> Self {
-        let mut i2c = I2cBus::new();
-        let mut tca = Tca9535::new();
-        tca.set_battery_cells(1);
-        i2c.add(Box::new(tca));
-        i2c.add(Box::new(Tps65185::new()));
-        i2c.add(Box::new(Iqs323::new()));
-        i2c.add(Box::new(Bq27427::new(1)));
         let modem = EspAtModem::new(ModemConfig {
             mac: modem_mac,
             networks: vec![
@@ -73,7 +67,7 @@ impl TrmnlX {
         });
         let mut b = TrmnlX {
             panel: ParallelEpd::new(PanelGeometry::TRMNL_X),
-            i2c,
+            i2c: Self::new_i2c(),
             bitbang: BitBangI2cSlave::new(),
             modem,
             docked: false,
@@ -83,6 +77,18 @@ impl TrmnlX {
         };
         b.apply_power_inputs();
         b
+    }
+
+    /// The I2C chips as they come out of power-on.
+    fn new_i2c() -> I2cBus {
+        let mut i2c = I2cBus::new();
+        let mut tca = Tca9535::new();
+        tca.set_battery_cells(1);
+        i2c.add(Box::new(tca));
+        i2c.add(Box::new(Tps65185::new()));
+        i2c.add(Box::new(Iqs323::new()));
+        i2c.add(Box::new(Bq27427::new(1)));
+        i2c
     }
 
     fn tca(&mut self) -> &mut Tca9535 {
@@ -269,5 +275,34 @@ impl Board for TrmnlX {
     fn display_status(&self, _now: u64) -> (bool, u64) {
         let s = self.panel.stats();
         (s.update_in_progress, s.updates)
+    }
+    fn save_state(&self, w: &mut StateWriter, powered: bool) {
+        w.bool(self.docked);
+        w.u32(self.battery_mv);
+        w.u64(self.last_now);
+        w.section(|w| self.panel.save_state(w, powered));
+        w.section(|w| self.modem.save_state(w));
+        if powered {
+            w.section(|w| self.i2c.save_state(w));
+        }
+    }
+
+    /// The modem comes back powered off either way; if the expander has its EN high it
+    /// boots afresh (ESP-AT's session isn't part of a save point).
+    fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
+        self.docked = r.bool()?;
+        self.battery_mv = r.u32()?;
+        self.last_now = r.u64()?;
+        r.section(|r| self.panel.restore_state(r, powered))?;
+        let now = self.last_now;
+        r.section(|r| self.modem.restore_state(r, now))?;
+        self.modem_power = (false, false);
+        self.bitbang = BitBangI2cSlave::new();
+        self.i2c = Self::new_i2c();
+        if powered {
+            r.section(|r| self.i2c.restore_state(r))?;
+        }
+        self.apply_power_inputs();
+        Ok(())
     }
 }

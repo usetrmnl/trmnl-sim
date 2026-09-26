@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 
 use super::I2cDevice;
+use crate::savepoint::{StateReader, StateWriter};
 
 pub const ADDR: u8 = 0x55;
 
@@ -384,6 +385,68 @@ impl Bq27427 {
 impl I2cDevice for Bq27427 {
     fn address(&self) -> u8 {
         ADDR
+    }
+
+    /// Data memory (the firmware's configuration), control state and battery readings.
+    fn save_state(&self, w: &mut StateWriter) {
+        w.u8(self.ptr);
+        w.bool(self.expect_cmd);
+        w.u8(self.ctl_lo);
+        w.u16(self.ctl_response);
+        w.u16(self.last_subcommand);
+        for v in [self.sealed, self.itpor, self.cfgupmode, self.charging] {
+            w.bool(v);
+        }
+        w.u16(self.chem_id);
+        let mut blocks: Vec<_> = self.blocks.iter().collect();
+        blocks.sort_by_key(|(k, _)| **k);
+        w.u32(blocks.len() as u32);
+        for ((class, block), data) in blocks {
+            w.u8(*class);
+            w.u8(*block);
+            w.bytes(data);
+        }
+        w.u8(self.block_ctl);
+        w.u8(self.class);
+        w.u8(self.block);
+        w.bytes(&self.ram);
+        w.u16(self.voltage_mv);
+        w.u8(self.soc);
+        w.u8(self.soh);
+        w.bool(self.current_ma.is_some());
+        w.u16(self.current_ma.unwrap_or(0) as u16);
+        w.u16(self.temp_dk);
+        w.u32(self.block_commits);
+    }
+
+    fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        self.ptr = r.u8()?;
+        self.expect_cmd = r.bool()?;
+        self.ctl_lo = r.u8()?;
+        self.ctl_response = r.u16()?;
+        self.last_subcommand = r.u16()?;
+        for v in [&mut self.sealed, &mut self.itpor, &mut self.cfgupmode, &mut self.charging] {
+            *v = r.bool()?;
+        }
+        self.chem_id = r.u16()?;
+        self.blocks.clear();
+        for _ in 0..r.u32()? {
+            let key = (r.u8()?, r.u8()?);
+            self.blocks.insert(key, r.array()?);
+        }
+        self.block_ctl = r.u8()?;
+        self.class = r.u8()?;
+        self.block = r.u8()?;
+        self.ram = r.array()?;
+        self.voltage_mv = r.u16()?;
+        self.soc = r.u8()?;
+        self.soh = r.u8()?;
+        let some = r.bool()?;
+        let current = r.u16()? as i16;
+        self.current_ma = some.then_some(current);
+        self.temp_dk = r.u16()?;
+        self.block_commits = r.u32()?;
+        Ok(())
     }
 
     fn start(&mut self, _now: u64, read: bool) -> bool {

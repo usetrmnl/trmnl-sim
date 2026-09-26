@@ -30,6 +30,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use params::{Param, asctime, fmt_mac, parse_params};
 
+use crate::savepoint::{StateReader, StateWriter};
+
 const MS: u64 = 1_000_000;
 
 /// An access point the modem can see.
@@ -432,6 +434,26 @@ impl EspAtModem {
 
     pub fn wifi_available(&self) -> bool {
         self.wifi_available
+    }
+
+    /// Save point state: what survives power cycles (the flashed image, the MAC, whether
+    /// networks are in range). ESP-AT's running state is not saved.
+    pub fn save_state(&self, w: &mut StateWriter) {
+        w.bytes(&self.cfg.mac);
+        w.bool(self.wifi_available);
+        w.opt_bytes(self.flash.as_deref());
+    }
+
+    /// Load `save_state` output into a powered-off modem at virtual time `now_ns`.
+    pub fn restore_state(&mut self, r: &mut StateReader, now_ns: u64) -> anyhow::Result<()> {
+        self.reset_state();
+        self.mode = Mode::Off;
+        self.rx.clear();
+        self.now = now_ns;
+        self.cfg.mac = r.array()?;
+        self.wifi_available = r.bool()?;
+        self.flash = r.opt_bytes()?.map(<[u8]>::to_vec);
+        Ok(())
     }
 
     // ------------------------------------------------------------------------------------

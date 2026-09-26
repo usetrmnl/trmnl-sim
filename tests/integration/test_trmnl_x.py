@@ -1,11 +1,13 @@
 """TRMNL X: factory flow, shipment mode and the dock, onboarding over 2.4 GHz (S3 WiFi) and
 5 GHz (ESP32-C5 modem), the 1872x1404 parallel panel, the touch bar, and charging headers."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from support import MockTrmnl, big_number
 from trmnl_mock import expected_gray, png_image
-from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard
+from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
 
 shipped: ShippedX
 dev: ProvisionedX
@@ -165,6 +167,44 @@ class BuiltinServer(unittest.TestCase):
             expected = expected_gray(digits("7"), 1872, 1404)
             self.assertTrue(s.compare_screen(expected, tolerance=64, max_ratio=0)["match"])
             self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
+
+
+class SavePoints(unittest.TestCase):
+    def setUp(self):
+        dev.mock.requests.clear()
+        dev.mock.display_queue.clear()
+
+    def test_restored_x_shows_the_same_screen_and_wakes_by_touch(self):
+        seven = dev.mock.set_png("seven", digits("7"))
+        dev.mock.display = {"image": "seven", "refresh_rate": 300}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.trmnlsave"
+            with dev.boot() as s:
+                dev.mock.wait_for_request("/images/seven.png", timeout_s=120)
+                s.wait(state="deep_sleep", timeout_s=120)
+                s.dock(True)
+                saved = s.save_point(path)
+                screen = s.screenshot()
+                boots = s.status()["boot_count"]
+            self.assertTrue(saved["deep_sleep"])
+            eight = dev.mock.set_png("eight", digits("8"))
+            dev.mock.display = {"image": "eight", "refresh_rate": 300}
+            dev.mock.requests.clear()
+            with x_sim(restore=path) as s:
+                st = s.wait(state="deep_sleep", timeout_s=30)["status"]
+                self.assertEqual((st["boot_count"], st["docked"], st["charging"]), (boots, True, True))
+                self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])
+                self.assertTrue(s.compare_screen(seven, tolerance=64, max_ratio=0)["match"])
+                # Touch wake needs the IQS323 configuration and RTC state from before the save.
+                s.touch("center", 150)
+                req = dev.mock.wait_for_request("/api/display", timeout_s=120)
+                self.assertEqual(req.headers["Update-Source"], "EXT0")
+                self.assertEqual(req.headers["RSSI"], "-48")  # still on 5 GHz, through the modem
+                self.assertEqual(req.headers["USB-Connected"], "true")
+                dev.mock.wait_for_request("/images/eight.png", timeout_s=120)
+                s.wait(state="deep_sleep", timeout_s=120)
+                self.assertTrue(s.compare_screen(eight, tolerance=64, max_ratio=0)["match"])
+                self.assertNotIn("/api/setup", [r.path for r in dev.mock.requests])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+crossbeam-channel = "0.5"
 eframe = "0.36.2"
 egui = "0.36.2"
 mock-trmnl = { path = "../mock-trmnl" }

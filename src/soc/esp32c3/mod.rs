@@ -12,6 +12,7 @@ use crate::board::Board;
 use crate::devices::spi_flash::SpiFlash;
 use crate::firmware::{self, Symbols};
 use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MachineRequest};
+use crate::savepoint::SocState;
 
 use super::{Machine, NetStatus, Output, ResetKind, SliceExit};
 use bus::C3Bus;
@@ -607,5 +608,51 @@ impl Machine for Esp32c3 {
     fn net_status(&self) -> NetStatus {
         let w = &self.hle.wifi;
         NetStatus { connected: w.is_connected(), ip: w.ip().map(|i| i.to_string()), portal_url: w.portal_url() }
+    }
+    fn save_soc(&mut self, rtc: bool) -> SocState {
+        SocState {
+            mac: self.bus.p.mac,
+            now_ns: self.bus.now_ns(),
+            boots: self.boots,
+            rtc_ticks_base: self.bus.p.rtc_ticks_base,
+            rtc_regs: if rtc { self.bus.p.rtc_regs() } else { Vec::new() },
+            rtc_mem: if rtc { vec![self.bus.rtc.to_vec()] } else { Vec::new() },
+            mmu: Vec::new(),
+            flash: self.bus.flash.data.clone(),
+        }
+    }
+
+    fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()> {
+        if s.flash.len() != self.bus.flash.data.len() {
+            anyhow::bail!("save point has {} bytes of flash, this device {}", s.flash.len(), self.bus.flash.data.len());
+        }
+        if s.rtc_mem.iter().any(|m| m.len() != self.bus.rtc.len()) || s.rtc_mem.len() > 1 {
+            anyhow::bail!("save point RTC memory doesn't fit an ESP32-C3");
+        }
+        self.bus.flash.data.copy_from_slice(&s.flash);
+        self.bus.flash.dirty = true;
+        self.bus.flash.flush()?;
+        self.bus.p.mac = s.mac;
+        self.hle.wifi.base_mac = s.mac;
+        self.hle.chip_reset();
+        self.hooks.clear_pending();
+        self.requests.clear();
+        self.light_sleep = None;
+        self.pending_halt = None;
+        self.recent_resets.clear();
+        self.bus.p.chip_reset(false);
+        self.bus.p.set_rtc_regs(&s.rtc_regs);
+        self.bus.p.rtc_ticks_base = s.rtc_ticks_base;
+        self.bus.rtc.fill(0);
+        if let Some(m) = s.rtc_mem.first() {
+            self.bus.rtc.copy_from_slice(m);
+        }
+        let cycles = self.bus.clock.cycles;
+        self.bus.clock = bus::Clock::new(40_000_000);
+        self.bus.clock.cycles = cycles;
+        self.bus.clock.set_base(s.now_ns);
+        self.bus.p.systimer.reset_counters(s.now_ns);
+        self.boots = s.boots;
+        Ok(())
     }
 }

@@ -4,6 +4,8 @@
 pub mod trmnl_og;
 pub mod trmnl_x;
 
+use crate::savepoint::{StateReader, StateWriter};
+
 /// The outside world as seen from a SoC.
 pub trait Board: Send {
     /// GPIO output levels / output-enable masks changed (bit n = GPIO n).
@@ -66,4 +68,13 @@ pub trait Board: Send {
     fn set_battery_mv(&mut self, mv: u32);
     /// Whether the display is currently busy / how many refreshes it did.
     fn display_status(&self, now_ns: u64) -> (bool, u64);
+    /// Device state for a save point (see `savepoint`). `powered`: the board stays powered
+    /// (deep sleep), so also volatile state (controller RAM, chip configuration); otherwise
+    /// only what survives a battery pull (the e-paper image, flash memories).
+    fn save_state(&self, _w: &mut StateWriter, _powered: bool) {}
+    /// Load what `save_state` wrote with the same `powered`. Without `powered`, devices
+    /// come back as after power-on.
+    fn restore_state(&mut self, _r: &mut StateReader, _powered: bool) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

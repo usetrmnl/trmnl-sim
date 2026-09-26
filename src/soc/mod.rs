@@ -6,6 +6,7 @@ pub mod esp32c3;
 pub mod esp32s3;
 
 use crate::board::Board;
+use crate::savepoint::SocState;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SliceExit {
@@ -57,6 +58,12 @@ pub trait Machine: Send {
     fn light_sleep(&self) -> Option<Option<u64>> {
         None
     }
+    /// SoC state for a save point (see `savepoint`). `rtc`: also what only survives deep
+    /// sleep (RTC memory and registers, the S3 cache MMU).
+    fn save_soc(&mut self, rtc: bool) -> SocState;
+    /// Power the SoC down into saved state: nothing of the running firmware is kept, and
+    /// the next `reset` boots from it (a deep-sleep wake keeps the restored RTC state).
+    fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone)]

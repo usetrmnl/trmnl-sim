@@ -2,10 +2,12 @@
 //! applies front-end commands, models power states (deep sleep), and publishes
 //! status/console output through `sim_api`.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-use sim_api::{Command, RunState, SimPorts};
+use sim_api::{Command, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
 
+use crate::savepoint::{FirmwareId, SavePoint, SavedPower, StateReader, StateWriter};
 use crate::soc::{Machine, Output, ResetKind, SliceExit};
 
 pub struct RunnerOptions {
@@ -21,6 +23,10 @@ pub struct RunnerOptions {
     pub firmware_name: String,
     /// Stop the run when the machine halts (headless runs without a controller).
     pub exit_on_halt: bool,
+    /// The build being run (save points only restore onto the same one).
+    pub firmware: FirmwareId,
+    /// Start from this save point instead of a power-on boot.
+    pub restore: Option<SavePoint>,
 }
 
 /// How a run ended.
@@ -32,6 +38,120 @@ enum Power {
     On,
     DeepSleep { wake_at: Option<u64>, gpio_low_mask: u64 },
     Halted,
+}
+
+/// In-memory save points (encoded), oldest first.
+#[derive(Default)]
+struct Slots {
+    next_id: u32,
+    list: Vec<(SavePointInfo, Vec<u8>)>,
+}
+
+impl Slots {
+    const MAX: usize = 16;
+
+    fn add(&mut self, sp: &SavePoint, data: Vec<u8>, path: Option<&Path>) -> SavePointInfo {
+        self.next_id += 1;
+        let info = SavePointInfo {
+            id: self.next_id,
+            label: sp.label.clone(),
+            deep_sleep: sp.deep_sleep(),
+            sim_time_ns: sp.soc.now_ns,
+            wake_at_ns: match sp.power {
+                SavedPower::DeepSleep { wake_at, .. } => wake_at,
+                SavedPower::Off => None,
+            },
+            path: path.map(Path::to_path_buf),
+            bytes: data.len(),
+        };
+        // A file loaded again replaces its previous slot.
+        self.list.retain(|(i, _)| path.is_none() || i.path.as_deref() != path);
+        self.list.push((info.clone(), data));
+        if self.list.len() > Self::MAX {
+            self.list.remove(0);
+        }
+        info
+    }
+
+    fn infos(&self) -> Vec<SavePointInfo> {
+        self.list.iter().map(|(i, _)| i.clone()).collect()
+    }
+}
+
+/// Capture the device. In deep sleep that is everything that survives it; otherwise
+/// only what survives a battery pull.
+fn take_savepoint(
+    m: &mut dyn Machine,
+    power: &Power,
+    st: &Status,
+    firmware: &FirmwareId,
+    label: Option<String>,
+) -> Result<SavePoint, String> {
+    let now = m.now_ns();
+    if m.board().display_status(now).0 {
+        return Err("the display is refreshing; take the save point once it is idle".into());
+    }
+    let (saved, powered) = match *power {
+        Power::DeepSleep { wake_at, gpio_low_mask } => (SavedPower::DeepSleep { wake_at, gpio_low_mask }, true),
+        Power::On | Power::Halted => (SavedPower::Off, false),
+    };
+    let soc = m.save_soc(powered);
+    let mut w = StateWriter::new();
+    m.board().save_state(&mut w, powered);
+    let label = label.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| {
+        let what = match saved {
+            SavedPower::DeepSleep { .. } => "deep sleep",
+            SavedPower::Off => "power-off",
+        };
+        format!("{what} at {:.1} s, boot {}", now as f64 / 1e9, soc.boots)
+    });
+    Ok(SavePoint {
+        firmware: firmware.clone(),
+        board: m.board().info().name,
+        label,
+        created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+        power: saved,
+        soc,
+        board_state: w.into_bytes(),
+        battery_mv: st.battery_mv,
+        docked: st.docked,
+        wifi_available: st.wifi_available,
+    })
+}
+
+/// Replace the machine's state with a save point; returns the power state to continue in.
+fn apply_savepoint(m: &mut dyn Machine, sp: &SavePoint, firmware: &FirmwareId) -> anyhow::Result<Power> {
+    sp.check_compatible(firmware, &m.board().info().name)?;
+    m.restore_soc(&sp.soc)?;
+    let mut r = StateReader::new(&sp.board_state);
+    let restored = m.board().restore_state(&mut r, sp.deep_sleep()).and_then(|_| r.finish());
+    if let Err(e) = restored {
+        // Don't leave a half-restored device behind.
+        m.reset(ResetKind::PowerOn);
+        return Err(e.context("restoring the board (the device was power-cycled instead)"));
+    }
+    m.set_wifi_available(sp.wifi_available);
+    Ok(match sp.power {
+        SavedPower::DeepSleep { wake_at, gpio_low_mask } => Power::DeepSleep { wake_at, gpio_low_mask },
+        SavedPower::Off => {
+            m.reset(ResetKind::PowerOn);
+            Power::On
+        }
+    })
+}
+
+fn describe_restore(sp: &SavePoint) -> String {
+    match sp.power {
+        SavedPower::DeepSleep { wake_at: Some(t), .. } => format!(
+            "restored save point \"{}\": deep sleep, wakes in {:.1} s",
+            sp.label,
+            t.saturating_sub(sp.soc.now_ns) as f64 / 1e9
+        ),
+        SavedPower::DeepSleep { wake_at: None, .. } => {
+            format!("restored save point \"{}\": deep sleep (no timer)", sp.label)
+        }
+        SavedPower::Off => format!("restored save point \"{}\": powering on", sp.label),
+    }
 }
 
 pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> RunOutcome {
@@ -53,11 +173,34 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
     let mut presses_done = 0u64;
     let mut touch_release_at: Option<(u64, sim_api::TouchZone)> = None;
     let mut touches_done = 0u64;
+    let mut slots = Slots::default();
     ports.status.lock().board = m.board().info();
     {
         let mut st = ports.status.lock();
         st.firmware = opts.firmware_name.clone();
         st.turbo = turbo;
+    }
+    if let Some(sp) = &opts.restore {
+        // The power-on boot being replaced printed its ROM banner already.
+        m.take_output();
+        match apply_savepoint(m.as_mut(), sp, &opts.firmware) {
+            Ok(p) => {
+                power = p;
+                ports.console.lock().push_sim(&describe_restore(sp));
+                let mut st = ports.status.lock();
+                st.battery_mv = sp.battery_mv;
+                st.docked = sp.docked;
+                st.wifi_available = sp.wifi_available;
+                st.charging = m.board().charging();
+                anchor_virt = m.now_ns();
+                last_rate = (Instant::now(), m.instructions(), m.now_ns());
+            }
+            Err(e) => {
+                let msg = format!("restoring the save point failed: {e:#}");
+                ports.console.lock().push_sim(&msg);
+                return RunOutcome { halted: Some(msg) };
+            }
+        }
     }
 
     'main: loop {
@@ -167,6 +310,95 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                 Command::Pause(p) => {
                     paused = p;
                     rebase = true;
+                }
+                Command::SavePoint { label, path, reply } => {
+                    let st = ports.status.lock().clone();
+                    let result = take_savepoint(m.as_mut(), &power, &st, &opts.firmware, label).and_then(|sp| {
+                        let data = sp.encode();
+                        if let Some(p) = &path {
+                            std::fs::write(p, &data).map_err(|e| format!("writing {}: {e}", p.display()))?;
+                        }
+                        let info = slots.add(&sp, data, path.as_deref());
+                        ports.console.lock().push_sim(&format!(
+                            "save point #{} \"{}\" taken ({} KB){}",
+                            info.id,
+                            info.label,
+                            info.bytes / 1024,
+                            path.as_ref().map(|p| format!(", saved to {}", p.display())).unwrap_or_default()
+                        ));
+                        ports.status.lock().savepoints = slots.infos();
+                        Ok(info)
+                    });
+                    if let Err(e) = &result {
+                        ports.console.lock().push_sim(&format!("save point not taken: {e}"));
+                    }
+                    if let Some(tx) = reply {
+                        let _ = tx.send(result);
+                    }
+                }
+                Command::RestoreSavePoint { from, reply } => {
+                    let loaded = match &from {
+                        SavePointSource::Slot(id) => slots
+                            .list
+                            .iter()
+                            .find(|(i, _)| i.id == *id)
+                            .ok_or_else(|| format!("no save point #{id}"))
+                            .and_then(|(i, d)| {
+                                SavePoint::decode(d).map(|sp| (sp, i.clone())).map_err(|e| format!("{e:#}"))
+                            }),
+                        SavePointSource::File(p) => {
+                            std::fs::read(p).map_err(|e| format!("reading {}: {e}", p.display())).and_then(|d| {
+                                let sp = SavePoint::decode(&d).map_err(|e| format!("{}: {e:#}", p.display()))?;
+                                sp.check_compatible(&opts.firmware, &m.board().info().name)
+                                    .map_err(|e| format!("{e:#}"))?;
+                                let info = slots.add(&sp, d, Some(p));
+                                Ok((sp, info))
+                            })
+                        }
+                    };
+                    let result = loaded.and_then(|(sp, info)| {
+                        power = apply_savepoint(m.as_mut(), &sp, &opts.firmware).map_err(|e| format!("{e:#}"))?;
+                        ports.console.lock().push_sim(&describe_restore(&sp));
+                        // Inputs in progress end with the old device.
+                        if release_at.take().is_some() {
+                            presses_done += 1;
+                        }
+                        if touch_release_at.take().is_some() {
+                            touches_done += 1;
+                        }
+                        button = false;
+                        m.board().set_button(false);
+                        let now = m.now_ns();
+                        let charging = m.board().charging();
+                        let refreshes = m.board().display_status(now).1;
+                        let mut st = ports.status.lock();
+                        // Publish the restored device right away, so a caller never sees the old one.
+                        st.sim_time_ns = now;
+                        st.boot_count = m.boot_count();
+                        st.display_refreshes = refreshes;
+                        st.state = match power {
+                            Power::DeepSleep { wake_at, .. } => RunState::DeepSleep { wake_at_ns: wake_at },
+                            _ => RunState::Running,
+                        };
+                        st.battery_mv = sp.battery_mv;
+                        st.docked = sp.docked;
+                        st.charging = charging;
+                        st.wifi_available = sp.wifi_available;
+                        st.button_down = false;
+                        st.touching = None;
+                        st.touch_mask = 0;
+                        st.presses_done = presses_done;
+                        st.touches_done = touches_done;
+                        st.savepoints = slots.infos();
+                        Ok(info)
+                    });
+                    match &result {
+                        Ok(_) => rebase = true,
+                        Err(e) => ports.console.lock().push_sim(&format!("save point not restored: {e}")),
+                    }
+                    if let Some(tx) = reply {
+                        let _ = tx.send(result);
+                    }
                 }
             }
             if rebase {

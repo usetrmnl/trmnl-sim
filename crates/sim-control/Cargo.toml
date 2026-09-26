@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crossbeam-channel = "0.5"
 log = "0.4.34"
 mock-trmnl = { path = "../mock-trmnl" }
 png = "0.18"

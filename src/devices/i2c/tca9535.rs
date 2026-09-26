@@ -17,6 +17,7 @@
 //! Pin numbering is FastEPD's: 0..7 = P0_0..P0_7, 8..15 = P1_0..P1_7.
 
 use super::I2cDevice;
+use crate::savepoint::{StateReader, StateWriter};
 
 pub const ADDR: u8 = 0x20;
 
@@ -260,6 +261,36 @@ impl Tca9535 {
 impl I2cDevice for Tca9535 {
     fn address(&self) -> u8 {
         ADDR
+    }
+
+    fn save_state(&self, w: &mut StateWriter) {
+        w.u8(self.ptr);
+        w.bool(self.expect_cmd);
+        for a in [self.output, self.polarity, self.config, self.last_read] {
+            w.bytes(&a);
+        }
+        w.u16(self.external);
+        w.opt_u64(self.rc_high_until);
+        w.opt_u64(self.pwrup_wakeup_since);
+        w.bool(self.reported_outputs.is_some());
+        let (lv, oe) = self.reported_outputs.unwrap_or_default();
+        w.u16(lv);
+        w.u16(oe);
+    }
+
+    fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        self.ptr = r.u8()?;
+        self.expect_cmd = r.bool()?;
+        for a in [&mut self.output, &mut self.polarity, &mut self.config, &mut self.last_read] {
+            *a = r.array()?;
+        }
+        self.external = r.u16()?;
+        self.rc_high_until = r.opt_u64()?;
+        self.pwrup_wakeup_since = r.opt_u64()?;
+        let some = r.bool()?;
+        let outputs = (r.u16()?, r.u16()?);
+        self.reported_outputs = some.then_some(outputs);
+        Ok(())
     }
 
     fn start(&mut self, _now: u64, read: bool) -> bool {

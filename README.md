@@ -87,8 +87,8 @@ cargo build --release
 The window shows the device. On the OG, click and hold the button on screen, or hold
 **Space**. On the X, tap the touch bar under the screen, or use **←/↓/→** (or
 **1/2/3**) for left/center/right; hold them for holds. The side panel has reset,
-power-cycle, "wake now", WiFi in/out of range, battery voltage, turbo, pause and, on
-the X, the dock. The serial console is at the bottom.
+power-cycle, "wake now", [save points](#save-points), WiFi in/out of range, battery
+voltage, turbo, pause and, on the X, the dock. The serial console is at the bottom.
 
 **A fresh device** (`--erase`) boots into WiFi setup, like a new TRMNL. Its captive
 portal is forwarded to **http://127.0.0.1:8080/**; open it in a browser, pick
@@ -171,6 +171,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--trace f1,f2` | Log every call to these firmware functions, with arguments and caller |
 | `--profile` | Print where the CPU spent its time, and CPU state, on exit |
 | `--scale Z` | Initial display zoom (0 = fit) |
+| `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
 
 The simulated WiFi environment has two networks: **TRMNL-Sim** (any password
 works) and **Neighbors WiFi** (password `hunter2hunter2`), at −54 and −81 dBm. The
@@ -187,6 +188,31 @@ DNS lookup, a modem HTTP request) and while the setup portal is up, so no firmwa
 timeout fires early because of the simulator. A light sleep with no timer armed
 (shipment mode, waiting for the dock) also runs in real time. Deep sleep always lasts its real duration unless
 `--fast-sleep` is given; end it early with **Wake** or the button.
+
+### Save points
+
+A save point captures the device so you can jump straight back to e.g. "onboarded, asleep,
+image X showing" instead of redoing setup. In the side panel, **Save** keeps one in memory
+(listed below it, **⟲** restores it), **Save as…** also writes a `.trmnlsave` file, and
+**Open…** restores a file. The same is available as `POST /savepoint` / `POST /restore`,
+from Python, and with `--restore FILE` on the command line.
+
+- **Taken in deep sleep** (the useful case), it holds everything that survives deep sleep
+  on the device plus what the simulator needs to resume it: flash, RTC memory, the RTC_CNTL
+  registers, the S3 cache MMU, virtual time, boot count, the pending wake (timer and GPIO
+  mask), the e-paper image and controller RAM (UC8179 image/LUT registers, the parallel
+  panel's particle state, BWRY colors), the I2C chips (IQS323 touch configuration for touch
+  wake, BQ27427 data memory, TCA9535, TPS65185), the modem's flashed image, battery voltage,
+  dock and WiFi availability. Restoring it puts the device back into that sleep with the same
+  time left; it wakes by timer, button or touch as it would have.
+- **Taken at any other time** (running, light sleep, halted), it holds only what survives
+  pulling the battery: flash, the screen and the modem's flash. Restoring it powers the device
+  on from there.
+
+Files are zlib-compressed (about 1 MB for an OG, 2.5 MB for an X) and record the firmware
+build: restoring onto a different build is refused with an error, since the flash holds that
+build's app and the simulator's hooks follow its ELF. Taking one while the display refreshes
+is refused too; try again when it is idle.
 
 ## Integration testing
 
@@ -211,10 +237,14 @@ no internet. For the TRMNL OG it covers:
 - long-press WiFi reset;
 - WiFi out of range;
 - a full **OTA update** into the second app slot, and booting it.
+- save points: restoring a sleeping device in a new simulator (same screen, timer and
+  button wake, no re-onboarding), in-memory slots, power-off save points, and refusing
+  other builds and bad files.
 
 For the TRMNL BWRY ([test_trmnl_bwry.py](tests/integration/test_trmnl_bwry.py); skipped if
 there is no `trmnl_4clr` build): the device identity (`Model: og_4clr`), a 4-color image
-rendered exactly (compared as RGB), and the panel's long refresh.
+rendered exactly (compared as RGB), the panel's long refresh, and a save point keeping the
+color image.
 
 For the TRMNL X ([test_trmnl_x.py](tests/integration/test_trmnl_x.py); skipped if there is
 no `TRMNL_X` build):
@@ -226,7 +256,9 @@ no `TRMNL_X` build):
 - pixel-exact 1-bit PNGs and a 16-level 4-bit gray ramp on the 1872×1404 panel;
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
-- a left tap showing the previous cached image without touching the network.
+- a left tap showing the previous cached image without touching the network;
+- a save point restored in a new simulator: identical screen, dock state, and a touch wake
+  refreshing over 5 GHz.
 
 | Env var | |
 |---|---|
@@ -300,6 +332,10 @@ Useful pieces:
   `sim.dock(True/False)` puts it on or takes it off the dock.
 - `sim.assert_screen(golden, region=(x, y, w, h))` compares against a golden PNG. It
   creates the golden if missing, and writes `*.actual.png` on mismatch.
+- `sim.save_point(path=None, label=None)` takes a save point (into memory, and to `path`
+  if given); `sim.restore(path)` or `sim.restore(id=N)` restores one, `sim.save_points()`
+  lists the in-memory ones, and `Simulator(BUILD, restore=path)` starts from a file. See
+  [test_savepoints.py](tests/integration/test_savepoints.py).
 - `ProvisionedDevice` in `tests/integration/support.py` onboards once, then boots
   copies of that flash. Tests start from a registered device in seconds.
   `tests/integration/support_x.py` does the same for the X: `ShippedX` is a device fresh
@@ -334,6 +370,9 @@ Useful pieces:
 | `POST /mock/queue {...}`, `DELETE /mock/queue` | raw fields (and `image`) for the next `/api/display` answer only |
 | `POST /mock/files?path=/x.bin` | serve the body at that path; returns its device URL |
 | `GET /mock/requests?since=N` | recorded device requests: method, path, headers, body, status, summary, `sim_time_s` |
+| `POST /savepoint {"path"?: str, "label"?: str}` | take a [save point](#save-points) (also written to `path`, absolute or relative to the simulator's cwd); `{"ok", "savepoint": {"id", "label", "deep_sleep", "sim_time_s", "wake_at_s", "path", "bytes"}}`, 409 if refused |
+| `POST /restore {"path": str}` or `{"id": N}` | restore from a file or an in-memory save point; 409 on failure (e.g. another firmware build) |
+| `GET /savepoints` | the in-memory save points |
 
 ### CI
 
@@ -396,6 +435,9 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
   are approximations. The 4-color panel's refresh is a fixed sequence of solid frames,
   not a waveform model.
 - OTA to a different build needs that build's ELF (see above).
+- Save points: only deep-sleep ones keep RTC and chip state. A modem that was powered at
+  the time comes back powered off and boots afresh (its ESP-AT session isn't saved). The
+  modem's flashed image itself isn't kept between simulator runs except in save points.
 
 ## Troubleshooting
 

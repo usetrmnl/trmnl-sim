@@ -16,7 +16,7 @@ use egui::{
     Align, Align2, Color32, FontId, Key, KeyboardShortcut, Layout, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
     StrokeKind, Ui, Vec2,
 };
-use sim_api::{BoardInfo, Command, RunState, SimHandle, Status};
+use sim_api::{BoardInfo, Command, RunState, SavePointInfo, SavePointSource, SimHandle, Status};
 
 use console::ConsoleView;
 use device::{Geometry, Look, Screen, ZoneVis};
@@ -142,6 +142,8 @@ struct SimApp {
     turbo_pending: Option<Pending<bool>>,
     wifi_pending: Option<Pending<bool>>,
     pause_pending: Option<Pending<bool>>,
+    /// A save point command waiting for the emulator's answer (true = restore).
+    savepoint_reply: Option<(crossbeam_channel::Receiver<Result<SavePointInfo, String>>, bool)>,
     notice: Option<Notice>,
     server: Option<ServerPanel>,
     show_server: bool,
@@ -176,6 +178,7 @@ impl SimApp {
             turbo_pending: None,
             wifi_pending: None,
             pause_pending: None,
+            savepoint_reply: None,
             notice: None,
         }
     }
@@ -311,6 +314,84 @@ impl SimApp {
         match write_png(&path, &frame) {
             Ok(()) => self.notify(format!("Saved {}", path.display()), false),
             Err(e) => self.notify(format!("Screenshot failed: {e:#}"), true),
+        }
+    }
+
+    // ---- save points ----------------------------------------------------------------------------
+
+    fn save_point(&mut self, path: Option<std::path::PathBuf>) {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.send(Command::SavePoint { label: None, path, reply: Some(tx) });
+        self.savepoint_reply = Some((rx, false));
+    }
+
+    fn restore_save_point(&mut self, from: SavePointSource) {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        self.send(Command::RestoreSavePoint { from, reply: Some(tx) });
+        self.savepoint_reply = Some((rx, true));
+    }
+
+    fn poll_save_point(&mut self) {
+        let Some((rx, restore)) = &self.savepoint_reply else { return };
+        let restore = *restore;
+        let Ok(result) = rx.try_recv() else { return };
+        self.savepoint_reply = None;
+        match (result, restore) {
+            (Ok(i), false) => self.notify(format!("Saved \"{}\"", i.label), false),
+            (Ok(i), true) => self.notify(format!("Restored \"{}\"", i.label), false),
+            (Err(e), false) => self.notify(format!("Save failed: {e}"), true),
+            (Err(e), true) => self.notify(format!("Restore failed: {e}"), true),
+        }
+    }
+
+    fn save_points(&mut self, ui: &mut Ui) {
+        section(ui, "Save points");
+        let idle = self.savepoint_reply.is_none();
+        let full = matches!(self.status.state, RunState::DeepSleep { .. });
+        let tip = if full {
+            "Save the whole device (deep sleep: flash, RTC memory, screen, chips); restoring resumes this sleep"
+        } else {
+            "Not in deep sleep: saves only what survives a battery pull (flash, screen); \
+             restoring powers the device on. Save in deep sleep for the full state"
+        };
+        ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(idle, egui::Button::new("💾 Save")).on_hover_text(tip).clicked() {
+                self.save_point(None);
+            }
+            if ui.add_enabled(idle, egui::Button::new("Save as…")).on_hover_text(tip).clicked() {
+                let name = format!("trmnl-{}.trmnlsave", utc_timestamp());
+                let dialog = rfd::FileDialog::new().set_file_name(&name).add_filter("Save point", &["trmnlsave"]);
+                if let Some(path) = dialog.save_file() {
+                    self.save_point(Some(path));
+                }
+            }
+            if ui
+                .add_enabled(idle, egui::Button::new("Open…"))
+                .on_hover_text("Restore a save point file taken with this firmware build")
+                .clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("Save point", &["trmnlsave"]).pick_file()
+            {
+                self.restore_save_point(SavePointSource::File(path));
+            }
+        });
+        if self.status.savepoints.is_empty() {
+            ui.weak("None yet. Saves in deep sleep capture the whole device.");
+        }
+        let mut restore = None;
+        for sp in self.status.savepoints.iter().rev() {
+            ui.horizontal(|ui| {
+                if ui.add_enabled(idle, egui::Button::new("⟲").small()).on_hover_text("Restore").clicked() {
+                    restore = Some(sp.id);
+                }
+                let kind = if sp.deep_sleep { "" } else { " (power-off)" };
+                let resp = ui.add(egui::Label::new(format!("#{} {}{kind}", sp.id, sp.label)).truncate());
+                if let Some(p) = &sp.path {
+                    resp.on_hover_text(p.display().to_string());
+                }
+            });
+        }
+        if let Some(id) = restore {
+            self.restore_save_point(SavePointSource::Slot(id));
         }
     }
 
@@ -493,6 +574,8 @@ impl SimApp {
                     Pending::set(&mut self.turbo_pending, turbo);
                 }
             });
+
+            self.save_points(ui);
 
             section(ui, "Network");
             let mut wifi = Pending::resolve(&mut self.wifi_pending, self.status.wifi_available);
@@ -822,6 +905,7 @@ impl eframe::App for SimApp {
         let console_changed = self.console.poll();
         self.touch.begin_frame();
         self.handle_keys(&ctx);
+        self.poll_save_point();
         if self.notice.as_ref().is_some_and(|n| n.at.elapsed() > Duration::from_secs(8)) {
             self.notice = None;
         }
@@ -1082,6 +1166,15 @@ mod render_tests {
             s.docked = docked;
             s.firmware = "render test".into();
             s.state = RunState::DeepSleep { wake_at_ns: Some(872_000_000_000) };
+            s.savepoints = vec![sim_api::SavePointInfo {
+                id: 1,
+                label: "deep sleep at 12.3 s, boot 2".into(),
+                deep_sleep: true,
+                sim_time_ns: 12_300_000_000,
+                wake_at_ns: Some(312_300_000_000),
+                path: None,
+                bytes: 970_000,
+            }];
         }
         for i in 0..50 {
             handle.console.lock().push_bytes(format!("I ({i}) test: line {i}\n").as_bytes());
