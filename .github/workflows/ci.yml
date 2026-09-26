@@ -120,6 +120,7 @@ jobs:
           TRMNL_X_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/TRMNL_X
           TRMNL_BWRY_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/trmnl_4clr
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
+          TRMNL_SIM_COVERAGE: ${{ github.workspace }}/sim-coverage
           FORCE_COLOR: "1"
         run: python run.py -v
 
@@ -132,4 +133,13 @@ jobs:
         with:
           name: simulator-logs-and-screens
           path: sim-artifacts/
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: firmware-coverage
+          path: |
+            sim-coverage/merged.info
+            sim-coverage/html/
           if-no-files-found: ignore

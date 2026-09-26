@@ -7,7 +7,8 @@
 #
 # Env: TRMNL_FIRMWARE (firmware checkout, default ../trmnl-firmware), TRMNL_FIRMWARE_BUILD,
 #      TRMNL_X_BUILD, TRMNL_BWRY_BUILD, TRMNL_SIM_REALTIME=1,
-#      TRMNL_SIM_NETWORK=1, TRMNL_SIM_UPDATE_GOLDEN=1, TRMNL_SIM_ARTIFACTS=<dir>.
+#      TRMNL_SIM_NETWORK=1, TRMNL_SIM_UPDATE_GOLDEN=1, TRMNL_SIM_ARTIFACTS=<dir>,
+#      TRMNL_SIM_COVERAGE=<dir> (firmware code coverage; merged report printed at the end).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -53,6 +53,10 @@ class Simulator:
         name: label for artifacts. If $TRMNL_SIM_ARTIFACTS is set, the log and final
             screen of every simulator are saved there on close (handy in CI).
         restore: start from this save point file (see `save_point`) instead of booting.
+        coverage: record firmware code coverage and write an lcov tracefile here when the
+            simulator exits (`--coverage`). If $TRMNL_SIM_COVERAGE is set to a directory,
+            every simulator writes one there (`<name>-*.info`); merge them with
+            scripts/coverage.py.
     """
 
     def __init__(
@@ -69,6 +73,7 @@ class Simulator:
         startup_timeout_s: float = 30,
         name: Optional[str] = None,
         restore: Optional[str | os.PathLike] = None,
+        coverage: Optional[str | os.PathLike] = None,
     ):
         self.build_dir = Path(build_dir)
         self._tmpdir = tempfile.mkdtemp(prefix="trmnl-sim-")
@@ -96,6 +101,15 @@ class Simulator:
             args.append("--turbo")
         if restore:
             args += ["--restore", str(Path(restore).resolve())]
+        cov_dir = os.environ.get("TRMNL_SIM_COVERAGE")
+        if coverage is None and cov_dir:
+            Path(cov_dir).mkdir(parents=True, exist_ok=True)
+            stem = re.sub(r"[^\w.-]+", "_", self.name)
+            fd, coverage = tempfile.mkstemp(prefix=f"{stem}-", suffix=".info", dir=cov_dir)
+            os.close(fd)
+        self.coverage_path = Path(coverage) if coverage else None
+        if self.coverage_path:
+            args += ["--coverage", str(self.coverage_path)]
         args += list(extra_args)
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(args, stdout=self._log, stderr=subprocess.STDOUT)
@@ -141,7 +155,8 @@ class Simulator:
         if self.proc.poll() is None:
             try:
                 self._post("/quit")
-                self.proc.wait(timeout=10)
+                # Writing the coverage report reads the ELF's line tables first.
+                self.proc.wait(timeout=60 if self.coverage_path else 10)
             except Exception:
                 self.proc.kill()
         self._log.close()
@@ -178,6 +193,18 @@ class Simulator:
         if code != 200:
             raise SimError(f"GET {path} -> {code}: {data[:200]!r}")
         return json.loads(data)
+
+    # ---- coverage -------------------------------------------------------------------------------
+
+    def write_coverage(self, path: Optional[str | os.PathLike] = None, reset: bool = False) -> dict:
+        """Write the firmware code coverage so far as an lcov tracefile (default: the
+        `coverage` path) and return its totals (`lines_found`, `lines_hit`,
+        `functions_found`, `functions_hit`, `files`, `path`). `reset` starts over
+        afterwards. Needs `coverage=` (or $TRMNL_SIM_COVERAGE)."""
+        body: dict[str, Any] = {"reset": reset}
+        if path is not None:
+            body["path"] = str(Path(path).resolve())
+        return self._post("/coverage", body, timeout=120)
 
     # ---- UI actions ---------------------------------------------------------------------------
 

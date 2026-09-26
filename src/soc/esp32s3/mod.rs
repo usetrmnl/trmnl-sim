@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use crate::arch::GuestCpu;
 use crate::arch::xtensa::{Step, Trap, Xtensa, cause};
 use crate::board::Board;
+use crate::coverage::Coverage;
 use crate::devices::spi_flash::SpiFlash;
 use crate::firmware::{self, Symbols};
 use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MAGIC_BASE, MachineRequest};
@@ -81,6 +82,8 @@ pub struct Esp32s3 {
     in_wake_stub: bool,
     /// Instructions retired (both cores).
     retired: u64,
+    /// Executed instructions (both cores), when recording code coverage.
+    coverage: Option<Box<Coverage>>,
 }
 
 struct NullBoard;
@@ -237,6 +240,7 @@ impl Esp32s3 {
             appcpu_boot_addr: None,
             in_wake_stub: false,
             retired: 0,
+            coverage: None,
         };
         m.reset(ResetKind::PowerOn);
         Ok(m)
@@ -281,6 +285,7 @@ impl Esp32s3 {
             return;
         };
         if self.active_app == Some(i) {
+            self.cover_app();
             return;
         }
         let mut syms = self.rom_syms.clone();
@@ -301,6 +306,14 @@ impl Esp32s3 {
         self.syms = syms;
         self.hooks = hooks;
         self.active_app = Some(i);
+        self.cover_app();
+    }
+
+    /// Point coverage recording at the app about to run.
+    fn cover_app(&mut self) {
+        if let (Some(cov), Some(i)) = (self.coverage.as_mut(), self.active_app) {
+            cov.activate(i, self.hooks.replaced());
+        }
     }
 
     /// ROM behaviour after reset on the PRO core: run the deep-sleep wake stub
@@ -487,6 +500,9 @@ impl Esp32s3 {
                     return Ok((done, true));
                 }
                 continue;
+            }
+            if let Some(cov) = &mut self.coverage {
+                cov.hit(pc);
             }
             let step = self.cores[core].step(&mut self.bus);
             match step {
@@ -777,6 +793,15 @@ impl Machine for Esp32s3 {
     fn net_status(&self) -> NetStatus {
         let w = &self.hle.wifi;
         NetStatus { connected: w.is_connected(), ip: w.ip().map(|i| i.to_string()), portal_url: w.portal_url() }
+    }
+
+    fn set_coverage(&mut self, cov: Coverage) {
+        self.coverage = Some(Box::new(cov));
+        self.cover_app();
+    }
+
+    fn coverage(&mut self) -> Option<&mut Coverage> {
+        self.coverage.as_deref_mut()
     }
 
     fn light_sleep(&self) -> Option<Option<u64>> {

@@ -26,6 +26,7 @@
 //! | POST   | `/savepoint`           | `{"path": "/abs/file.trmnlsave", "label": "..."}` (both optional) | `{"ok", "savepoint"}`; 409 if not possible |
 //! | POST   | `/restore`             | `{"path": "..."}` or `{"id": 3}` (in-memory slot) | `{"ok", "savepoint"}`; 409 on failure |
 //! | GET    | `/savepoints`          |                                                | `{"savepoints": [...]}` (in-memory slots) |
+//! | POST   | `/coverage`            | `{"path": "out.info", "reset": false}` (both optional) write lcov now | `{"ok", "path", "lines_found", "lines_hit", ...}` |
 //! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
@@ -182,6 +183,29 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
         (Method::Post, "/debug") => {
             h.send(Command::DumpDebug);
             ok()
+        }
+        (Method::Post, "/coverage") => {
+            let b = body_json(body)?;
+            let (reply, rx) = crossbeam_channel::bounded(1);
+            let path = b["path"].as_str().map(std::path::PathBuf::from);
+            h.send(Command::WriteCoverage { path, reset: b["reset"].as_bool().unwrap_or(false), reply });
+            // Reading the ELF's line tables the first time takes a moment.
+            match rx.recv_timeout(Duration::from_secs(120)) {
+                Ok(Ok(s)) => Ok(json_reply(
+                    200,
+                    json!({
+                        "ok": true,
+                        "path": s.path,
+                        "files": s.files,
+                        "lines_found": s.lines_found,
+                        "lines_hit": s.lines_hit,
+                        "functions_found": s.functions_found,
+                        "functions_hit": s.functions_hit,
+                    }),
+                )),
+                Ok(Err(e)) => Ok(err(409, e)),
+                Err(_) => Ok(err(504, "no coverage report from the emulator")),
+            }
         }
         (Method::Post, "/quit") => {
             h.send(Command::Quit);

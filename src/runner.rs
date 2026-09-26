@@ -5,8 +5,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use sim_api::{Command, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
+use sim_api::{Command, CoverageSummary, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
 
+use crate::coverage::Reporter;
 use crate::savepoint::{FirmwareId, SavePoint, SavedPower, StateReader, StateWriter};
 use crate::soc::{Machine, Output, ResetKind, SliceExit};
 
@@ -27,6 +28,8 @@ pub struct RunnerOptions {
     pub firmware: FirmwareId,
     /// Start from this save point instead of a power-on boot.
     pub restore: Option<SavePoint>,
+    /// Write code coverage when the run ends (and on request); the machine records it.
+    pub coverage: Option<Reporter>,
 }
 
 /// How a run ended.
@@ -154,7 +157,7 @@ fn describe_restore(sp: &SavePoint) -> String {
     }
 }
 
-pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> RunOutcome {
+pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) -> RunOutcome {
     let started = Instant::now();
     let mut turbo = opts.turbo;
     let mut paused = false;
@@ -400,6 +403,11 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                         let _ = tx.send(result);
                     }
                 }
+                Command::WriteCoverage { path, reset, reply } => {
+                    let _ = reply.send(write_coverage(m.as_mut(), opts.coverage.as_mut(), path.as_deref(), reset));
+                    // Don't make up for the time spent writing it.
+                    rebase = true;
+                }
             }
             if rebase {
                 anchor_wall = Instant::now();
@@ -596,6 +604,21 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
             m.instructions() as f64 / 1e6 / wall
         );
     }
+    if opts.coverage.is_some() {
+        match write_coverage(m.as_mut(), opts.coverage.as_mut(), None, false) {
+            Ok(s) => eprintln!(
+                "[sim] coverage: {} of {} lines ({:.1}%), {} of {} functions in {} files -> {}",
+                s.lines_hit,
+                s.lines_found,
+                100.0 * s.lines_hit as f64 / s.lines_found.max(1) as f64,
+                s.functions_hit,
+                s.functions_found,
+                s.files,
+                s.path
+            ),
+            Err(e) => eprintln!("[sim] coverage: {e}"),
+        }
+    }
     if opts.profile {
         println!("\n=== profile (samples per function) ===");
         for (name, n) in m.profile().into_iter().take(25) {
@@ -606,4 +629,20 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
         println!("\n=== board ===\n{}", m.board().diagnostics(now));
     }
     RunOutcome { halted: (!halted_msg.is_empty()).then_some(halted_msg) }
+}
+
+fn write_coverage(
+    m: &mut dyn Machine,
+    reporter: Option<&mut Reporter>,
+    path: Option<&std::path::Path>,
+    reset: bool,
+) -> Result<CoverageSummary, String> {
+    let (Some(reporter), Some(cov)) = (reporter, m.coverage()) else {
+        return Err("coverage is not being recorded (run with --coverage FILE)".into());
+    };
+    let summary = reporter.write(cov, path).map_err(|e| format!("{e:#}"))?;
+    if reset {
+        cov.clear();
+    }
+    Ok(summary)
 }

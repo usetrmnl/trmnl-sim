@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::arch::GuestCpu;
 use crate::arch::riscv::{Rv32, Step};
 use crate::board::Board;
+use crate::coverage::Coverage;
 use crate::devices::spi_flash::SpiFlash;
 use crate::firmware::{self, Symbols};
 use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MachineRequest};
@@ -49,6 +50,8 @@ pub struct Esp32c3 {
     hle: HleState,
     /// Light sleep in progress: (wake time, wake on GPIO).
     light_sleep: Option<(Option<u64>, bool)>,
+    /// Executed instructions, when recording code coverage.
+    coverage: Option<Box<Coverage>>,
 }
 
 /// Minimal board used while the real one is lent to HLE code.
@@ -154,6 +157,7 @@ impl Esp32c3 {
             irq_counts: [0; 32],
             hle: HleState::new(periph::Periph::new().mac),
             light_sleep: None,
+            coverage: None,
         };
         m.reset(ResetKind::PowerOn);
         Ok(m)
@@ -195,6 +199,7 @@ impl Esp32c3 {
             return;
         };
         if self.active_app == Some(i) {
+            self.cover_app();
             return;
         }
         let mut syms = self.rom_syms.clone();
@@ -213,6 +218,14 @@ impl Esp32c3 {
         self.syms = syms;
         self.hooks = hooks;
         self.active_app = Some(i);
+        self.cover_app();
+    }
+
+    /// Point coverage recording at the app about to run.
+    fn cover_app(&mut self) {
+        if let (Some(cov), Some(i)) = (self.coverage.as_mut(), self.active_app) {
+            cov.activate(i, self.hooks.replaced());
+        }
     }
 
     fn msg(&mut self, s: String) {
@@ -383,6 +396,15 @@ impl Esp32c3 {
 }
 
 impl Machine for Esp32c3 {
+    fn set_coverage(&mut self, cov: Coverage) {
+        self.coverage = Some(Box::new(cov));
+        self.cover_app();
+    }
+
+    fn coverage(&mut self) -> Option<&mut Coverage> {
+        self.coverage.as_deref_mut()
+    }
+
     fn light_sleep(&self) -> Option<Option<u64>> {
         self.light_sleep.map(|(w, _)| w)
     }
@@ -422,6 +444,9 @@ impl Machine for Esp32c3 {
                     if !self.requests.is_empty() {
                         break;
                     }
+                }
+                if let Some(cov) = &mut self.coverage {
+                    cov.hit(self.cpu.pc);
                 }
                 match self.cpu.step(&mut self.bus) {
                     Step::Ok => {}

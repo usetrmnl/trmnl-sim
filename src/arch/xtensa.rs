@@ -72,7 +72,7 @@ pub mod fpu;
 #[cfg(test)]
 mod scan;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use super::{GuestCpu, MemBus};
 use decode::{Insn, Op, decode, insn_len};

@@ -5,6 +5,10 @@
 
 Color is on when stderr is a terminal; NO_COLOR=1 turns it off, FORCE_COLOR=1 turns it on
 (e.g. in CI logs, which render ANSI colors).
+
+With TRMNL_SIM_COVERAGE=<dir>, every simulator writes an lcov tracefile there; afterwards
+they are merged into <dir>/merged.info and <dir>/html/, and the coverage of the
+firmware's own src/ and lib/ is printed.
 """
 
 import os
@@ -90,6 +94,25 @@ class ColorRunner(unittest.TextTestRunner):
         super().__init__(*args, **kw)
 
 
+def report_coverage(cov_dir: str) -> None:
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    sys.path.insert(0, str(here.parent.parent / "scripts"))
+    import coverage
+
+    out = Path(cov_dir)
+    # Relative paths in the tracefiles are relative to the firmware checkout.
+    build = os.environ.get("TRMNL_FIRMWARE_BUILD", str(here.parent.parent.parent / "trmnl-firmware/.pio/build/trmnl"))
+    root = Path(build).resolve().parent.parent.parent
+    print(paint(BOLD, f"\nFirmware coverage (src/, lib/); full report in {out / 'html'}"), file=sys.stderr)
+    coverage.main([str(out), "-o", str(out / "merged.info"), "--html", str(out / "html"), "--root", str(root), "-q"])
+    coverage.main([str(out), "--include", "src/", "--include", "lib/"])
+
+
 if __name__ == "__main__":
     sys.argv[0] = "run.py"
-    unittest.main(module=None, testRunner=ColorRunner)
+    prog = unittest.main(module=None, testRunner=ColorRunner, exit=False)
+    if os.environ.get("TRMNL_SIM_COVERAGE"):
+        report_coverage(os.environ["TRMNL_SIM_COVERAGE"])
+    sys.exit(not prog.result.wasSuccessful())

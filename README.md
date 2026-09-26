@@ -170,6 +170,9 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--rom PATH` | ROM ELF for the build's chip (or `$TRMNL_SIM_ROM`) |
 | `--trace f1,f2` | Log every call to these firmware functions, with arguments and caller |
 | `--profile` | Print where the CPU spent its time, and CPU state, on exit |
+| `--coverage FILE` | Record which firmware instructions run; write an lcov tracefile on exit (see [Code coverage](#code-coverage)) |
+| `--coverage-root DIR` | Write source paths under DIR relative to it (default: the firmware checkout of `<build_dir>`) |
+| `--coverage-include P,..` | Only report source files whose path starts with one of these, e.g. `src/,lib/` |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
 
@@ -268,6 +271,7 @@ no `TRMNL_X` build):
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
+| `TRMNL_SIM_COVERAGE=DIR` | Record firmware code coverage in every simulator; merge and report it after the run (see [Code coverage](#code-coverage)) |
 | `TRMNL_SIM_NETWORK=1` | Also run tests against the real trmnl.app |
 | `TRMNL_SIM_BIN` | Simulator binary (default `target/release/trmnl-sim`) |
 
@@ -373,12 +377,52 @@ Useful pieces:
 | `POST /savepoint {"path"?: str, "label"?: str}` | take a [save point](#save-points) (also written to `path`, absolute or relative to the simulator's cwd); `{"ok", "savepoint": {"id", "label", "deep_sleep", "sim_time_s", "wake_at_s", "path", "bytes"}}`, 409 if refused |
 | `POST /restore {"path": str}` or `{"id": N}` | restore from a file or an in-memory save point; 409 on failure (e.g. another firmware build) |
 | `GET /savepoints` | the in-memory save points |
+| `POST /coverage {"path": "x.info", "reset": bool}` | with `--coverage`: write the lcov tracefile now (default path: the `--coverage` file), then optionally start over; returns `lines_found`/`lines_hit`/`functions_found`/`functions_hit`/`files` |
+
+### Code coverage
+
+`--coverage FILE` records every instruction address the firmware executes (a bitmap
+over the app ELF's code sections, kept across resets and deep sleeps) and, when the
+run ends, maps it to source lines through the ELF's DWARF line tables and writes an
+[lcov](https://github.com/linux-test-project/lcov) tracefile: a line is hit if any
+instruction attributed to it ran (inlined code counts for the line it came from), and
+listed with count 0 if it has code that never ran. Functions come from the symbol
+table (`FN`/`FNDA`, demangled). Counts are 0/1 per run. Paths of the firmware's own
+sources (`src/`, `lib/`, `.pio/libdeps/`) are relative to its checkout; framework and
+IDF sources keep their absolute paths.
+
+```sh
+trmnl-sim ../trmnl-firmware/.pio/build/trmnl --headless --seconds 30 --coverage og.info --coverage-include src/,lib/
+```
+
+`POST /coverage` (Python: `sim.write_coverage(path, reset=False)`) writes a tracefile
+mid-run, e.g. to see what one step of a test covers. After an OTA to another build
+(`--elf`), both builds' lines are reported, merged by file and line.
+
+`TRMNL_SIM_COVERAGE=DIR bin/spec` makes every simulator the tests start write
+`DIR/<test>-*.info`. At the end, `run.py` merges them into `DIR/merged.info` and an
+HTML report in `DIR/html/`, and prints the coverage of the firmware's `src/` and
+`lib/`. [scripts/coverage.py](scripts/coverage.py) (standard library only) does the
+merging and reporting on its own:
+
+```sh
+scripts/coverage.py DIR --include src/ --include lib/            # per-file table and total
+scripts/coverage.py DIR -o all.info --html cov-html --root ../trmnl-firmware
+genhtml all.info -o cov-html                                     # lcov's report, if installed
+```
+
+Recording costs roughly 5-8% of emulation speed (about 1-3% when off); the report
+takes a fraction of a second. Not covered: the 2nd-stage bootloader and mask ROM code (no
+line tables for them), and functions replaced by [HLE](#architecture) hooks (their
+guest code never runs, so they are left out of the report rather than counted as
+missed). A simulator killed rather than quit writes no tracefile.
 
 ### CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs format, clippy and unit
 tests, then builds the firmware with PlatformIO and runs the integration suite. On
-failure it uploads simulator logs, final screens and screen diffs. It can also be
+failure it uploads simulator logs, final screens and screen diffs. It also uploads
+the suite's firmware code coverage (merged lcov and HTML) as an artifact. It can also be
 called from the firmware repository to test every firmware PR; see
 [docs/firmware-repo-workflow.yml](docs/firmware-repo-workflow.yml). Adjust the
 `usetrmnl/trmnl-sim` repository name if the simulator is hosted elsewhere. CI builds
@@ -396,6 +440,7 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 ├─ board/              what's wired to the pins (trmnl_og.rs, trmnl_x.rs); Board trait
 ├─ devices/            UC8179 (B/W and 4-color) and parallel EPD panels, SPI NOR flash, ESP-AT modem,
 │                      I2C chips (TCA9535, TPS65185, IQS323, BQ27427)
+├─ coverage/           executed-instruction bitmaps, DWARF line mapping, lcov output
 ├─ hle/                ESP-IDF function replacements by ELF symbol (WiFi driver, sleep,
 │                      ADC), ISA-neutral; hooks can call back into guest code
 └─ firmware.rs         build artifacts, ELF symbols, OTA slot and app selection

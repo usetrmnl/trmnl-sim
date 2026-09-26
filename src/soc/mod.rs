@@ -6,6 +6,7 @@ pub mod esp32c3;
 pub mod esp32s3;
 
 use crate::board::Board;
+use crate::coverage::Coverage;
 use crate::savepoint::SocState;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +65,9 @@ pub trait Machine: Send {
     /// Power the SoC down into saved state: nothing of the running firmware is kept, and
     /// the next `reset` boots from it (a deep-sleep wake keeps the restored RTC state).
     fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()>;
+    /// Start recording code coverage (accumulates across resets).
+    fn set_coverage(&mut self, cov: Coverage);
+    fn coverage(&mut self) -> Option<&mut Coverage>;
 }
 
 #[derive(Debug, Clone)]

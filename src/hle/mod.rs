@@ -171,6 +171,11 @@ impl Hooks {
         self.by_addr.insert(addr, (name, f));
     }
 
+    /// Entry points of the installed hooks (whose guest bodies may never run).
+    pub fn replaced(&self) -> impl Iterator<Item = u32> + '_ {
+        self.by_addr.keys().copied()
+    }
+
     /// Log every call to `name` (args and caller) without changing behaviour.
     pub fn trace(&mut self, syms: &Symbols, name: &str) -> bool {
         let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());

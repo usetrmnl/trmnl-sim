@@ -3,6 +3,7 @@
 
 mod arch;
 mod board;
+mod coverage;
 mod devices;
 mod firmware;
 mod hle;
@@ -81,6 +82,18 @@ struct Cli {
     /// Log calls to these firmware functions (comma separated symbol names).
     #[arg(long, value_delimiter = ',')]
     trace: Vec<String>,
+    /// Record which firmware instructions execute and write an lcov tracefile here when
+    /// the run ends (or on POST /coverage).
+    #[arg(long, value_name = "FILE")]
+    coverage: Option<PathBuf>,
+    /// Write coverage paths under this directory relative to it (default: the firmware
+    /// checkout the build dir is in).
+    #[arg(long, value_name = "DIR")]
+    coverage_root: Option<PathBuf>,
+    /// Only report source files whose (relative) path starts with one of these, e.g.
+    /// src/,lib/ (repeatable).
+    #[arg(long, value_name = "PREFIX", value_delimiter = ',')]
+    coverage_include: Vec<String>,
     /// Panel revision returned by the UC8179 REV command.
     #[arg(long, default_value = "0x0a0c1b2c", value_parser = parse_u32)]
     panel_rev: u32,
@@ -187,6 +200,21 @@ fn main() -> Result<()> {
             eprintln!("trmnl-sim: the save point's MAC replaces --mac");
         }
     }
+    let coverage = match &cli.coverage {
+        Some(path) => {
+            let elfs: Vec<PathBuf> =
+                std::iter::once(cli.build_dir.join("firmware.elf")).chain(cli.elf.clone()).collect();
+            let data = elfs.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
+            machine.set_coverage(coverage::Coverage::new(&data.iter().map(Vec::as_slice).collect::<Vec<_>>())?);
+            let filter = coverage::PathFilter {
+                root: cli.coverage_root.clone().or_else(|| coverage::checkout_of(&cli.build_dir)),
+                include: cli.coverage_include.clone(),
+            };
+            Some(coverage::Reporter::new(elfs, filter, path.clone()))
+        }
+        None => None,
+    };
+
     let frame_for_shot = frame.clone();
     let (handle, ports) = sim_api::channel(frame);
     let opts = runner::RunnerOptions {
@@ -199,6 +227,7 @@ fn main() -> Result<()> {
         exit_on_halt: cli.headless && cli.control.is_none(),
         firmware: fw_id,
         restore,
+        coverage,
     };
     let mock = mock_trmnl::MockServer::new(panel);
     let status = handle.status.clone();

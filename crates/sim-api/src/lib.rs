@@ -181,6 +181,13 @@ pub enum Command {
         from: SavePointSource,
         reply: Option<SavePointReply>,
     },
+    /// Write the code coverage recorded so far as an lcov tracefile (to `path`, default
+    /// the `--coverage` file), then forget it if `reset`. Needs `--coverage`.
+    WriteCoverage {
+        path: Option<std::path::PathBuf>,
+        reset: bool,
+        reply: Sender<Result<CoverageSummary, String>>,
+    },
     Quit,
 }
 
@@ -266,6 +273,19 @@ impl Default for Status {
             savepoints: Vec::new(),
         }
     }
+}
+
+/// Totals of a written coverage report.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CoverageSummary {
+    /// Where the lcov tracefile was written.
+    pub path: String,
+    pub files: u64,
+    /// Source lines with code, and how many of them executed.
+    pub lines_found: u64,
+    pub lines_hit: u64,
+    pub functions_found: u64,
+    pub functions_hit: u64,
 }
 
 /// Serial console output, split into lines.
