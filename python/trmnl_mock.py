@@ -286,6 +286,13 @@ class MockTrmnl:
                 if fault.get("close"):
                     self.close_connection = True
                     return
+                if fault.get("redirect"):
+                    self.send_response(fault.get("status") or 307)
+                    self.send_header("Location", fault["redirect"])
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    return
                 code, ctype, payload = mock._respond(rec)
                 if fault.get("status") is not None:
                     code, ctype, payload = fault["status"], "text/plain", f"fault: HTTP {fault['status']}".encode()
@@ -295,6 +302,18 @@ class MockTrmnl:
                 ctype = fault.get("content_type") or ctype
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
+                if fault.get("chunked"):
+                    # No Content-Length: the body is sent chunked.
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    body = payload[: fault["truncate"]] if fault.get("truncate") is not None else payload
+                    for i in range(0, len(body), 4096):
+                        part = body[i:i + 4096]
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(part), part))
+                    if fault.get("truncate") is None:
+                        self.wfile.write(b"0\r\n\r\n")
+                    return
                 # A truncated body still announces its full length, like a connection that dies.
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Connection", "close")
@@ -376,7 +395,7 @@ class MockTrmnl:
     def set_fault(self, path: str, *, status: Optional[int] = None, body: Optional[str | bytes] = None,
                   content_type: Optional[str] = None, delay: float = 0, hang: bool = False,
                   truncate: Optional[int] = None, rate: Optional[int] = None, close: bool = False,
-                  times: Optional[int] = None) -> None:
+                  redirect: Optional[str] = None, chunked: bool = False, times: Optional[int] = None) -> None:
         """Make requests to `path` (exact, or a prefix ending in "*", e.g. "/images/*") misbehave:
 
             status: answer with this HTTP status (and a short text body)
@@ -388,10 +407,14 @@ class MockTrmnl:
                 size), then close the connection
             rate: send the body at this many bytes per second (a slow download)
             close: close the connection without answering
+            redirect: answer with a redirect to this URL (status 307 unless `status` is given)
+            chunked: send the body chunked, without a Content-Length (with `truncate`: stop
+                after that many bytes without the final chunk)
             times: only the next N matching requests (default: until cleared)
         """
         spec = {"status": status, "body": body, "content_type": content_type, "delay": delay, "hang": hang,
-                "truncate": truncate, "rate": rate, "close": close, "times": times}
+                "truncate": truncate, "rate": rate, "close": close, "redirect": redirect, "chunked": chunked,
+                "times": times}
         with self._cv:
             self.faults[path] = spec
 
