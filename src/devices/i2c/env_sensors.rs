@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn scd41_reports_a_sample_after_a_single_shot() {
         let mut s = Scd41::new(Climate::default());
-        let mut cmd = |s: &mut Scd41, c: u16| {
+        let cmd = |s: &mut Scd41, c: u16| {
             s.start(0, false);
             for b in c.to_be_bytes() {
                 s.write(0, b);
