@@ -63,10 +63,13 @@
 //! * 1bpp: 3 black pushes after CLEAR_FAST -> 0.904 (pixel 230); 3 white
 //!   pushes after that -> 0.098; 3 black pushes from rest -> 0.953
 //! * gray levels 0..15 after CLEAR_FAST (darkness): .904 .801 .752 .731 .693
-//!   .680 .593 .563 .513 .347 .277 .264 .224 .114 .014 .000 — pixels 230 204
-//!   192 186 177 173 151 143 131 88 71 67 57 29 4 0 (smallest step 0.013)
+//!   .680 .593 .563 .513 .347 .277 .264 .224 .114 .014 .000 (smallest step 0.013)
 //!
-//! The displayed value is `round(d * 255)`.
+//! Those darknesses are unevenly spaced, while the real panel shows the 16
+//! levels as an even ramp (and level 0 as solid black), so the displayed value
+//! is `round(optical(d) * 255)`, where `optical` is piecewise linear through
+//! the level darknesses ([`GRAY_KNOTS`]): level `n` shows as exactly
+//! `255 - 17n` of the source image.
 //!
 //! # Output
 //!
@@ -201,9 +204,30 @@ pub fn apply_push(d: &mut f32, last: &mut u8, code: u8) {
     }
 }
 
+/// Darkness the model reaches for each of the firmware's 16 gray levels (`u8_graytable`
+/// after CLEAR_FAST), lightest first. The real panel shows these as even steps.
+const GRAY_KNOTS: [f32; 16] = [
+    0.000327, 0.014170, 0.114186, 0.223993, 0.263524, 0.276931, 0.346846, 0.512938, 0.562622, 0.592738, 0.680258,
+    0.693484, 0.731360, 0.751803, 0.801324, 0.903661,
+];
+
+/// Optical darkness of particle state `d`: piecewise linear through [`GRAY_KNOTS`],
+/// so gray level `n` shows as `n / 15`; anything past level 0 is solid black.
+fn optical(d: f32) -> f32 {
+    let i = GRAY_KNOTS.partition_point(|&k| k < d);
+    match i {
+        0 => 0.0,
+        16 => 1.0,
+        _ => {
+            let (k0, k1) = (GRAY_KNOTS[i - 1], GRAY_KNOTS[i]);
+            ((i - 1) as f32 + (d - k0) / (k1 - k0)) / 15.0
+        }
+    }
+}
+
 #[inline(always)]
 fn to_pixel(d: f32) -> u8 {
-    (d * 255.0 + 0.5) as u8
+    (optical(d) * 255.0 + 0.5) as u8
 }
 
 /// Per-scan accumulators.

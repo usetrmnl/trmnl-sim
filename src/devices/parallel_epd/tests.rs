@@ -349,6 +349,11 @@ fn physics_graytable_is_monotonic_ramp() {
     }
     let px: Vec<u8> = lv.iter().map(|&d| to_pixel(d)).collect();
     assert!(px.windows(2).all(|p| p[0] > p[1]), "{px:?}");
+    // GRAY_KNOTS tracks the physics, so each level shows as its source gray.
+    for (i, (&d, &k)) in lv.iter().zip(GRAY_KNOTS.iter().rev()).enumerate() {
+        assert!((d - k).abs() < 1e-5, "GRAY_KNOTS[{}] = {k}, physics gives {d}", 15 - i);
+    }
+    assert_eq!(px, (0..16).map(|i| 255 - 17 * i).collect::<Vec<u8>>());
 }
 
 // ---- Full-panel tests ----
@@ -497,7 +502,7 @@ fn generation_advances_every_push_scan_and_shows_flash() {
     }
     // Animation: darkens monotonically to black, then lightens back to white.
     assert!(dark[..8].windows(2).all(|p| p[0] <= p[1]) && dark[7] == 255, "{dark:?}");
-    assert!(dark[8..].windows(2).all(|p| p[0] >= p[1]) && dark[15] == 0, "{dark:?}");
+    assert!(dark[8..].windows(2).all(|p| p[0] >= p[1]) && dark[15] <= 1, "{dark:?}");
     dr.clear(0x00, 1);
     let g = dr.generation();
     dr.clear(0x00, 1);
@@ -578,7 +583,17 @@ fn robust_against_odd_input() {
     let f = e.frame();
     let f = f.lock();
     assert_eq!(f.generation, 1);
-    assert_eq!(&f.pixels[..6], &[to_pixel(PUSH_RATE_BLACK), 0, 0, to_pixel(PUSH_RATE_BLACK), 163, 163]);
+    assert_eq!(
+        &f.pixels[..6],
+        &[
+            to_pixel(PUSH_RATE_BLACK),
+            0,
+            0,
+            to_pixel(PUSH_RATE_BLACK),
+            to_pixel(PUSH_RATE_BLACK),
+            to_pixel(PUSH_RATE_BLACK)
+        ]
+    );
 }
 
 /// cargo test --release --no-default-features parallel_epd::tests::bench -- --ignored --nocapture
