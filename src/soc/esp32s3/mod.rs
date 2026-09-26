@@ -361,6 +361,7 @@ impl Esp32s3 {
             hle::memcheck::install(&mut hooks, &syms, mc);
         }
         hooks.install(&syms, "ets_set_appcpu_boot_addr", hook_appcpu_boot_addr);
+        hooks.install(&syms, "s_test_psram", hook_skip_psram_test);
         hooks.trampoline(MAGIC_BOOT_RETURN, "boot/wake-stub return", trampoline_boot_return);
         for name in &self.trace {
             if !hooks.trace(&syms, name) {
@@ -626,6 +627,13 @@ fn hook_appcpu_boot_addr(c: &mut HleCtx) -> hle::Flow {
     let addr = c.cpu.arg(0);
     c.state.appcpu_boot_addr = Some(addr);
     hle::Flow::Continue
+}
+
+/// `s_test_psram(...)` (IDF esp_psram.c): the boot-time test writes and reads back a word every
+/// 32 bytes of PSRAM, on every boot and deep-sleep wake. Emulated PSRAM can't fail it, so pass
+/// without running it.
+fn hook_skip_psram_test(_c: &mut HleCtx) -> hle::Flow {
+    hle::Flow::Return(Some(1))
 }
 
 /// A boot entry point returned (it shouldn't), or the wake stub finished.
