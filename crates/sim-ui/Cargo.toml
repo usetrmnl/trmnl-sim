@@ -11,3 +11,6 @@ parking_lot = "0.12.5"
 png = "0.18.1"
 rfd = "0.17.2"
 sim-api = { version = "0.1.0", path = "../sim-api" }
+
+[dev-dependencies]
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }

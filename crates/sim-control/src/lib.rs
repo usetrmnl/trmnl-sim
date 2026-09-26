@@ -9,6 +9,8 @@
 //! | GET    | `/status`              |                                                | status JSON |
 //! | POST   | `/button`              | `{"down": true}`                               | |
 //! | POST   | `/press`               | `{"ms": 1200}` hold for virtual ms, then release | |
+//! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift | |
+//! | POST   | `/dock`                | `{"docked": true}`                             | |
 //! | POST   | `/reset`               |                                                | |
 //! | POST   | `/power-cycle`         |                                                | |
 //! | POST   | `/wake`                |                                                | |
@@ -19,7 +21,7 @@
 //! | POST   | `/quit`                |                                                | |
 //! | GET    | `/console`             | `?since=N`                                     | `{"total", "lines":[{"i","text"}]}` |
 //! | POST   | `/wait`                | see [`WaitSpec`]                               | `{"ok", ...}` or 408 |
-//! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` |
+//! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` (gray; RGB on color panels) |
 //! | POST   | `/screenshot/compare`  | PNG body; `?x=&y=&w=&h=&tolerance=&max_ratio=` | `{"match", "diff_pixels", "diff_ratio"}` |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
@@ -29,7 +31,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use sim_api::{Command, RunState, SimHandle, Status};
+use sim_api::{Command, RunState, SimHandle, Status, TouchZone};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub fn serve(handle: SimHandle, addr: SocketAddr) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
@@ -107,6 +109,20 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             press(h, ms)?;
             ok()
         }
+        (Method::Post, "/touch") => {
+            let b = body_json(body)?;
+            let zone = b["zone"]
+                .as_str()
+                .and_then(TouchZone::parse)
+                .ok_or("need {\"zone\": \"left\"|\"center\"|\"right\"}")?;
+            touch(h, zone, b["ms"].as_u64().unwrap_or(120))?;
+            ok()
+        }
+        (Method::Post, "/dock") => {
+            let docked = body_json(body)?["docked"].as_bool().ok_or("need {\"docked\": bool}")?;
+            h.send(Command::SetDocked(docked));
+            ok()
+        }
         (Method::Post, "/reset") => {
             h.send(Command::Reset);
             ok()
@@ -139,6 +155,10 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             h.send(Command::Pause(on));
             ok()
         }
+        (Method::Post, "/debug") => {
+            h.send(Command::DumpDebug);
+            ok()
+        }
         (Method::Post, "/quit") => {
             h.send(Command::Quit);
             ok()
@@ -154,20 +174,25 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             Ok(wait(h, &spec))
         }
         (Method::Get, "/screenshot") => {
-            let (w, hgt, px) = screen(h, crop(q));
-            let png = encode_png(w, hgt, &px);
+            let (w, hgt, ch, px) = h.frame.lock().viewer(crop(q));
+            let png = encode_png_channels(w, hgt, ch, &px);
             Ok(Response::from_data(png).with_header(Header::from_bytes("Content-Type", "image/png").unwrap()))
         }
         (Method::Post, "/screenshot/compare") => {
-            let (rw, rh, reference) = decode_png(body)?;
-            let (w, hgt, px) = screen(h, crop(q));
+            let (w, hgt, ch, px) = h.frame.lock().viewer(crop(q));
+            let (rw, rh, reference) = decode_png(body, ch)?;
             if (rw, rh) != (w, hgt) {
                 return Ok(err(422, format!("reference is {rw}x{rh}, screen region is {w}x{hgt}")));
             }
             let tol: i32 = qget(q, "tolerance").unwrap_or(48);
             let max_ratio: f64 = qget(q, "max_ratio").unwrap_or(0.001);
-            let diff = px.iter().zip(&reference).filter(|(a, b)| (**a as i32 - **b as i32).abs() > tol).count();
-            let ratio = diff as f64 / px.len().max(1) as f64;
+            // A pixel differs if any channel is off by more than the tolerance.
+            let diff = px
+                .chunks(ch)
+                .zip(reference.chunks(ch))
+                .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| (*a as i32 - *b as i32).abs() > tol))
+                .count();
+            let ratio = diff as f64 / (w * hgt).max(1) as f64;
             Ok(json_reply(
                 200,
                 json!({ "match": ratio <= max_ratio, "diff_pixels": diff, "diff_ratio": ratio, "width": w, "height": hgt }),
@@ -205,6 +230,16 @@ fn status_json(h: &SimHandle) -> Value {
         "sim_time_s": st.sim_time_ns as f64 / 1e9,
         "mips": st.mips,
         "speed_ratio": st.speed_ratio,
+        "board": {
+            "name": st.board.name,
+            "has_button": st.board.has_button,
+            "has_touchbar": st.board.has_touchbar,
+            "has_dock": st.board.has_dock,
+            "has_5ghz": st.board.has_5ghz,
+        },
+        "docked": st.docked,
+        "charging": st.charging,
+        "touching": st.touching.map(|z| z.name()),
         "battery_mv": st.battery_mv,
         "button_down": st.button_down,
         "wifi_available": st.wifi_available,
@@ -232,6 +267,20 @@ fn press(h: &SimHandle, ms: u64) -> Result<(), String> {
     while h.status.lock().presses_done <= before {
         if Instant::now() > deadline {
             return Err("timed out waiting for the press to complete (is the simulator paused?)".into());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+/// Tap a touch bar zone for `ms` of virtual time, returning once the finger lifted.
+fn touch(h: &SimHandle, zone: TouchZone, ms: u64) -> Result<(), String> {
+    let before = h.status.lock().touches_done;
+    h.send(Command::Touch { zone, ms });
+    let deadline = Instant::now() + Duration::from_millis(ms * 20 + 30_000);
+    while h.status.lock().touches_done <= before {
+        if Instant::now() > deadline {
+            return Err("timed out waiting for the touch to complete (is the simulator paused?)".into());
         }
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -348,24 +397,17 @@ fn crop(q: &[(String, String)]) -> Option<(usize, usize, usize, usize)> {
     Some((qget(q, "x")?, qget(q, "y")?, qget(q, "w")?, qget(q, "h")?))
 }
 
-/// The screen (optionally cropped) as 8-bit gray, 0 = black, 255 = paper.
-fn screen(h: &SimHandle, crop: Option<(usize, usize, usize, usize)>) -> (usize, usize, Vec<u8>) {
-    let f = h.frame.lock();
-    let (x0, y0, w, hh) = crop.unwrap_or((0, 0, f.width, f.height));
-    let (x0, y0) = (x0.min(f.width), y0.min(f.height));
-    let (w, hh) = (w.min(f.width - x0), hh.min(f.height - y0));
-    let mut px = Vec::with_capacity(w * hh);
-    for y in y0..y0 + hh {
-        px.extend(f.pixels[y * f.width + x0..y * f.width + x0 + w].iter().map(|d| 255 - d));
-    }
-    (w, hh, px)
+/// 8-bit grayscale PNG.
+pub fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
+    encode_png_channels(w, h, 1, px)
 }
 
-pub fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
+/// 8-bit PNG: 1 channel = grayscale, 3 = RGB.
+pub fn encode_png_channels(w: usize, h: usize, channels: usize, px: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
-        enc.set_color(png::ColorType::Grayscale);
+        enc.set_color(if channels == 3 { png::ColorType::Rgb } else { png::ColorType::Grayscale });
         enc.set_depth(png::BitDepth::Eight);
         let mut wr = enc.write_header().unwrap();
         wr.write_image_data(px).unwrap();
@@ -373,8 +415,8 @@ pub fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Decode any common PNG into 8-bit gray.
-fn decode_png(data: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
+/// Decode any common PNG into 8-bit gray (`channels` = 1) or RGB (3).
+fn decode_png(data: &[u8], channels: usize) -> Result<(usize, usize, Vec<u8>), String> {
     let mut dec = png::Decoder::new(std::io::Cursor::new(data));
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = dec.read_info().map_err(|e| format!("bad PNG: {e}"))?;
@@ -382,12 +424,15 @@ fn decode_png(data: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     let info = r.next_frame(&mut buf).map_err(|e| format!("bad PNG: {e}"))?;
     let (w, h) = (info.width as usize, info.height as usize);
     let ch = info.color_type.samples();
-    let gray = buf[..info.buffer_size()]
-        .chunks(ch)
-        .map(|p| match ch {
+    let px = buf[..info.buffer_size()].chunks(ch);
+    let out = if channels == 3 {
+        px.flat_map(|p| if ch <= 2 { [p[0]; 3] } else { [p[0], p[1], p[2]] }).collect()
+    } else {
+        px.map(|p| match ch {
             1 | 2 => p[0],
             _ => ((p[0] as u32 * 30 + p[1] as u32 * 59 + p[2] as u32 * 11) / 100) as u8,
         })
-        .collect();
-    Ok((w, h, gray))
+        .collect()
+    };
+    Ok((w, h, out))
 }

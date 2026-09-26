@@ -89,13 +89,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install PlatformIO Core and the ESP32-C3 ROM image
+      - name: Install PlatformIO Core and the ESP32 ROM images
         run: |
           pip install --upgrade platformio==6.1.19
           pio pkg install -g -t platformio/tool-esp-rom-elfs
 
       - name: Build firmware (trmnl)
         run: pio run -d trmnl-firmware -e trmnl -j 4
+
+      - name: Build firmware (trmnl_4clr)
+        run: pio run -d trmnl-firmware -e trmnl_4clr -j 4
+
+      # Also fetches the filesystem image (with the ESP32-C5 modem firmware) via post_build_x.py.
+      - name: Build firmware (TRMNL_X)
+        run: pio run -d trmnl-firmware -e TRMNL_X -j 4
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -110,6 +117,8 @@ jobs:
         working-directory: trmnl-sim/tests/integration
         env:
           TRMNL_FIRMWARE_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/trmnl
+          TRMNL_X_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/TRMNL_X
+          TRMNL_BWRY_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/trmnl_4clr
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
         run: python -m unittest -v
 

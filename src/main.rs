@@ -1,8 +1,12 @@
+// Index loops over parallel per-core / per-timer arrays read clearer than zipped iterators.
+#![allow(clippy::needless_range_loop)]
+
 mod arch;
 mod board;
 mod devices;
 mod firmware;
 mod hle;
+mod periph;
 mod runner;
 mod soc;
 
@@ -98,36 +102,67 @@ fn main() -> Result<()> {
 
     let fw = firmware::Firmware::from_build_dir(&cli.build_dir)?;
     let flash_path = cli.flash.clone().unwrap_or_else(|| cli.build_dir.join("sim-flash.bin"));
-    let flash_data = firmware::prepare_flash(&flash_path, 4 << 20, &fw, cli.erase)?;
+    let flash_data = firmware::prepare_flash(&flash_path, fw.flash_size, &fw, cli.erase)?;
     let flash = SpiFlash::new(flash_data, Some(flash_path.clone()));
 
+    let rom_name = match fw.chip_id {
+        firmware::CHIP_ESP32C3 => soc::esp32c3::ROM_ELF,
+        firmware::CHIP_ESP32S3 => soc::esp32s3::ROM_ELF,
+        other => anyhow::bail!("unsupported chip id {other} in the firmware image (supported: ESP32-C3, ESP32-S3)"),
+    };
     let rom_path = match &cli.rom {
         Some(p) => p.clone(),
-        None => firmware::find_rom_elf(soc::esp32c3::ROM_ELF).context(
-            "ESP32-C3 ROM ELF not found: pass --rom, set TRMNL_SIM_ROM, or run \
-             `pio pkg install -g -t platformio/tool-esp-rom-elfs`",
-        )?,
+        None => firmware::find_rom_elf(rom_name).with_context(|| {
+            format!(
+                "{rom_name} not found: pass --rom, set TRMNL_SIM_ROM, or run \
+                 `pio pkg install -g -t platformio/tool-esp-rom-elfs`"
+            )
+        })?,
     };
     let rom = std::fs::read(&rom_path)?;
 
-    let panel = Uc8179::new(cli.panel_rev);
-    let frame = panel.frame.clone();
-    let board = Box::new(board::trmnl_og::TrmnlOg::new(panel));
     let mut apps = vec![(fw.elf_sha256, fw.symbols.clone(), fw.name.clone())];
     for p in &cli.elf {
         let a = firmware::ExtraApp::from_elf(p)?;
         apps.push((a.elf_sha256, a.symbols, a.name));
     }
-    let mut machine = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
-    if let Some(mac) = cli.mac {
-        machine.set_mac(mac);
-    }
-    machine.set_portal_port(cli.portal_port);
-    machine.set_net_config(vnet::NetConfig {
-        offline: cli.offline,
-        dns_overrides: cli.dns.clone(),
-        ..Default::default()
-    });
+    let net = vnet::NetConfig { offline: cli.offline, dns_overrides: cli.dns.clone(), ..Default::default() };
+
+    let (machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
+        firmware::CHIP_ESP32S3 => {
+            let modem_mac = cli.mac.map(|mut m| {
+                m[5] = m[5].wrapping_add(2);
+                m
+            });
+            let board = board::trmnl_x::TrmnlX::new(
+                modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]),
+                cli.offline,
+                cli.dns.clone(),
+            );
+            let frame = board.panel.frame();
+            let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, Box::new(board), apps, &cli.trace)?;
+            if let Some(mac) = cli.mac {
+                m.set_mac(mac);
+            }
+            m.set_portal_port(cli.portal_port);
+            m.set_net_config(net);
+            (Box::new(m), frame)
+        }
+        _ => {
+            // trmnl_4clr (TRMNL BWRY) is the OG board with a 4-color panel.
+            let bwry = fw.symbols.has_prefix("_Z13png_draw_4clr");
+            let panel = if bwry { Uc8179::new_bwry(cli.panel_rev) } else { Uc8179::new(cli.panel_rev) };
+            let frame = panel.frame.clone();
+            let board = Box::new(board::trmnl_og::TrmnlOg::new(panel));
+            let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
+            if let Some(mac) = cli.mac {
+                m.set_mac(mac);
+            }
+            m.set_portal_port(cli.portal_port);
+            m.set_net_config(net);
+            (Box::new(m), frame)
+        }
+    };
 
     let frame_for_shot = frame.clone();
     let (handle, ports) = sim_api::channel(frame);
@@ -149,7 +184,7 @@ fn main() -> Result<()> {
     let emu = std::thread::Builder::new()
         .name("emulator".into())
         .stack_size(16 << 20)
-        .spawn(move || runner::run(Box::new(machine), ports, opts))?;
+        .spawn(move || runner::run(machine, ports, opts))?;
 
     let halted = if cli.headless {
         emu.join().ok().and_then(|o| o.halted)
@@ -176,10 +211,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Write the panel as seen by a viewer (0 = black ink, 255 = paper).
+/// Write the panel as seen by a viewer (gray: 0 = black ink, 255 = paper; or RGB).
 fn save_png(frame: &sim_api::SharedFrame, path: &std::path::Path) -> Result<()> {
-    let f = frame.lock();
-    let pixels: Vec<u8> = f.pixels.iter().map(|d| 255 - d).collect();
-    std::fs::write(path, sim_control::encode_png(f.width, f.height, &pixels))?;
+    let (w, h, ch, px) = frame.lock().viewer(None);
+    std::fs::write(path, sim_control::encode_png_channels(w, h, ch, &px))?;
     Ok(())
 }

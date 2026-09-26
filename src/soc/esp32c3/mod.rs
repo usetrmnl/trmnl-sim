@@ -2,9 +2,7 @@
 
 pub mod bus;
 pub mod crypto;
-pub mod i2c;
 pub mod periph;
-pub mod sha;
 
 use std::collections::HashMap;
 
@@ -69,6 +67,9 @@ impl Board for NullBoard {
         None
     }
     fn update(&mut self, _: u64) {}
+    fn info(&self) -> sim_api::BoardInfo {
+        Default::default()
+    }
     fn set_button(&mut self, _: bool) {}
     fn set_battery_mv(&mut self, _: u32) {}
     fn display_status(&self, _: u64) -> (bool, u64) {
@@ -178,10 +179,12 @@ impl Esp32c3 {
 
     /// Bind symbols and HLE hooks to the app the bootloader is about to start.
     fn select_app(&mut self) {
-        let Some((off, sha, version)) = firmware::booting_app(&self.bus.flash.data) else {
+        let Some(app) = firmware::booting_app(&self.bus.flash.data) else {
             self.pending_halt = Some("no bootable app image in flash".into());
             return;
         };
+        let (off, sha, version) = (app.offset, app.elf_sha256, app.version.clone());
+        self.hle.wifi.set_abi(hle::wifi::WifiAbi::for_idf(&app.idf_version));
         let Some(i) = self.apps.iter().position(|a| a.0 == sha) else {
             self.pending_halt = Some(format!(
                 "the app at {off:#x} (version {version}, ELF sha256 {}) has no matching ELF; \
@@ -379,6 +382,10 @@ impl Esp32c3 {
 }
 
 impl Machine for Esp32c3 {
+    fn light_sleep(&self) -> Option<Option<u64>> {
+        self.light_sleep.map(|(w, _)| w)
+    }
+
     fn run_slice(&mut self, until_ns: u64) -> SliceExit {
         if let Some(m) = self.pending_halt.take() {
             return SliceExit::Halted(m);
@@ -462,6 +469,15 @@ impl Machine for Esp32c3 {
                             let now = self.bus.now_ns();
                             self.light_sleep = Some((timer_ns.map(|t| now + t), gpio));
                         }
+                        MachineRequest::RtcSleep { wakeup_opt } => {
+                            let now = self.bus.now_ns();
+                            let target = (self.bus.p.store_get(0x6000_8008) as u64 & 0xffff) << 32
+                                | self.bus.p.store_get(0x6000_8004) as u64;
+                            let dt = target.saturating_sub(self.bus.rtc_ticks(now));
+                            let wake = now + (dt as u128 * 1_000_000_000 / self.bus.p.rtc_slow_hz as u128) as u64;
+                            let timer = (wakeup_opt & (1 << 3) != 0).then_some(wake);
+                            self.light_sleep = Some((timer, wakeup_opt & (1 << 2) != 0));
+                        }
                     }
                 }
             }
@@ -544,12 +560,7 @@ impl Machine for Esp32c3 {
             self.irq_counts.iter().enumerate().filter(|(_, n)| **n > 0).collect::<Vec<_>>()
         );
         s += &format!("intc: {:?}\n", self.bus.p.intc);
-        s += &format!(
-            "systimer raw={:#x} conf={:#x} ena={:#x}\n",
-            self.bus.p.systimer.raw,
-            self.bus.p.store_get(0x6002_3000),
-            self.bus.p.store_get(0x6002_3064)
-        );
+        s += &format!("systimer: {:?}\n", self.bus.p.systimer);
         // Heuristic backtrace: code addresses found on the stack.
         s += "stack scan:";
         let sp = c.x[2];

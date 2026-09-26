@@ -51,6 +51,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
     let mut was_realtime = true;
     let mut release_at: Option<u64> = None;
     let mut presses_done = 0u64;
+    let mut touch_release_at: Option<(u64, sim_api::TouchZone)> = None;
+    let mut touches_done = 0u64;
+    ports.status.lock().board = m.board().info();
     {
         let mut st = ports.status.lock();
         st.firmware = opts.firmware_name.clone();
@@ -75,9 +78,41 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                     m.board().set_button(true);
                     ports.status.lock().button_down = true;
                 }
+                Command::Touch { zone, ms } => {
+                    touch_release_at = Some((m.now_ns() + ms.max(1) * 1_000_000, zone));
+                    m.board().set_touch(zone, true);
+                    let mut st = ports.status.lock();
+                    st.touching = Some(zone);
+                    st.touch_mask |= zone.bit();
+                }
+                Command::TouchDown(zone) => {
+                    m.board().set_touch(zone, true);
+                    let mut st = ports.status.lock();
+                    st.touching = Some(zone);
+                    st.touch_mask |= zone.bit();
+                }
+                Command::TouchUp(zone) => {
+                    m.board().set_touch(zone, false);
+                    let mut st = ports.status.lock();
+                    st.touch_mask &= !zone.bit();
+                    if st.touching == Some(zone) {
+                        st.touching = None;
+                    }
+                }
+                Command::SetDocked(docked) => {
+                    m.board().set_docked(docked);
+                    ports.console.lock().push_sim(if docked { "placed on dock" } else { "removed from dock" });
+                    let charging = m.board().charging();
+                    let mut st = ports.status.lock();
+                    st.docked = docked;
+                    st.charging = charging;
+                }
                 Command::SetBatteryMv(mv) => {
                     m.board().set_battery_mv(mv);
-                    ports.status.lock().battery_mv = mv;
+                    let charging = m.board().charging();
+                    let mut st = ports.status.lock();
+                    st.battery_mv = mv;
+                    st.charging = charging;
                 }
                 Command::Reset => {
                     ports.console.lock().push_sim("reset button pressed");
@@ -117,6 +152,14 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                     ports.status.lock().turbo = t;
                     rebase = true;
                 }
+                Command::DumpDebug => {
+                    let now = m.now_ns();
+                    let text = format!("{}\n{}", m.debug_dump(), m.board().diagnostics(now));
+                    let mut c = ports.console.lock();
+                    for line in text.lines() {
+                        c.push_sim(line);
+                    }
+                }
                 Command::Pause(p) => {
                     paused = p;
                     rebase = true;
@@ -141,6 +184,18 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
             st.presses_done = presses_done;
         }
 
+        if let Some((t, zone)) = touch_release_at
+            && m.now_ns() >= t
+        {
+            touch_release_at = None;
+            m.board().set_touch(zone, false);
+            touches_done += 1;
+            let mut st = ports.status.lock();
+            st.touching = None;
+            st.touch_mask &= !zone.bit();
+            st.touches_done = touches_done;
+        }
+
         // ---- run ----
         let now_v = m.now_ns();
         let wall_target = anchor_virt + anchor_wall.elapsed().as_nanos() as u64;
@@ -157,7 +212,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                 was_realtime = realtime;
                 let wall_target = anchor_virt + anchor_wall.elapsed().as_nanos() as u64;
                 let mut target = if realtime { wall_target.min(now_v + 20_000_000) } else { now_v + 20_000_000 };
-                if let Some(t) = release_at {
+                for t in [release_at, touch_release_at.map(|t| t.0)].into_iter().flatten() {
                     target = target.min(t.max(now_v + 1));
                 }
                 if target <= now_v {
@@ -204,7 +259,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                 if step > 0 {
                     m.advance_time(step);
                 }
-                let by_gpio = button && gpio_low_mask != 0;
+                let now = m.now_ns();
+                let low = !m.board().gpio_in(now).0;
+                let by_gpio = gpio_low_mask & low != 0 || (button && gpio_low_mask != 0);
                 let by_timer = wake_at.is_some_and(|t| m.now_ns() >= t);
                 if by_gpio || by_timer {
                     ports.console.lock().push_sim(if by_gpio { "woken by button" } else { "woken by timer" });
@@ -253,6 +310,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
             }
             let now = m.now_ns();
             let (busy, refreshes) = m.board().display_status(now);
+            let charging = m.board().charging();
             let net = m.net_status();
             if net.portal_url != last_portal {
                 if let Some(u) = &net.portal_url {
@@ -271,11 +329,15 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
             st.mips = mips;
             st.speed_ratio = ratio;
             st.display_busy = busy;
+            st.charging = charging;
             st.display_refreshes = refreshes;
             st.boot_count = m.boot_count();
             st.state = match power {
                 _ if paused => RunState::Paused,
-                Power::On => RunState::Running,
+                Power::On => match m.light_sleep() {
+                    Some(wake_at) => RunState::LightSleep { wake_at_ns: wake_at },
+                    None => RunState::Running,
+                },
                 Power::DeepSleep { wake_at, .. } => RunState::DeepSleep { wake_at_ns: wake_at },
                 Power::Halted => RunState::Halted(halted_msg.clone()),
             };
@@ -304,6 +366,8 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
             println!("{n:>8}  {name}");
         }
         println!("\n=== cpu ===\n{}", m.debug_dump());
+        let now = m.now_ns();
+        println!("\n=== board ===\n{}", m.board().diagnostics(now));
     }
     RunOutcome { halted: (!halted_msg.is_empty()).then_some(halted_msg) }
 }

@@ -50,6 +50,12 @@ impl Symbols {
         self.by_name.get(name).copied()
     }
 
+    /// Any symbol whose name starts with `prefix` (e.g. a C++ function whatever its
+    /// parameter types mangle to).
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        self.by_name.keys().any(|k| k.starts_with(prefix))
+    }
+
     /// "func+0x12" for an address.
     pub fn describe(&self, addr: u32) -> String {
         let i = self.sorted.partition_point(|(a, _, _)| *a <= addr);
@@ -103,6 +109,43 @@ pub struct Firmware {
     pub symbols: Symbols,
     /// (flash offset, bytes) images to write into flash, like `esptool write_flash`.
     pub images: Vec<(u32, Vec<u8>)>,
+    /// ESP image header chip id (5 = ESP32-C3, 9 = ESP32-S3).
+    pub chip_id: u16,
+    /// Flash size in bytes, from the bootloader image header.
+    pub flash_size: usize,
+}
+
+pub const CHIP_ESP32C3: u16 = 5;
+pub const CHIP_ESP32S3: u16 = 9;
+
+/// Offset of the first app partition (factory, else ota_0) in a partition table image.
+fn table_app_offset(table: &[u8]) -> Option<u32> {
+    let mut ota0 = None;
+    for e in table.chunks(32) {
+        if e.len() < 32 || e[0] != 0xAA || e[1] != 0x50 {
+            break;
+        }
+        let off = u32::from_le_bytes(e[4..8].try_into().ok()?);
+        match (e[2], e[3]) {
+            (0, 0) => return Some(off),
+            (0, 0x10) => ota0 = Some(off),
+            _ => {}
+        }
+    }
+    ota0
+}
+
+/// Offset of a data partition by subtype (0x82 = SPIFFS/LittleFS) in a partition table image.
+fn table_data_offset(table: &[u8], subtype: u8) -> Option<u32> {
+    for e in table.chunks(32) {
+        if e.len() < 32 || e[0] != 0xAA || e[1] != 0x50 {
+            break;
+        }
+        if e[2] == 1 && e[3] == subtype {
+            return Some(u32::from_le_bytes(e[4..8].try_into().ok()?));
+        }
+    }
+    None
 }
 
 impl Firmware {
@@ -119,18 +162,37 @@ impl Firmware {
         }
         let mut images = Vec::new();
         let merged = dir.join("merged_firmware.bin");
-        let parts = [(0x0, "bootloader.bin"), (0x8000, "partitions.bin"), (0x10000, "firmware.bin")];
-        if parts.iter().all(|(_, n)| dir.join(n).exists()) {
-            for (off, n) in parts {
-                images.push((off, std::fs::read(dir.join(n))?));
+        let parts = ["bootloader.bin", "partitions.bin", "firmware.bin"];
+        if parts.iter().all(|n| dir.join(n).exists()) {
+            let table = std::fs::read(dir.join("partitions.bin"))?;
+            let app_off = table_app_offset(&table).context("partitions.bin has no app partition")?;
+            images.push((0x0, std::fs::read(dir.join("bootloader.bin"))?));
+            images.push((0x8000, table.clone()));
+            images.push((app_off, std::fs::read(dir.join("firmware.bin"))?));
+            // Filesystem image (fonts, assets; on TRMNL X also the modem firmware)
+            for fs in ["littlefs.bin", "spiffs.bin"] {
+                if let (Ok(data), Some(off)) = (std::fs::read(dir.join(fs)), table_data_offset(&table, 0x82)) {
+                    images.push((off, data));
+                    break;
+                }
             }
         } else if merged.exists() {
             images.push((0, std::fs::read(&merged)?));
         } else {
             bail!("{} has no bootloader.bin/partitions.bin/firmware.bin or merged_firmware.bin", dir.display());
         }
+        let boot = image_at(&images, 0).context("no bootloader image")?;
+        let flash_size = match boot.get(3).map(|b| b >> 4) {
+            Some(0) => 1 << 20,
+            Some(1) => 2 << 20,
+            Some(3) => 8 << 20,
+            Some(4) => 16 << 20,
+            Some(5) => 32 << 20,
+            _ => 4 << 20,
+        };
+        let chip_id = u16::from_le_bytes([boot[12], boot[13]]);
         let name = app_desc(&images).unwrap_or_else(|| dir.display().to_string());
-        Ok(Firmware { name, elf_sha256, symbols, images })
+        Ok(Firmware { name, elf_sha256, symbols, images, chip_id, flash_size })
     }
 }
 
@@ -157,10 +219,17 @@ pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// An app image in flash, as described by its esp_app_desc_t.
+pub struct BootApp {
+    pub offset: u32,
+    pub elf_sha256: [u8; 32],
+    pub version: String,
+    pub idf_version: String,
+}
+
 /// The app the 2nd-stage bootloader will boot, following the same otadata rules
-/// (highest valid sequence number selects ota_N; else factory; else ota_0):
-/// (partition offset, ELF SHA-256 from its app descriptor, version string).
-pub fn booting_app(flash: &[u8]) -> Option<(u32, [u8; 32], String)> {
+/// (highest valid sequence number selects ota_N; else factory; else ota_0).
+pub fn booting_app(flash: &[u8]) -> Option<BootApp> {
     let mut ota_apps: Vec<(u8, u32)> = Vec::new();
     let mut factory = None;
     let mut otadata = None;
@@ -192,13 +261,27 @@ pub fn booting_app(flash: &[u8]) -> Option<(u32, [u8; 32], String)> {
     if u32::from_le_bytes(d[0..4].try_into().ok()?) != 0xABCD5432 {
         return None;
     }
-    let version = String::from_utf8_lossy(&d[16..48]).trim_end_matches('\0').to_string();
-    Some((off, d[144..176].try_into().ok()?, version))
+    let text = |r: std::ops::Range<usize>| String::from_utf8_lossy(&d[r]).trim_end_matches('\0').to_string();
+    Some(BootApp {
+        offset: off,
+        elf_sha256: d[144..176].try_into().ok()?,
+        version: text(16..48),
+        idf_version: text(112..144),
+    })
+}
+
+/// The bytes at flash offset `off`, from whichever image covers it.
+fn image_at(images: &[(u32, Vec<u8>)], off: u32) -> Option<&[u8]> {
+    images.iter().find_map(|(o, d)| {
+        let rel = off.checked_sub(*o)? as usize;
+        d.get(rel..)
+    })
 }
 
 /// "project version (idf version)" from the esp_app_desc_t of the app image.
 fn app_desc(images: &[(u32, Vec<u8>)]) -> Option<String> {
-    let (_, app) = images.iter().find(|(o, _)| *o == 0x10000)?;
+    let table = image_at(images, 0x8000)?;
+    let app = image_at(images, table_app_offset(table)?)?;
     // image header (24) + first segment header (8) -> esp_app_desc_t
     let d = app.get(32..32 + 256)?;
     if u32::from_le_bytes(d[0..4].try_into().ok()?) != 0xABCD5432 {

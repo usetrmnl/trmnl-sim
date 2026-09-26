@@ -4,8 +4,9 @@
 
 use super::bus::{C3Bus, MMU_ENTRIES, MMU_TABLE, PERIPH_BASE, PERIPH_SIZE};
 use super::crypto::{AES, GDMA, RSA};
-use super::i2c::{self, I2c};
-use super::sha::Sha;
+use crate::periph::i2c::I2c;
+use crate::periph::sha::Sha;
+use crate::periph::systimer::Systimer;
 
 // Interrupt sources (periph_defs.h)
 pub mod src {
@@ -29,6 +30,7 @@ const EFUSE: u32 = 0x6000_8800;
 const TIMG0: u32 = 0x6001_F000;
 const TIMG1: u32 = 0x6002_0000;
 const SYSTIMER: u32 = 0x6002_3000;
+const I2C0: u32 = 0x6001_3000;
 const SPI2: u32 = 0x6002_4000;
 const SYSCON: u32 = 0x6002_6000;
 const SHA_BASE: u32 = 0x6003_B000;
@@ -137,71 +139,6 @@ impl Intc {
     }
 }
 
-/// SYSTIMER: two 52-bit counters at 16 MHz, three comparators.
-#[derive(Default, Debug)]
-pub struct Systimer {
-    /// Counter value = offset + ticks(now) (when running).
-    offset: [i64; 2],
-    frozen: [Option<u64>; 2],
-    /// Active comparator state: target tick, period (0 = one-shot), unit, armed.
-    target: [u64; 3],
-    period: [u64; 3],
-    unit: [usize; 3],
-    armed: [bool; 3],
-    pub raw: u32,
-}
-
-pub const SYSTIMER_HZ: u64 = 16_000_000;
-
-impl Systimer {
-    /// Counters restart from zero, as after any digital-domain reset.
-    pub fn reset_counters(&mut self, now_ns: u64) {
-        let t = Self::ticks(now_ns) as i64;
-        self.offset = [-t, -t];
-    }
-
-    fn ticks(now_ns: u64) -> u64 {
-        (now_ns as u128 * SYSTIMER_HZ as u128 / 1_000_000_000) as u64
-    }
-
-    pub fn counter(&self, unit: usize, now_ns: u64) -> u64 {
-        match self.frozen[unit] {
-            Some(v) => v,
-            None => (Self::ticks(now_ns) as i64 + self.offset[unit]) as u64 & ((1 << 52) - 1),
-        }
-    }
-
-    /// Fire any comparators whose time has come.
-    pub fn update(&mut self, now_ns: u64, work_en: u32) {
-        for i in 0..3 {
-            if !self.armed[i] || work_en & (1 << (24 - i)) == 0 {
-                continue;
-            }
-            let c = self.counter(self.unit[i], now_ns);
-            if c >= self.target[i] {
-                self.raw |= 1 << i;
-                if let Some(behind) = (c - self.target[i]).checked_div(self.period[i]) {
-                    self.target[i] += (behind + 1) * self.period[i];
-                } else {
-                    self.armed[i] = false;
-                }
-            }
-        }
-    }
-
-    /// Absolute ns of the next comparator firing.
-    pub fn next_ns(&self, now_ns: u64, work_en: u32) -> Option<u64> {
-        (0..3)
-            .filter(|&i| self.armed[i] && work_en & (1 << (24 - i)) != 0)
-            .map(|i| {
-                let c = self.counter(self.unit[i], now_ns);
-                let dt = self.target[i].saturating_sub(c);
-                now_ns + (dt as u128 * 1_000_000_000 / SYSTIMER_HZ as u128) as u64 + 1
-            })
-            .min()
-    }
-}
-
 pub struct Periph {
     store: Vec<u32>,
     pub intc: Intc,
@@ -288,7 +225,6 @@ impl Periph {
         self.uart_raw = [0; 2];
         self.reset_request = None;
         // Default register values that software relies on
-        self.store_set(SYSTIMER, 1 << 30 | 1 << 29 | 1 << 31); // clk_en, unit0/1 work_en
         self.store_set(SYSTEM + 0x58, 1); // SYSCLK_CONF: XTAL, div 1 -> 40 MHz
     }
 
@@ -374,14 +310,10 @@ impl C3Bus {
             }
 
             // ---- SYSTIMER ----
-            _ if a == SYSTIMER + 0x04 || a == SYSTIMER + 0x08 => stored | 1 << 29, // VALUE_VALID
-            _ if a == SYSTIMER + 0x68 => {
-                self.systimer_update(now);
-                self.p.systimer.raw
-            }
-            _ if a == SYSTIMER + 0x70 => {
-                self.systimer_update(now);
-                self.p.systimer.raw & self.p.store_get(SYSTIMER + 0x64)
+            _ if (SYSTIMER..SYSTIMER + 0x100).contains(&a) => {
+                let v = self.p.systimer.read(a - SYSTIMER, now);
+                self.irq_dirty = true;
+                v
             }
 
             // ---- GPSPI2 ----
@@ -405,15 +337,15 @@ impl C3Bus {
             }
 
             // ---- I2C ----
-            _ if a == i2c::BASE + 0x08 => {
+            _ if a == I2C0 + 0x08 => {
                 let i = &self.p.i2c;
                 (i.rx.len() as u32 & 0x3f) << 8 | (i.tx.len() as u32 & 0x3f) << 18
             }
-            _ if a == i2c::BASE + 0x1C => self.p.i2c.rx.pop_front().unwrap_or(0) as u32,
-            _ if a == i2c::BASE + 0x20 => self.p.i2c.raw,
-            _ if a == i2c::BASE + 0x2C => self.p.i2c.raw & self.p.store_get(i2c::BASE + 0x28),
-            _ if a == i2c::BASE + 0x80 => stored & !1, // SCL_RST_SLV_EN self-clears
-            _ if a == i2c::BASE + 0x04 => stored & !(1 << 5 | 1 << 11),
+            _ if a == I2C0 + 0x1C => self.p.i2c.rx.pop_front().unwrap_or(0) as u32,
+            _ if a == I2C0 + 0x20 => self.p.i2c.raw,
+            _ if a == I2C0 + 0x2C => self.p.i2c.raw & self.p.store_get(I2C0 + 0x28),
+            _ if a == I2C0 + 0x80 => stored & !1, // SCL_RST_SLV_EN self-clears
+            _ if a == I2C0 + 0x04 => stored & !(1 << 5 | 1 << 11),
 
             // ---- SYSCON: RNG ----
             _ if a == SYSCON + 0xB0 => self.p.rand(),
@@ -516,52 +448,10 @@ impl C3Bus {
             }
 
             // SYSTIMER
-            _ if a == SYSTIMER => self.irq_dirty = true,
-            _ if a == SYSTIMER + 0x04 || a == SYSTIMER + 0x08 => {
-                if v & (1 << 30) != 0 {
-                    let u = ((a - SYSTIMER) / 4 - 1) as usize;
-                    let c = self.p.systimer.counter(u, now);
-                    let base = SYSTIMER + 0x40 + 8 * u as u32;
-                    self.p.store_set(base, (c >> 32) as u32);
-                    self.p.store_set(base + 4, c as u32);
+            _ if (SYSTIMER..SYSTIMER + 0x100).contains(&a) => {
+                if self.p.systimer.write(a - SYSTIMER, v, now) {
+                    self.irq_dirty = true;
                 }
-            }
-            _ if a == SYSTIMER + 0x5C || a == SYSTIMER + 0x60 => {
-                if v & 1 != 0 {
-                    let u = ((a - SYSTIMER - 0x5C) / 4) as usize;
-                    let hi = self.p.store_get(SYSTIMER + 0x0C + 8 * u as u32) as u64 & 0xfffff;
-                    let lo = self.p.store_get(SYSTIMER + 0x10 + 8 * u as u32) as u64;
-                    let val = hi << 32 | lo;
-                    let t = &mut self.p.systimer;
-                    t.offset[u] = val as i64 - Systimer::ticks(now) as i64;
-                }
-            }
-            _ if (SYSTIMER + 0x50..=SYSTIMER + 0x58).contains(&a) => {
-                if v & 1 != 0 {
-                    let i = ((a - SYSTIMER - 0x50) / 4) as usize;
-                    self.systimer_load_comparator(i, now);
-                }
-            }
-            _ if (SYSTIMER + 0x34..=SYSTIMER + 0x3C).contains(&a) => {
-                // Period mode is live; switching it on starts periodic alarms from now.
-                let i = ((a - SYSTIMER - 0x34) / 4) as usize;
-                let period_mode = v & (1 << 30) != 0;
-                let t = &mut self.p.systimer;
-                t.unit[i] = (v >> 31) as usize;
-                if period_mode && t.period[i] == 0 {
-                    let p = ((v & 0x3ff_ffff) as u64).max(1);
-                    t.period[i] = p;
-                    t.target[i] = t.counter(t.unit[i], now) + p;
-                    t.armed[i] = true;
-                } else if !period_mode {
-                    t.period[i] = 0;
-                }
-                self.irq_dirty = true;
-            }
-            _ if a == SYSTIMER + 0x64 => self.irq_dirty = true,
-            _ if a == SYSTIMER + 0x6C => {
-                self.p.systimer.raw &= !v;
-                self.irq_dirty = true;
             }
 
             // crypto
@@ -583,19 +473,19 @@ impl C3Bus {
             }
 
             // I2C
-            _ if a == i2c::BASE + 0x04 && v & (1 << 5) != 0 => {
+            _ if a == I2C0 + 0x04 && v & (1 << 5) != 0 => {
                 let mut cmds = [0u32; 8];
                 for (k, c) in cmds.iter_mut().enumerate() {
-                    *c = self.p.store_get(i2c::BASE + 0x58 + 4 * k as u32);
+                    *c = self.p.store_get(I2C0 + 0x58 + 4 * k as u32);
                 }
-                self.p.i2c.execute(&mut cmds, self.board.as_mut());
+                self.p.i2c.execute(now, &mut cmds, self.board.as_mut());
                 for (k, c) in cmds.iter().enumerate() {
-                    self.p.store_set(i2c::BASE + 0x58 + 4 * k as u32, *c);
+                    self.p.store_set(I2C0 + 0x58 + 4 * k as u32, *c);
                 }
                 self.irq_dirty = true;
             }
-            _ if a == i2c::BASE + 0x1C => self.p.i2c.tx.push_back(v as u8),
-            _ if a == i2c::BASE + 0x18 => {
+            _ if a == I2C0 + 0x1C => self.p.i2c.tx.push_back(v as u8),
+            _ if a == I2C0 + 0x18 => {
                 if v & (1 << 13) != 0 {
                     self.p.i2c.tx.clear();
                 }
@@ -603,11 +493,11 @@ impl C3Bus {
                     self.p.i2c.rx.clear();
                 }
             }
-            _ if a == i2c::BASE + 0x24 => {
+            _ if a == I2C0 + 0x24 => {
                 self.p.i2c.raw &= !v;
                 self.irq_dirty = true;
             }
-            _ if a == i2c::BASE + 0x28 => self.irq_dirty = true,
+            _ if a == I2C0 + 0x28 => self.irq_dirty = true,
 
             // GPSPI2
             _ if a == SPI2 => {
@@ -667,7 +557,7 @@ impl C3Bus {
         let uart_st = self.uart_raw_bits(UART0 + 4) & self.p.store_get(UART0 + 0x0C);
         set(src::UART0, uart_st != 0);
         set(src::UART0 + 1, (self.uart_raw_bits(UART1 + 4) & self.p.store_get(UART1 + 0x0C)) != 0);
-        let st = self.p.systimer.raw & self.p.store_get(SYSTIMER + 0x64);
+        let st = self.p.systimer.irq_lines();
         for i in 0..3 {
             set(src::SYSTIMER_TARGET0 + i, st & (1 << i) != 0);
         }
@@ -679,7 +569,7 @@ impl C3Bus {
             let st = self.p.store_get(GDMA + 0x10 * ch) & self.p.store_get(GDMA + 4 + 0x10 * ch);
             set(src::DMA_CH0 + ch as usize, st != 0);
         }
-        set(src::I2C_EXT0, self.p.i2c.raw & self.p.store_get(i2c::BASE + 0x28) != 0);
+        set(src::I2C_EXT0, self.p.i2c.raw & self.p.store_get(I2C0 + 0x28) != 0);
         self.p.intc.sources = s;
     }
 
@@ -709,36 +599,13 @@ impl C3Bus {
     // ---- systimer ----------------------------------------------------------------------------
 
     pub fn systimer_update(&mut self, now: u64) {
-        let before = self.p.systimer.raw;
-        let conf = self.p.store_get(SYSTIMER);
-        self.p.systimer.update(now, conf);
-        if self.p.systimer.raw != before {
+        if self.p.systimer.update(now) {
             self.irq_dirty = true;
         }
     }
 
     pub fn systimer_next_ns(&self, now: u64) -> Option<u64> {
-        self.p.systimer.next_ns(now, self.p.store_get(SYSTIMER))
-    }
-
-    fn systimer_load_comparator(&mut self, i: usize, now: u64) {
-        let conf = self.p.store_get(SYSTIMER + 0x34 + 4 * i as u32);
-        let hi = self.p.store_get(SYSTIMER + 0x1C + 8 * i as u32) as u64 & 0xfffff;
-        let lo = self.p.store_get(SYSTIMER + 0x20 + 8 * i as u32) as u64;
-        let unit = (conf >> 31) as usize;
-        let period_mode = conf & (1 << 30) != 0;
-        let period = (conf & 0x3ff_ffff) as u64;
-        let t = &mut self.p.systimer;
-        t.unit[i] = unit;
-        if period_mode {
-            t.period[i] = period.max(1);
-            t.target[i] = t.counter(unit, now) + period.max(1);
-        } else {
-            t.period[i] = 0;
-            t.target[i] = hi << 32 | lo;
-        }
-        t.armed[i] = true;
-        self.irq_dirty = true;
+        self.p.systimer.next_ns(now)
     }
 
     // ---- GPIO --------------------------------------------------------------------------------

@@ -28,6 +28,7 @@ aes = "0.8"
 num-bigint = "0.4"
 num-traits = "0.2"
 sha2 = "0.10"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 
 [profile.dev]
 opt-level = 2

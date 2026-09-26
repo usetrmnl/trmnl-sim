@@ -12,12 +12,89 @@ use parking_lot::Mutex;
 pub struct Frame {
     pub width: usize,
     pub height: usize,
+    /// Darkness per pixel: 0 = paper, 255 = full ink.
     pub pixels: Vec<u8>,
+    /// Color panels: what a viewer sees, RGB888 per pixel. `None` on grayscale panels,
+    /// whose color follows from `pixels`.
+    pub rgb: Option<Vec<u8>>,
     /// Bumped whenever `pixels` changes.
     pub generation: u64,
 }
 
+impl Frame {
+    pub fn new(width: usize, height: usize) -> Self {
+        Frame { width, height, pixels: vec![0; width * height], rgb: None, generation: 0 }
+    }
+
+    pub fn is_color(&self) -> bool {
+        self.rgb.is_some()
+    }
+
+    /// A region as seen by a viewer: gray (1 byte/pixel, 0 = black, 255 = paper) or,
+    /// on color panels, RGB (3 bytes/pixel). Returns (width, height, channels, data).
+    pub fn viewer(&self, crop: Option<(usize, usize, usize, usize)>) -> (usize, usize, usize, Vec<u8>) {
+        let (x0, y0, w, h) = crop.unwrap_or((0, 0, self.width, self.height));
+        let (x0, y0) = (x0.min(self.width), y0.min(self.height));
+        let (w, h) = (w.min(self.width - x0), h.min(self.height - y0));
+        let ch = if self.rgb.is_some() { 3 } else { 1 };
+        let mut out = Vec::with_capacity(w * h * ch);
+        for y in y0..y0 + h {
+            let row = y * self.width + x0;
+            match &self.rgb {
+                Some(rgb) => out.extend_from_slice(&rgb[row * 3..(row + w) * 3]),
+                None => out.extend(self.pixels[row..row + w].iter().map(|d| 255 - d)),
+            }
+        }
+        (w, h, ch, out)
+    }
+}
+
 pub type SharedFrame = Arc<Mutex<Frame>>;
+
+/// A zone of a capacitive touch bar (TRMNL X).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchZone {
+    Left,
+    Center,
+    Right,
+}
+
+impl TouchZone {
+    pub fn bit(self) -> u8 {
+        match self {
+            TouchZone::Left => 1,
+            TouchZone::Center => 2,
+            TouchZone::Right => 4,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TouchZone::Left => "left",
+            TouchZone::Center => "center",
+            TouchZone::Right => "right",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<TouchZone> {
+        match s {
+            "left" => Some(TouchZone::Left),
+            "center" | "centre" | "middle" => Some(TouchZone::Center),
+            "right" => Some(TouchZone::Right),
+            _ => None,
+        }
+    }
+}
+
+/// What the simulated board has, so front-ends only offer relevant controls.
+#[derive(Debug, Clone, Default)]
+pub struct BoardInfo {
+    pub name: String,
+    pub has_button: bool,
+    pub has_touchbar: bool,
+    pub has_dock: bool,
+    pub has_5ghz: bool,
+}
 
 /// Requests from the front-end to the emulator thread.
 #[derive(Debug, Clone)]
@@ -29,6 +106,17 @@ pub enum Command {
     Press {
         ms: u64,
     },
+    /// Tap a touch bar zone (finger down for `ms` of virtual time, default ~120 ms).
+    Touch {
+        zone: TouchZone,
+        ms: u64,
+    },
+    /// Finger down on a touch bar zone (several zones may be held at once).
+    TouchDown(TouchZone),
+    /// Finger lifted from a touch bar zone.
+    TouchUp(TouchZone),
+    /// Put the device on (true) or take it off (false) its magnetic dock.
+    SetDocked(bool),
     /// Battery voltage in millivolts.
     SetBatteryMv(u32),
     /// Press the reset button (chip reset, RTC memory and display kept).
@@ -42,6 +130,8 @@ pub enum Command {
     /// Run as fast as possible (true) or pace to wall-clock time (false).
     SetTurbo(bool),
     Pause(bool),
+    /// Write CPU state and board diagnostics to the console (as [sim] lines).
+    DumpDebug,
     Quit,
 }
 
@@ -70,8 +160,18 @@ pub struct Status {
     pub mips: f64,
     /// Virtual time / wall time over the last second (1.0 = realtime).
     pub speed_ratio: f64,
+    pub board: BoardInfo,
     pub battery_mv: u32,
     pub button_down: bool,
+    /// Touch bar zone currently touched, if any.
+    pub touching: Option<TouchZone>,
+    /// All touch bar zones currently held (bit 0 left, 1 center, 2 right).
+    pub touch_mask: u8,
+    pub docked: bool,
+    /// The battery is being charged (docked and not full).
+    pub charging: bool,
+    /// Number of completed `Command::Touch` taps.
+    pub touches_done: u64,
     pub wifi_available: bool,
     pub wifi_connected: bool,
     pub ip: Option<String>,
@@ -94,8 +194,14 @@ impl Default for Status {
             sim_time_ns: 0,
             mips: 0.0,
             speed_ratio: 0.0,
+            board: BoardInfo::default(),
             battery_mv: 4100,
             button_down: false,
+            touching: None,
+            touch_mask: 0,
+            docked: false,
+            charging: false,
+            touches_done: 0,
             wifi_available: true,
             wifi_connected: false,
             ip: None,

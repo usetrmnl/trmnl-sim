@@ -187,6 +187,26 @@ class Simulator:
         time.sleep(gap_ms / 1000)
         self.press(ms)
 
+    def touch(self, zone: str, ms: int = 120) -> None:
+        """Tap the touch bar ("left", "center" or "right") for `ms` of virtual time (TRMNL X)."""
+        self._post("/touch", {"zone": zone, "ms": ms}, timeout=ms / 1000 * 20 + 30)
+
+    def dock(self, docked: bool = True) -> None:
+        """Put the device on / take it off its magnetic dock (TRMNL X). Returns once applied."""
+        self._post("/dock", {"docked": docked})
+        deadline = time.time() + 10
+        while self.status()["docked"] != docked:
+            if time.time() > deadline:
+                raise SimError("dock state did not change (is the simulator paused?)")
+            time.sleep(0.02)
+
+    def debug(self) -> list[str]:
+        """Dump CPU state and board diagnostics; returns the dumped lines."""
+        c = self.status()["console_total"]
+        self._post("/debug")
+        time.sleep(0.3)
+        return self.console(c)
+
     def reset(self) -> None:
         self._post("/reset")
 

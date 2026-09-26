@@ -92,6 +92,23 @@ class RefreshCycle(unittest.TestCase):
             s.press(6000)
             s.wait(portal=True, timeout_s=120)
 
+    def test_portal_soft_reset_forgets_the_device(self):
+        # A long press only forgets WiFi; the portal's Soft Reset also clears the API key,
+        # so the next onboarding has to register with /api/setup again.
+        with dev.boot() as s:
+            s.wait(state="deep_sleep", timeout_s=90)
+            s.press(6000)
+            boots = s.wait(portal=True, timeout_s=120)["status"]["boot_count"]
+            try:
+                s.portal_request("/soft-reset", retry_s=0)
+            except (ConnectionError, OSError):
+                pass  # the device may restart before it answers
+            s.wait(min_boots=boots + 1, portal=True, timeout_s=120)
+            s.portal_connect("TRMNL-Sim", "password", server=dev.mock.device_url)
+            dev.mock.wait_for_request("/api/setup", timeout_s=120)
+            dev.mock.wait_for_request("/api/display", timeout_s=120)
+            s.wait(state="deep_sleep", timeout_s=120)
+
     def test_wifi_out_of_range_keeps_running(self):
         with dev.boot() as s:
             s.wait(state="deep_sleep", timeout_s=90)

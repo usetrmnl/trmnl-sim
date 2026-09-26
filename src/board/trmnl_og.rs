@@ -1,4 +1,5 @@
 //! TRMNL OG: ESP32-C3, UC8179 7.5" panel on GPSPI2, one button, LiPo via divider.
+//! The TRMNL BWRY (`trmnl_4clr`) is the same board with a 4-color panel.
 
 use super::Board;
 use crate::devices::uc8179::Uc8179;
@@ -85,6 +86,11 @@ impl Board for TrmnlOg {
 
     fn update(&mut self, now: u64) {
         self.panel.update(now);
+    }
+
+    fn info(&self) -> sim_api::BoardInfo {
+        let name = if self.panel.is_bwry() { "TRMNL BWRY" } else { "TRMNL OG" };
+        sim_api::BoardInfo { name: name.into(), has_button: true, ..Default::default() }
     }
 
     fn set_button(&mut self, down: bool) {

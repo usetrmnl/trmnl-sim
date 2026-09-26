@@ -41,6 +41,9 @@ pub enum MachineRequest {
     DeepSleep { timer_ns: Option<u64>, gpio_low_mask: u64 },
     /// Light sleep: stall the CPU until the timer (or a GPIO, if enabled) wakes it.
     LightSleep { timer_ns: Option<u64>, gpio: bool },
+    /// `rtc_sleep_start(wakeup_opt, ..)`: the chip halts until a wake source in
+    /// `wakeup_opt` (RTC_*_TRIG_EN bits) fires; the SoC reads its RTC registers.
+    RtcSleep { wakeup_opt: u32 },
     /// Stop the machine with a message (unsupported firmware behaviour).
     #[allow(dead_code)]
     Halt(String),
@@ -74,16 +77,27 @@ pub struct SleepConfig {
 pub struct HleState {
     pub wifi: wifi::WifiState,
     pub sleep: SleepConfig,
+    /// Where the second core should start (ESP32 dual-core ROM API).
+    pub appcpu_boot_addr: Option<u32>,
+    /// A simulator-initiated guest call returned to the boot trampoline.
+    pub wake_stub_returned: bool,
 }
 
 impl HleState {
     pub fn new(mac: [u8; 6]) -> Self {
-        HleState { wifi: wifi::WifiState::new(mac), sleep: SleepConfig::default() }
+        HleState {
+            wifi: wifi::WifiState::new(mac),
+            sleep: SleepConfig::default(),
+            appcpu_boot_addr: None,
+            wake_stub_returned: false,
+        }
     }
 
     pub fn chip_reset(&mut self) {
         self.wifi.reset();
         self.sleep = SleepConfig::default();
+        self.appcpu_boot_addr = None;
+        self.wake_stub_returned = false;
     }
 }
 
@@ -104,6 +118,8 @@ pub const MAGIC_BASE: u32 = 0x7F00_0000;
 pub struct Hooks {
     by_addr: HashMap<u32, (&'static str, HookFn)>,
     filter: Vec<u64>,
+    /// Continuations of guest calls, keyed by their return trampoline: (continuation,
+    /// the hooked function's return address).
     pending: HashMap<u32, (Cont, u32)>,
     next_magic: u32,
     /// Fixed trampolines (e.g. HLE-owned task entry points).
@@ -203,10 +219,12 @@ impl Hooks {
                     }
                 }
             }
-            ctx.env.console(&format!("trace: {name}({}) from {from}{extra}", args.join(", ")));
+            let t = ctx.env.now_ns() as f64 / 1e9;
+            ctx.env.console(&format!("trace @{t:.6}: {name}({}) from {from}{extra}", args.join(", ")));
         }
-        let flow = if let Some((cont, _sp)) = self.pending.remove(&pc) {
+        let flow = if let Some((cont, ra)) = self.pending.remove(&pc) {
             let ret = ctx.cpu.ret_val();
+            ctx.cpu.restore_after_call(ra);
             cont(ctx, ret)
         } else if let Some((name, f)) = self.trampolines.get(&pc).copied() {
             log::trace!("hle trampoline {name}");
@@ -234,7 +252,7 @@ impl Hooks {
                 if self.next_magic >= 0x7FFF_FFF0 {
                     self.next_magic = MAGIC_BASE + 0x10_0000;
                 }
-                self.pending.insert(magic, (then, ctx.cpu.sp()));
+                self.pending.insert(magic, (then, ctx.cpu.return_address()));
                 ctx.cpu.begin_call(func, &args, magic);
                 true
             }

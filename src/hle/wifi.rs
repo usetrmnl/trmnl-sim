@@ -38,8 +38,28 @@ const REASON_HANDSHAKE_TIMEOUT: u8 = 15;
 const REASON_BEACON_TIMEOUT: u8 = 200;
 const REASON_NO_AP_FOUND: u8 = 201;
 
-const WIFI_CONFIG_SIZE: usize = 140;
-const AP_RECORD_SIZE: usize = 80;
+/// Struct layouts of the ESP-IDF WiFi API, which change between IDF releases.
+#[derive(Clone, Copy, Debug)]
+pub struct WifiAbi {
+    pub config_size: usize,
+    pub ap_record_size: usize,
+    pub connected_event_size: usize,
+    /// wifi_sta_list_t: entries of 12 bytes, then `num`.
+    pub sta_list_entries: usize,
+}
+
+impl WifiAbi {
+    pub const IDF_4_4: WifiAbi =
+        WifiAbi { config_size: 140, ap_record_size: 80, connected_event_size: 44, sta_list_entries: 10 };
+    pub const IDF_5_5: WifiAbi =
+        WifiAbi { config_size: 184, ap_record_size: 92, connected_event_size: 48, sta_list_entries: 15 };
+
+    /// Pick the layout for an app's ESP-IDF version string (e.g. "v4.4.7", "5.5.2").
+    pub fn for_idf(version: &str) -> WifiAbi {
+        let major = version.trim_start_matches('v').split('.').next().and_then(|m| m.parse::<u32>().ok());
+        if major.is_some_and(|m| m >= 5) { Self::IDF_5_5 } else { Self::IDF_4_4 }
+    }
+}
 const MS: u64 = 1_000_000;
 
 /// An access point visible to the simulated device.
@@ -72,8 +92,9 @@ pub struct WifiState {
     task_created: bool,
     mode: u32,
     started: bool,
-    sta_config: [u8; WIFI_CONFIG_SIZE],
-    ap_config: [u8; WIFI_CONFIG_SIZE],
+    pub abi: WifiAbi,
+    sta_config: Vec<u8>,
+    ap_config: Vec<u8>,
     /// Index into `networks` of the AP we're associated with.
     connected: Option<usize>,
     connecting: bool,
@@ -114,8 +135,9 @@ impl WifiState {
             task_created: false,
             mode: 0,
             started: false,
-            sta_config: [0; WIFI_CONFIG_SIZE],
-            ap_config: [0; WIFI_CONFIG_SIZE],
+            abi: WifiAbi::IDF_4_4,
+            sta_config: vec![0; WifiAbi::IDF_4_4.config_size],
+            ap_config: vec![0; WifiAbi::IDF_4_4.config_size],
             connected: None,
             connecting: false,
             rxcb: [0; 2],
@@ -132,11 +154,19 @@ impl WifiState {
     /// The chip reset: the driver state is gone (the "air" is not).
     pub fn reset(&mut self) {
         let keep = (self.available, self.networks.clone(), self.base_mac, self.portal_forward, self.net_config.clone());
+        let abi = self.abi;
         *self = WifiState::new(keep.2);
+        self.set_abi(abi);
         self.available = keep.0;
         self.networks = keep.1;
         self.portal_forward = keep.3;
         self.set_net_config(keep.4);
+    }
+
+    pub fn set_abi(&mut self, abi: WifiAbi) {
+        self.abi = abi;
+        self.sta_config = vec![0; abi.config_size];
+        self.ap_config = vec![0; abi.config_size];
     }
 
     pub fn set_net_config(&mut self, cfg: NetConfig) {
@@ -207,8 +237,8 @@ impl WifiState {
         d
     }
 
-    fn connected_event(ap: &SimAp, i: usize) -> Vec<u8> {
-        let mut d = vec![0u8; 44];
+    fn connected_event(&self, ap: &SimAp, i: usize) -> Vec<u8> {
+        let mut d = vec![0u8; self.abi.connected_event_size];
         let n = ap.ssid.len().min(32);
         d[..n].copy_from_slice(&ap.ssid.as_bytes()[..n]);
         d[32] = n as u8;
@@ -218,8 +248,8 @@ impl WifiState {
         d
     }
 
-    fn ap_record(ap: &SimAp, i: usize) -> [u8; AP_RECORD_SIZE] {
-        let mut r = [0u8; AP_RECORD_SIZE];
+    fn ap_record(&self, ap: &SimAp, i: usize) -> Vec<u8> {
+        let mut r = vec![0u8; self.abi.ap_record_size];
         r[..6].copy_from_slice(&Self::bssid(i));
         let n = ap.ssid.len().min(32);
         r[6..6 + n].copy_from_slice(&ap.ssid.as_bytes()[..n]);
@@ -248,7 +278,7 @@ impl WifiState {
                     let d = self.disconnected_event(Some(&ap), REASON_HANDSHAKE_TIMEOUT);
                     self.post(now + 1500 * MS, EV_STA_DISCONNECTED, d);
                 } else {
-                    self.post(now + 400 * MS, EV_STA_CONNECTED, Self::connected_event(&ap, i));
+                    self.post(now + 400 * MS, EV_STA_CONNECTED, self.connected_event(&ap, i));
                 }
             }
             None => {
@@ -272,6 +302,7 @@ impl WifiState {
     /// Frames lwIP sent on an interface.
     fn tx(&mut self, ifx: usize, frame: &[u8]) {
         self.stats.tx_frames += 1;
+        log::trace!(target: "wifi", "tx if{ifx} {} bytes", frame.len());
         match ifx {
             0 if self.connected.is_some_and(|i| self.networks[i].internet) => {
                 self.net.from_guest(frame);
@@ -397,11 +428,11 @@ fn sym(c: &HleCtx, name: &str) -> u32 {
     c.syms.addr(name).unwrap_or_else(|| panic!("firmware lacks symbol {name}"))
 }
 
-/// Reserve `n` bytes on the guest stack, returning their address.
+/// Reserve `n` bytes on the guest stack, returning their address. Leaves 16
+/// bytes of headroom: on Xtensa the words just below SP belong to the caller
+/// (its spilled a0-a3).
 fn stack_alloc(c: &mut HleCtx, n: u32) -> u32 {
-    let sp = (c.cpu.sp() - n) & !15;
-    c.cpu.set_sp(sp);
-    sp
+    c.cpu.alloc_scratch(n)
 }
 
 // ---- driver API ----------------------------------------------------------------------------------
@@ -412,7 +443,6 @@ fn wifi_init(c: &mut HleCtx) -> Flow {
     }
     c.state.wifi.task_created = true;
     // xTaskCreatePinnedToCore(TASK_LOOP, "sim_wifi", 4096, NULL, 23, NULL, tskNO_AFFINITY)
-    let ra = c.cpu.return_address();
     let saved_sp = c.cpu.sp();
     let name = stack_alloc(c, 16);
     c.mem.write_bytes(name, b"sim_wifi\0");
@@ -421,9 +451,7 @@ fn wifi_init(c: &mut HleCtx) -> Flow {
         args: vec![TASK_LOOP, name, 4096, 0, 23, 0, 0x7fff_ffff],
         then: Box::new(move |c, _| {
             c.cpu.set_sp(saved_sp);
-            c.cpu.set_arg(0, ESP_OK);
-            c.cpu.set_pc(ra);
-            Flow::Redirected
+            Flow::Return(Some(ESP_OK))
         }),
     }
 }
@@ -492,31 +520,78 @@ fn start(c: &mut HleCtx) -> Flow {
     Flow::Return(Some(ESP_OK))
 }
 
+/// Like the real driver, `esp_wifi_stop` posts its DISCONNECTED/STOP events before
+/// returning (callers tear down their netifs right after).
 fn stop(c: &mut HleCtx) -> Flow {
-    let now = c.env.now_ns();
     c.env.console("wifi: esp_wifi_stop()");
     let w = &mut c.state.wifi;
+    let mut events = Vec::new();
     if w.started {
         w.started = false;
-        if let Some(i) = w.connected {
+        if let Some(i) = w.connected.take() {
             let ap = w.networks[i].clone();
-            let d = w.disconnected_event(Some(&ap), REASON_ASSOC_LEAVE);
-            w.post(now, EV_STA_DISCONNECTED, d);
+            events.push((EV_STA_DISCONNECTED, w.disconnected_event(Some(&ap), REASON_ASSOC_LEAVE)));
         }
         if w.mode & 1 != 0 {
-            w.post(now + MS, EV_STA_STOP, vec![]);
+            events.push((EV_STA_STOP, vec![]));
         }
         if w.mode & 2 != 0 {
-            w.post(now + MS, EV_AP_STOP, vec![]);
+            events.push((EV_AP_STOP, vec![]));
+            w.ap_client = None;
+            w.ap_client_joined = false;
         }
-        w.events.retain(|e| e.id != EV_STA_CONNECTED);
+        w.connecting = false;
+        w.events.retain(|e| e.id != EV_STA_CONNECTED && e.id != EV_AP_STACONNECTED);
     }
-    Flow::Return(Some(ESP_OK))
+    let posted = !events.is_empty();
+    post_then(c, events.into(), move |c| {
+        let delay = c.syms.addr("vTaskDelay").unwrap_or(0);
+        if !posted || delay == 0 {
+            return Flow::Return(Some(ESP_OK));
+        }
+        // The real call blocks while the driver task stops, and the (higher priority) event
+        // task handles STA_STOP meanwhile; callers free their netifs right after returning.
+        Flow::Call { func: delay, args: vec![STOP_SETTLE_TICKS], then: Box::new(|_, _| Flow::Return(Some(ESP_OK))) }
+    })
+}
+
+/// FreeRTOS ticks `esp_wifi_stop` blocks for after posting its events (1 kHz tick).
+const STOP_SETTLE_TICKS: u32 = 20;
+
+/// Post events from inside a hook (each via a guest call to `esp_event_post`), then
+/// continue with `done`.
+fn post_then(
+    c: &mut HleCtx,
+    mut events: std::collections::VecDeque<(u32, Vec<u8>)>,
+    done: impl FnOnce(&mut HleCtx) -> Flow + Send + 'static,
+) -> Flow {
+    let Some((id, data)) = events.pop_front() else {
+        return done(c);
+    };
+    c.env.console(&format!("wifi: event WIFI_EVENT {id} (sync)"));
+    let base = c.mem.read_u32(sym(c, "WIFI_EVENT")).unwrap_or(0);
+    let saved_sp = c.cpu.sp();
+    let len = data.len() as u32;
+    let ptr = if len > 0 {
+        let p = stack_alloc(c, len.max(16));
+        c.mem.write_bytes(p, &data);
+        p
+    } else {
+        0
+    };
+    Flow::Call {
+        func: sym(c, "esp_event_post"),
+        args: vec![base, id, ptr, len, 0xffff_ffff],
+        then: Box::new(move |c, _| {
+            c.cpu.set_sp(saved_sp);
+            post_then(c, events, done)
+        }),
+    }
 }
 
 fn set_config(c: &mut HleCtx) -> Flow {
     let (ifx, p) = (c.cpu.arg(0), c.cpu.arg(1));
-    let Some(data) = c.mem.read_bytes(p, WIFI_CONFIG_SIZE) else {
+    let Some(data) = c.mem.read_bytes(p, c.state.wifi.abi.config_size) else {
         return Flow::Return(Some(ESP_ERR_INVALID_ARG));
     };
     let w = &mut c.state.wifi;
@@ -531,8 +606,8 @@ fn set_config(c: &mut HleCtx) -> Flow {
 fn get_config(c: &mut HleCtx) -> Flow {
     let (ifx, p) = (c.cpu.arg(0), c.cpu.arg(1));
     let data = match ifx {
-        0 => c.state.wifi.sta_config,
-        1 => c.state.wifi.ap_config,
+        0 => c.state.wifi.sta_config.clone(),
+        1 => c.state.wifi.ap_config.clone(),
         _ => return Flow::Return(Some(ESP_ERR_INVALID_ARG)),
     };
     c.mem.write_bytes(p, &data);
@@ -587,7 +662,8 @@ fn scan_get_ap_records(c: &mut HleCtx) -> Flow {
     let n = results.len().min(max);
     for (i, ap) in results.iter().take(n).enumerate() {
         let idx = c.state.wifi.networks.iter().position(|a| a.ssid == ap.ssid).unwrap_or(i);
-        c.mem.write_bytes(precs + (i * AP_RECORD_SIZE) as u32, &WifiState::ap_record(ap, idx));
+        let rec = c.state.wifi.ap_record(ap, idx);
+        c.mem.write_bytes(precs + (i * rec.len()) as u32, &rec);
     }
     c.mem.write_bytes(pn, &(n as u16).to_le_bytes());
     Flow::Return(Some(ESP_OK))
@@ -598,7 +674,7 @@ fn sta_get_ap_info(c: &mut HleCtx) -> Flow {
     let w = &c.state.wifi;
     match w.connected {
         Some(i) => {
-            let rec = WifiState::ap_record(&w.networks[i], i);
+            let rec = w.ap_record(&w.networks[i], i);
             c.mem.write_bytes(p, &rec);
             Flow::Return(Some(ESP_OK))
         }
@@ -608,12 +684,13 @@ fn sta_get_ap_info(c: &mut HleCtx) -> Flow {
 
 fn ap_get_sta_list(c: &mut HleCtx) -> Flow {
     let p = c.cpu.arg(0);
-    let mut list = [0u8; 124];
+    let n = c.state.wifi.abi.sta_list_entries;
+    let mut list = vec![0u8; n * 12 + 4];
     if c.state.wifi.ap_client_joined {
         list[..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x99]);
         list[6] = (-40i8) as u8;
         list[8] = 0b111;
-        list[120] = 1;
+        list[n * 12] = 1;
     }
     c.mem.write_bytes(p, &list);
     Flow::Return(Some(ESP_OK))
@@ -659,15 +736,7 @@ fn free_rx_buffer(c: &mut HleCtx) -> Flow {
     if eb == 0 {
         return Flow::Return(None);
     }
-    let ra = c.cpu.return_address();
-    Flow::Call {
-        func: sym(c, "free"),
-        args: vec![eb],
-        then: Box::new(move |c, _| {
-            c.cpu.set_pc(ra);
-            Flow::Redirected
-        }),
-    }
+    Flow::Call { func: sym(c, "free"), args: vec![eb], then: Box::new(|_, _| Flow::Return(None)) }
 }
 
 // ---- the driver task -------------------------------------------------------------------------------

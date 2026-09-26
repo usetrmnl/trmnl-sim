@@ -605,6 +605,9 @@ impl GuestCpu for Rv32 {
         self.x[RA] = return_to;
         self.pc = func;
     }
+    fn restore_after_call(&mut self, return_address: u32) {
+        self.x[RA] = return_address;
+    }
     fn irq_enabled(&self) -> bool {
         self.csr.mstatus & MSTATUS_MIE != 0
     }

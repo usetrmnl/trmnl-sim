@@ -3,6 +3,7 @@
 //! the runner drives.
 
 pub mod esp32c3;
+pub mod esp32s3;
 
 use crate::board::Board;
 
@@ -51,6 +52,10 @@ pub trait Machine: Send {
     /// virtual time must not run ahead of wall time even in turbo mode.
     fn realtime_required(&self) -> bool {
         false
+    }
+    /// In light sleep: `Some(wake time)` (`Some(None)` = no timer armed).
+    fn light_sleep(&self) -> Option<Option<u64>> {
+        None
     }
 }
 

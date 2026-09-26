@@ -386,6 +386,7 @@ impl VirtualNet {
 
     fn handle_dns(&mut self, src: Ipv4Addr, sport: u16, data: &[u8]) {
         let Some(q) = parse_dns_query(data) else { return };
+        log::debug!("vnet: dns query {} type {} from {src}:{sport}", q.name, q.qtype);
         let guest = SocketAddrV4::new(src, sport);
         let opcode = (q.flags >> 11) & 0xf;
         let immediate = |rcode, ans: &[Ipv4Addr]| build_dns_response(&q, rcode, ans);

@@ -15,8 +15,48 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
     hooks.install(syms, "esp_sleep_enable_gpio_wakeup", sleep_enable_gpio);
     hooks.install(syms, "esp_sleep_disable_wakeup_source", sleep_disable_source);
     hooks.install(syms, "esp_deep_sleep_start", deep_sleep_start);
-    hooks.install(syms, "esp_light_sleep_start", light_sleep_start);
+    hooks.install(syms, "esp_sleep_enable_ext0_wakeup", sleep_enable_ext0);
+    // Prefer hooking the point where the chip actually halts, so IDF's own
+    // light-sleep bookkeeping (wake cause, time compensation) runs for real.
+    if !hooks.install(syms, "rtc_sleep_start", rtc_sleep_start) {
+        hooks.install(syms, "esp_light_sleep_start", light_sleep_start);
+    }
+    // ArduinoLog's Log.xxxln(char*) as used by TRMNL's log_impl: production builds never
+    // call Log.begin(), so mirror the (already formatted) messages to the console.
+    hooks.install(syms, "_ZN7Logging10printLevelIPcEEvibT_z", arduino_log_line);
     super::wifi::install(hooks, syms);
+}
+
+/// void Logging::printLevel<char*>(int level, bool cr, char* msg, ...)
+fn arduino_log_line(c: &mut HleCtx) -> Flow {
+    let this = c.cpu.arg(0);
+    // Logging::_level (first member) is LOG_LEVEL_SILENT (0) until Log.begin(): only then
+    // would the message otherwise be lost.
+    if c.mem.read_u32(this) != Some(0) {
+        return Flow::Continue;
+    }
+    let level = match c.cpu.arg(1) {
+        1 => "F",
+        2 => "E",
+        3 => "W",
+        4 => "I",
+        5 => "T",
+        _ => "V",
+    };
+    let msg = read_cstr(c, c.cpu.arg(3), 600);
+    c.env.console(&format!("log {level}: {msg}"));
+    Flow::Continue
+}
+
+fn read_cstr(c: &HleCtx, addr: u32, max: usize) -> String {
+    let mut out = Vec::new();
+    for i in 0..max as u32 {
+        match c.mem.read_bytes(addr + i, 1) {
+            Some(b) if b[0] != 0 => out.push(b[0]),
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// esp_err_t esp_sleep_enable_timer_wakeup(uint64_t time_in_us)
@@ -53,6 +93,23 @@ fn sleep_disable_source(c: &mut HleCtx) -> Flow {
         _ => {}
     }
     Flow::Continue
+}
+
+/// esp_err_t esp_sleep_enable_ext0_wakeup(gpio_num_t gpio_num, int level)
+fn sleep_enable_ext0(c: &mut HleCtx) -> Flow {
+    let (gpio, level) = (c.cpu.arg(0), c.cpu.arg(1));
+    if level == 0 && gpio < 64 {
+        c.state.sleep.gpio_low_mask |= 1u64 << gpio;
+    }
+    Flow::Continue
+}
+
+/// uint32_t rtc_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt, ...): returns
+/// nonzero if the sleep was rejected. We always sleep.
+fn rtc_sleep_start(c: &mut HleCtx) -> Flow {
+    let wakeup_opt = c.cpu.arg(0);
+    c.env.request(MachineRequest::RtcSleep { wakeup_opt });
+    Flow::Return(Some(0))
 }
 
 fn deep_sleep_start(c: &mut HleCtx) -> Flow {

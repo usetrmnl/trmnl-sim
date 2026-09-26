@@ -5,6 +5,7 @@
 
 mod console;
 mod device;
+mod touch;
 
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,10 +15,11 @@ use egui::{
     Align, Align2, Color32, FontId, Key, KeyboardShortcut, Layout, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
     StrokeKind, Ui, Vec2,
 };
-use sim_api::{Command, RunState, SimHandle, Status};
+use sim_api::{BoardInfo, Command, RunState, SimHandle, Status};
 
 use console::ConsoleView;
-use device::{BEZEL_RATIO, Screen};
+use device::{Geometry, Look, Screen, ZoneVis};
+use touch::{TouchInput, ZONES};
 
 /// Options for [`run`].
 #[derive(Clone, Debug)]
@@ -35,6 +37,18 @@ impl Default for UiOptions {
     }
 }
 
+/// The window/dock icon: a TRMNL OG showing the TRMNL glyph (assets/icon.svg, rendered
+/// with `rsvg-convert -w 512 -h 512 icon.svg -o icon.png`).
+fn app_icon() -> egui::IconData {
+    let mut dec = png::Decoder::new(std::io::Cursor::new(&include_bytes!("../assets/icon.png")[..]));
+    dec.set_transformations(png::Transformations::normalize_to_color8() | png::Transformations::ALPHA);
+    let mut r = dec.read_info().expect("icon.png");
+    let mut buf = vec![0; r.output_buffer_size().expect("icon size")];
+    let info = r.next_frame(&mut buf).expect("icon.png");
+    buf.truncate(info.buffer_size());
+    egui::IconData { rgba: buf, width: info.width, height: info.height }
+}
+
 /// Open the simulator window. Must be called on the main thread; blocks until the window
 /// closes, then sends [`Command::Quit`].
 pub fn run(handle: SimHandle, opts: UiOptions) -> anyhow::Result<()> {
@@ -42,7 +56,8 @@ pub fn run(handle: SimHandle, opts: UiOptions) -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title(opts.title.clone())
             .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([640.0, 420.0]),
+            .with_min_inner_size([640.0, 420.0])
+            .with_icon(app_icon()),
         ..Default::default()
     };
     let h = handle.clone();
@@ -111,7 +126,11 @@ struct SimApp {
     console: ConsoleView,
     show_console: bool,
     zoom: Zoom,
+    /// The user picked a zoom preset (disables the initial auto-fit fallback).
+    zoom_user_set: bool,
     white_bezel: bool,
+    touch: TouchInput,
+    docked_pending: Option<Pending<bool>>,
     button: ButtonState,
     battery_pending: Option<Pending<u32>>,
     turbo_pending: Option<Pending<bool>>,
@@ -136,7 +155,10 @@ impl SimApp {
             h,
             show_console: true,
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
+            zoom_user_set: false,
             white_bezel: false,
+            touch: TouchInput::default(),
+            docked_pending: None,
             button: ButtonState::default(),
             battery_pending: None,
             turbo_pending: None,
@@ -150,6 +172,16 @@ impl SimApp {
         self.h.send(c);
     }
 
+    /// The board description, defaulting to an OG-style button board when the emulator
+    /// hasn't published one (all-false `BoardInfo::default()`).
+    fn board(&self) -> BoardInfo {
+        let mut b = self.status.board.clone();
+        if b.name.is_empty() && !b.has_button && !b.has_touchbar {
+            b.has_button = true;
+        }
+        b
+    }
+
     fn is_sleeping(&self) -> bool {
         matches!(self.status.state, RunState::DeepSleep { .. } | RunState::LightSleep { .. })
     }
@@ -161,18 +193,41 @@ impl SimApp {
     // ---- input ------------------------------------------------------------------------------
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        let board = self.board();
         let text_focus = ctx.text_edit_focused();
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
-        let (down, tap, save) = ctx.input_mut(|i| {
+        let active = !text_focus && focused;
+        let (space, zones, save) = ctx.input_mut(|i| {
             let save = i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::S));
-            if text_focus || !focused {
-                return (false, false, save);
+            let mut space = false;
+            let mut zones = [false; 3];
+            if active && board.has_button {
+                // Consume Space presses so they don't also activate a focused widget.
+                let tap = i.consume_key(Modifiers::NONE, Key::Space);
+                space = tap || i.key_down(Key::Space);
             }
-            // Consume Space presses so they don't also activate a focused widget.
-            let tap = i.consume_key(Modifiers::NONE, Key::Space);
-            (i.key_down(Key::Space), tap, save)
+            if active && board.has_touchbar {
+                let keys = [[Key::ArrowLeft, Key::Num1], [Key::ArrowDown, Key::Num2], [Key::ArrowRight, Key::Num3]];
+                for (z, ks) in keys.iter().enumerate() {
+                    for &k in ks {
+                        // Presses are consumed so arrows don't also move focus / sliders.
+                        let tap = i.consume_key(Modifiers::NONE, k);
+                        zones[z] |= tap || i.key_down(k);
+                    }
+                }
+            }
+            (space, zones, save)
         });
-        self.button.space_held = down || tap;
+        self.button.space_held = space;
+        for (i, &down) in zones.iter().enumerate() {
+            if down {
+                self.touch.hold(i);
+            }
+        }
+        if board.has_touchbar && !focused && self.touch.any_active() {
+            let h = self.h.clone();
+            self.touch.release_all(|c| h.send(c));
+        }
         if save {
             self.save_screenshot();
         }
@@ -244,9 +299,14 @@ impl SimApp {
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
+        let board = self.board();
         let s = &self.status;
         let dark = ui.visuals().dark_mode;
         ui.horizontal(|ui| {
+            if !board.name.is_empty() {
+                ui.label(RichText::new(&board.name).strong());
+                ui.separator();
+            }
             let (label, color) = state_label(s, dark);
             dot(ui, color, true);
             ui.label(RichText::new(label).color(color).strong());
@@ -276,6 +336,18 @@ impl SimApp {
             ui.label(format!("refreshes {}", s.display_refreshes));
             ui.label(format!("boots {}", s.boot_count));
             ui.label(format!("{:.2} V", s.battery_mv as f32 / 1000.0));
+            if board.has_dock {
+                let green =
+                    if dark { Color32::from_rgb(0x5c, 0xc8, 0x6c) } else { Color32::from_rgb(0x1f, 0x8a, 0x34) };
+                if s.docked {
+                    dot(ui, green, true);
+                    ui.label(RichText::new(if s.charging { "docked · charging" } else { "docked" }).color(green))
+                        .on_hover_text("On the magnetic dock (USB power)");
+                } else {
+                    dot(ui, ui.visuals().weak_text_color(), false);
+                    ui.weak("on battery");
+                }
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if !s.firmware.is_empty() {
                     ui.add(egui::Label::new(RichText::new(&s.firmware).weak()).truncate());
@@ -312,6 +384,47 @@ impl SimApp {
                 .clicked()
             {
                 self.send(Command::WakeFromSleep);
+            }
+            let board = self.board();
+            if board.has_dock {
+                let mut docked = Pending::resolve(&mut self.docked_pending, self.status.docked);
+                if ui
+                    .checkbox(&mut docked, "Docked (USB power)")
+                    .on_hover_text("Put the device on / take it off its magnetic charging dock")
+                    .changed()
+                {
+                    self.send(Command::SetDocked(docked));
+                    Pending::set(&mut self.docked_pending, docked);
+                }
+            }
+
+            if board.has_button {
+                section(ui, "Button");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Exact press:").on_hover_text(
+                        "Press for an exact duration of virtual time (accurate in turbo mode).\n\
+                         Or hold the button next to the device / hold Space.",
+                    );
+                    for (label, ms) in [("tap", 100), ("1 s", 1100), ("5 s", 5100), ("15 s", 15100)] {
+                        if ui.small_button(label).clicked() {
+                            self.send(Command::Press { ms });
+                        }
+                    }
+                });
+            }
+
+            if board.has_touchbar {
+                section(ui, "Touch bar");
+                let shift = ui.input(|i| i.modifiers.shift);
+                ui.horizontal(|ui| {
+                    for (i, label) in ["Left", "Center", "Right"].into_iter().enumerate() {
+                        let selected = matches!(self.zone_vis(i, false), ZoneVis::Active | ZoneVis::Latched);
+                        let btn = egui::Button::new(label).selected(selected).sense(Sense::click_and_drag());
+                        let resp = ui.add(btn);
+                        self.touch_zone_input(i, &resp, shift);
+                    }
+                });
+                ui.weak("Click = tap, hold = finger down, shift-click latches. Keys: left/down/right arrows or 1/2/3.");
             }
 
             section(ui, "Emulation");
@@ -366,9 +479,12 @@ impl SimApp {
 
             section(ui, "Display");
             ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(&mut self.zoom, Zoom::Fit, "Fit");
+                let mut changed = ui.selectable_value(&mut self.zoom, Zoom::Fit, "Fit").clicked();
                 for (label, z) in [("50%", 0.5), ("100%", 1.0), ("200%", 2.0)] {
-                    ui.selectable_value(&mut self.zoom, Zoom::Fixed(z), label);
+                    changed |= ui.selectable_value(&mut self.zoom, Zoom::Fixed(z), label).clicked();
+                }
+                if changed {
+                    self.zoom_user_set = true;
                 }
             });
             ui.horizontal(|ui| {
@@ -388,26 +504,41 @@ impl SimApp {
         const SIDE_H: f32 = 196.0;
         const GAP: f32 = 22.0;
         const PAD: f32 = 8.0;
+        const CAPTION: f32 = 20.0;
 
+        let board = self.board();
         let ctx = ui.ctx().clone();
         let avail = ui.available_size();
         let scr = self.screen.size();
-        let border_unit = scr.x * BEZEL_RATIO;
-        let dev_unit = Vec2::new(scr.x + 2.0 * border_unit, scr.y + 2.0 * border_unit);
+        let geom = Geometry::new(scr, board.has_touchbar, board.has_dock);
+        let total_unit = geom.total(scr);
+        let side = board.has_button || board.has_touchbar;
+        let (side_w, gap) = if side { (SIDE_W, GAP) } else { (0.0, 0.0) };
+        let caption = if board.name.is_empty() { 0.0 } else { CAPTION };
+        let fit = {
+            let zx = (avail.x - side_w - gap - 2.0 * PAD) / total_unit.x;
+            let zy = (avail.y - 2.0 * PAD - caption) / total_unit.y;
+            zx.min(zy).clamp(0.05, 8.0)
+        };
+        // Until the user picks a zoom, an initial fixed zoom that doesn't fit switches to fit
+        // (e.g. the 1872×1404 TRMNL X panel at the default 100%).
+        if let Zoom::Fixed(z) = self.zoom
+            && !self.zoom_user_set
+            && z > fit
+        {
+            self.zoom = Zoom::Fit;
+        }
         let zoom = match self.zoom {
             Zoom::Fixed(z) => z,
-            Zoom::Fit => {
-                let zx = (avail.x - SIDE_W - GAP - 2.0 * PAD) / dev_unit.x;
-                let zy = (avail.y - 2.0 * PAD) / dev_unit.y;
-                zx.min(zy).clamp(0.1, 8.0)
-            }
+            Zoom::Fit => fit,
         };
         let ppp = ctx.pixels_per_point();
         let nearest = zoom * ppp >= 0.999;
         self.screen.update(&ctx, nearest);
 
-        let dev = dev_unit * zoom;
-        let group = Vec2::new(dev.x + GAP + SIDE_W, dev.y.max(SIDE_H));
+        let body = geom.body(scr) * zoom;
+        let dev = total_unit * zoom + Vec2::new(0.0, caption);
+        let group = Vec2::new(dev.x + gap + side_w, dev.y.max(if side { SIDE_H } else { 0.0 }));
         let content = group + Vec2::splat(2.0 * PAD);
 
         egui::ScrollArea::both().id_salt("device_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -415,15 +546,131 @@ impl SimApp {
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let g = Rect::from_center_size(rect.center(), group);
             let snap = |v: f32| (v * ppp).round() / ppp;
-            let dev_min = Pos2::new(snap(g.min.x), snap(g.center().y - dev.y / 2.0));
-            let dev_rect = Rect::from_min_size(dev_min, dev);
-            self.screen.paint(ui.painter(), dev_rect, zoom, self.white_bezel);
-            let side = Rect::from_min_size(
-                Pos2::new(dev_rect.max.x + GAP, g.center().y - SIDE_H / 2.0),
-                Vec2::new(SIDE_W, SIDE_H),
-            );
-            self.physical_button(ui, side);
+            let top = g.center().y - dev.y / 2.0;
+            if caption > 0.0 {
+                ui.painter().text(
+                    Pos2::new(g.min.x + 2.0, top),
+                    Align2::LEFT_TOP,
+                    &board.name,
+                    FontId::proportional(13.0),
+                    ui.visuals().weak_text_color(),
+                );
+            }
+            let body_rect = Rect::from_min_size(Pos2::new(snap(g.min.x), snap(top + caption)), body);
+
+            let mut zones = [ZoneVis::Idle; 3];
+            if board.has_touchbar {
+                let rects = geom.zone_rects(body_rect, zoom, scr);
+                let shift = ui.input(|i| i.modifiers.shift);
+                for (i, r) in rects.iter().enumerate() {
+                    let resp = ui
+                        .interact(r.expand(2.0), ui.id().with(("touch_zone", i)), Sense::click_and_drag())
+                        .on_hover_text(
+                            "Touch bar: click = tap, press and hold = finger down.\n\
+                             Shift-click latches a zone down (hold two zones, e.g. left + right).\n\
+                             Keys: left/down/right arrows or 1/2/3.",
+                        );
+                    self.touch_zone_input(i, &resp, shift);
+                    zones[i] = self.zone_vis(i, resp.hovered());
+                }
+            }
+            let look = Look {
+                white_bezel: self.white_bezel,
+                docked: board.has_dock && self.status.docked,
+                zones,
+                accent: ui.visuals().selection.bg_fill,
+            };
+            self.screen.paint(ui.painter(), body_rect, zoom, &geom, &look);
+
+            if side {
+                let side = Rect::from_min_size(
+                    Pos2::new(body_rect.max.x + GAP, g.center().y - SIDE_H / 2.0),
+                    Vec2::new(SIDE_W, SIDE_H),
+                );
+                if board.has_button {
+                    self.physical_button(ui, side);
+                } else {
+                    self.touch_side(ui, side);
+                }
+            }
         });
+    }
+
+    /// Mouse interaction with touch zone `i` (on the device graphic or a panel button).
+    fn touch_zone_input(&mut self, i: usize, resp: &egui::Response, shift: bool) {
+        if resp.hovered() {
+            resp.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if shift {
+            if resp.clicked() {
+                self.touch.toggle_latch(i);
+            }
+        } else if resp.is_pointer_button_down_on() {
+            self.touch.unlatch(i);
+            self.touch.hold(i);
+        }
+    }
+
+    fn zone_vis(&self, i: usize, hovered: bool) -> ZoneVis {
+        if self.touch.is_latched(i) {
+            ZoneVis::Latched
+        } else if self.touch.is_active(i) || self.status.touch_mask & ZONES[i].bit() != 0 {
+            ZoneVis::Active
+        } else if hovered {
+            ZoneVis::Hover
+        } else {
+            ZoneVis::Idle
+        }
+    }
+
+    /// Side column for touch-bar boards: legend, hold timer and last-touch readout.
+    fn touch_side(&mut self, ui: &mut Ui, area: Rect) {
+        let v = ui.visuals().clone();
+        let painter = ui.painter().clone();
+        let cx = area.center().x;
+        let mut y = area.min.y + 16.0;
+        painter.text(
+            Pos2::new(cx, y),
+            Align2::CENTER_TOP,
+            "Touch bar",
+            FontId::proportional(14.0),
+            v.strong_text_color(),
+        );
+        y += 20.0;
+        for line in ["click = tap · hold = finger down", "shift-click latches a zone", "keys: arrows or 1 2 3"] {
+            painter.text(Pos2::new(cx, y), Align2::CENTER_TOP, line, FontId::proportional(11.0), v.weak_text_color());
+            y += 15.0;
+        }
+        y += 18.0;
+        let held = self.touch.longest_hold();
+        let bar = Rect::from_min_size(Pos2::new(area.min.x, y), Vec2::new(area.width(), 10.0));
+        hold_bar(&painter, &v, bar, held, 3.0, &[0.6, 2.0], false);
+        y = bar.max.y + 20.0;
+        let names =
+            |m: [bool; 3]| ZONES.iter().zip(m).filter(|(_, d)| *d).map(|(z, _)| z.name()).collect::<Vec<_>>().join("+");
+        let line = if let Some(h) = held {
+            format!("{} {h:.2} s", names(self.touch.down_mask()))
+        } else if self.touch.any_active() {
+            "…".to_string()
+        } else if let Some(d) = self.touch.last_hold {
+            match self.touch.last_combo {
+                Some(m) => format!("last {} {:.2} s", names(m), d.as_secs_f32()),
+                None => format!("last touch {:.2} s", d.as_secs_f32()),
+            }
+        } else {
+            String::new()
+        };
+        painter.text(Pos2::new(cx, y), Align2::CENTER_TOP, line, FontId::monospace(11.0), v.text_color());
+        y += 18.0;
+        if self.status.touches_done > 0 {
+            painter.text(
+                Pos2::new(cx, y),
+                Align2::CENTER_TOP,
+                format!("{} taps done", self.status.touches_done),
+                FontId::proportional(10.0),
+                v.weak_text_color(),
+            );
+        }
     }
 
     fn physical_button(&mut self, ui: &mut Ui, area: Rect) {
@@ -484,34 +731,9 @@ impl SimApp {
         y += 24.0;
 
         // Hold timer: sqrt scale over 0..16 s so the 1 s / 5 s / 15 s marks are spread out.
-        const MAX_S: f32 = 16.0;
-        let pos = |s: f32| (s / MAX_S).clamp(0.0, 1.0).sqrt();
         let bar = Rect::from_min_size(Pos2::new(area.min.x, y), Vec2::new(area.width(), 10.0));
-        painter.rect_filled(bar, 5.0, v.extreme_bg_color);
-        painter.rect_stroke(bar, 5.0, Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
         let held = self.button.pressed_at.map(|p| p.elapsed().as_secs_f32());
-        if let Some(h) = held {
-            let col = if h >= 15.0 {
-                Color32::from_rgb(0xd6, 0x3c, 0x3c)
-            } else if h >= 5.0 {
-                Color32::from_rgb(0xe0, 0x9a, 0x2a)
-            } else if h >= 1.0 {
-                accent
-            } else {
-                v.widgets.inactive.fg_stroke.color
-            };
-            let fill = Rect::from_min_max(bar.min, Pos2::new(bar.min.x + bar.width() * pos(h), bar.max.y));
-            painter.rect_filled(fill, 5.0, col);
-        }
-        for t in [1.0f32, 5.0, 15.0] {
-            let x = bar.min.x + bar.width() * pos(t);
-            let reached = held.is_some_and(|h| h >= t);
-            let col = if reached { v.strong_text_color() } else { v.weak_text_color() };
-            painter.line_segment([Pos2::new(x, bar.min.y - 3.0), Pos2::new(x, bar.max.y + 3.0)], Stroke::new(1.5, col));
-            let align = if t >= 15.0 { Align2::RIGHT_TOP } else { Align2::CENTER_TOP };
-            let tx = if t >= 15.0 { bar.max.x } else { x };
-            painter.text(Pos2::new(tx, bar.max.y + 4.0), align, format!("{t:.0}s"), FontId::proportional(10.0), col);
-        }
+        hold_bar(&painter, &v, bar, held, 16.0, &[1.0, 5.0, 15.0], true);
         y = bar.max.y + 20.0;
 
         let line = if let Some(h) = held {
@@ -536,6 +758,7 @@ impl eframe::App for SimApp {
         let ctx = ui.ctx().clone();
         self.status = self.h.status.lock().clone();
         let console_changed = self.console.poll();
+        self.touch.begin_frame();
         self.handle_keys(&ctx);
         if self.notice.as_ref().is_some_and(|n| n.at.elapsed() > Duration::from_secs(8)) {
             self.notice = None;
@@ -575,11 +798,14 @@ impl eframe::App for SimApp {
         });
 
         self.apply_button();
+        let h = self.h.clone();
+        self.touch.update(|c| h.send(c));
 
         let s = &self.status;
         let active = matches!(s.state, RunState::Running | RunState::Idle)
             || s.display_busy
             || self.button.down
+            || self.touch.any_active()
             || console_changed;
         let after = if active {
             Duration::from_millis(33)
@@ -589,6 +815,48 @@ impl eframe::App for SimApp {
             Duration::from_millis(250)
         };
         ctx.request_repaint_after(after);
+    }
+}
+
+/// A hold-duration bar with labelled threshold ticks. The fill colour steps up with each
+/// threshold reached. `sqrt` spreads out small thresholds on long scales.
+fn hold_bar(
+    painter: &egui::Painter,
+    v: &egui::Visuals,
+    bar: Rect,
+    held: Option<f32>,
+    max_s: f32,
+    ticks: &[f32],
+    sqrt: bool,
+) {
+    let pos = |s: f32| {
+        let f = (s / max_s).clamp(0.0, 1.0);
+        if sqrt { f.sqrt() } else { f }
+    };
+    painter.rect_filled(bar, 5.0, v.extreme_bg_color);
+    painter.rect_stroke(bar, 5.0, Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color), StrokeKind::Inside);
+    if let Some(h) = held {
+        let levels = [
+            v.widgets.inactive.fg_stroke.color,
+            v.selection.bg_fill,
+            Color32::from_rgb(0xe0, 0x9a, 0x2a),
+            Color32::from_rgb(0xd6, 0x3c, 0x3c),
+        ];
+        let reached = ticks.iter().filter(|&&t| h >= t).count();
+        // With fewer ticks, the last one reached is shown as "max" (red).
+        let idx = if reached == ticks.len() && reached > 0 { 3 } else { reached.min(2) };
+        let fill = Rect::from_min_max(bar.min, Pos2::new(bar.min.x + bar.width() * pos(h), bar.max.y));
+        painter.rect_filled(fill, 5.0, levels[idx]);
+    }
+    for (n, &t) in ticks.iter().enumerate() {
+        let x = bar.min.x + bar.width() * pos(t);
+        let reached = held.is_some_and(|h| h >= t);
+        let col = if reached { v.strong_text_color() } else { v.weak_text_color() };
+        painter.line_segment([Pos2::new(x, bar.min.y - 3.0), Pos2::new(x, bar.max.y + 3.0)], Stroke::new(1.5, col));
+        let near_end = n + 1 == ticks.len() && pos(t) > 0.9;
+        let (align, tx) = if near_end { (Align2::RIGHT_TOP, bar.max.x) } else { (Align2::CENTER_TOP, x) };
+        let label = if t.fract() == 0.0 { format!("{t:.0}s") } else { format!("{t}s") };
+        painter.text(Pos2::new(tx, bar.max.y + 4.0), align, label, FontId::proportional(10.0), col);
     }
 }
 
@@ -661,14 +929,15 @@ fn utc_timestamp() -> String {
     format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, (rem / 60) % 60, rem % 60)
 }
 
-/// Write the frame as an 8-bit greyscale PNG (white = 255, i.e. `255 - darkness`).
+/// Write the frame as a viewer sees it: 8-bit greyscale (white = 255, i.e. `255 - darkness`),
+/// or RGB on color panels.
 fn write_png(path: &Path, frame: &sim_api::Frame) -> anyhow::Result<()> {
     let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), frame.width as u32, frame.height as u32);
-    enc.set_color(png::ColorType::Grayscale);
+    let (width, height, ch, data) = frame.viewer(None);
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
+    enc.set_color(if ch == 3 { png::ColorType::Rgb } else { png::ColorType::Grayscale });
     enc.set_depth(png::BitDepth::Eight);
     let mut w = enc.write_header()?;
-    let data: Vec<u8> = frame.pixels[..frame.width * frame.height].iter().map(|&d| 255 - d).collect();
     w.write_image_data(&data)?;
     w.finish()?;
     Ok(())
@@ -679,11 +948,87 @@ mod tests {
     use super::*;
 
     #[test]
+    fn app_icon_is_square_rgba() {
+        let icon = app_icon();
+        assert_eq!((icon.width, icon.height), (512, 512));
+        assert_eq!(icon.rgba.len(), 512 * 512 * 4);
+    }
+
+    #[test]
     fn formatting() {
         assert_eq!(format_sim_time(3_723_456_000_000), "1:02:03.456");
         assert_eq!(format_countdown(872_000_000_000), "14:32");
         assert_eq!(format_countdown(1), "0:01");
         assert_eq!(format_countdown(3_600_000_000_000), "1:00:00");
         assert_eq!(utc_timestamp().len(), 15);
+    }
+}
+
+/// Offscreen renders for eyeballing the layout (needs a GPU; run with
+/// `SIM_UI_RENDER_DIR=/some/dir cargo test -p sim-ui render -- --ignored`).
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use sim_api::{BoardInfo, Frame, TouchZone};
+    use std::sync::Arc;
+
+    fn harness(
+        w: usize,
+        h: usize,
+        board: BoardInfo,
+        docked: bool,
+    ) -> (egui_kittest::Harness<'static, SimApp>, sim_api::SimPorts) {
+        let pixels = (0..w * h)
+            .map(|i| if ((i % w) * 16 / w).is_multiple_of(2) { ((i / w) * 255 / h) as u8 } else { 0 })
+            .collect();
+        let frame = Arc::new(Mutex::new(Frame { width: w, height: h, pixels, rgb: None, generation: 1 }));
+        let (handle, ports) = sim_api::channel(frame);
+        {
+            let mut s = handle.status.lock();
+            s.board = board;
+            s.docked = docked;
+            s.firmware = "render test".into();
+            s.state = RunState::DeepSleep { wake_at_ns: Some(872_000_000_000) };
+        }
+        for i in 0..50 {
+            handle.console.lock().push_bytes(format!("I ({i}) test: line {i}\n").as_bytes());
+        }
+        let harness = egui_kittest::Harness::builder()
+            .with_size([1280.0, 860.0])
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| SimApp::new(cc, handle, UiOptions::default()));
+        (harness, ports)
+    }
+
+    fn save(h: &mut egui_kittest::Harness<'static, SimApp>, name: &str) {
+        let Ok(dir) = std::env::var("SIM_UI_RENDER_DIR") else { return };
+        let img = h.render().expect("render");
+        img.save(format!("{dir}/{name}.png")).expect("save");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_og() {
+        let (mut h, _p) = harness(800, 480, BoardInfo::default(), false);
+        h.run_steps(5);
+        save(&mut h, "og");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_x() {
+        let board =
+            BoardInfo { name: "TRMNL X".into(), has_button: false, has_touchbar: true, has_dock: true, has_5ghz: true };
+        let (mut h, ports) = harness(1872, 1404, board, true);
+        h.run_steps(3);
+        // Hold the left zone via keyboard past the tap window: expect TouchDown(Left).
+        h.key_down(Key::ArrowLeft);
+        h.run_steps(2);
+        std::thread::sleep(touch::TAP_WINDOW + Duration::from_millis(50));
+        h.run_steps(2);
+        save(&mut h, "x_touch_left");
+        let cmds: Vec<String> = ports.commands.try_iter().map(|c| format!("{c:?}")).collect();
+        assert!(cmds.iter().any(|c| c == &format!("{:?}", Command::TouchDown(TouchZone::Left))), "{cmds:?}");
     }
 }
