@@ -78,6 +78,14 @@ pub trait Machine: Send {
     /// Start recording code coverage (accumulates across resets).
     fn set_coverage(&mut self, cov: Coverage);
     fn coverage(&mut self) -> Option<&mut Coverage>;
+    /// The `--memcheck` report as JSON (`None` when memcheck is off).
+    fn memcheck_json(&mut self) -> Option<String> {
+        None
+    }
+    /// A human-readable memcheck summary, for the end of a run.
+    fn memcheck_summary(&mut self) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -13,6 +13,7 @@ use crate::coverage::Coverage;
 use crate::devices::spi_flash::SpiFlash;
 use crate::firmware::{self, Symbols};
 use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MachineRequest};
+use crate::memcheck::{self, Memcheck};
 use crate::savepoint::SocState;
 
 use super::{Machine, NetStatus, Output, ResetKind, SliceExit};
@@ -87,6 +88,12 @@ impl GuestMem for C3Bus {
     }
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> bool {
         self.load_bytes(addr, data)
+    }
+    fn read_u32(&self, addr: u32) -> Option<u32> {
+        self.peek32(addr)
+    }
+    fn memcheck(&mut self) -> Option<&mut Memcheck> {
+        self.mc.as_deref_mut()
     }
 }
 
@@ -182,6 +189,57 @@ impl Esp32c3 {
         self.hle.wifi.portal_forward = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     }
 
+    /// Turn on `--memcheck` and restart from power-on (so the heap is followed from the start).
+    pub fn enable_memcheck(&mut self, mode: memcheck::Mode, suppressions: Vec<String>) {
+        let sram = bus::SRAM_SIZE as u32;
+        self.bus.mc = Some(Box::new(Memcheck::new(
+            mode,
+            &[(bus::SRAM_D_BASE, sram, None), (bus::SRAM_I_BASE, sram, Some(bus::SRAM_D_BASE))],
+        )));
+        if let Some(mc) = self.bus.mc.as_deref_mut() {
+            mc.suppressions = suppressions;
+        }
+        self.active_app = None;
+        self.bus.p.uart_out.clear();
+        self.reset(ResetKind::PowerOn);
+        self.boots = 1;
+    }
+
+    /// A load or store hit poisoned memory: report it, unless the allocator did it.
+    #[cold]
+    fn memcheck_poll(&mut self, pc: u32) -> Option<SliceExit> {
+        let mut mc = self.bus.mc.take()?;
+        let mut exit = None;
+        if let Some(a) = mc.pending.take()
+            && !mc.is_exempt(pc, &a)
+        {
+            let mut frames = self.cpu.backtrace(&|a| self.bus.peek32(a), memcheck::FRAMES);
+            frames[0] = pc;
+            let tcb = memcheck::current_tcb_addr(&self.syms, 0).and_then(|a| self.bus.peek32(a));
+            let site = memcheck::Site { frames, tcb, core: 0 };
+            let v = mc.access_violation(&a, &site, &self.syms, self.bus.now_ns());
+            let summary = v.summary();
+            if let Some((lines, counts)) = mc.record(v) {
+                for l in lines {
+                    self.msg(l);
+                }
+                if counts && mc.mode == memcheck::Mode::Halt {
+                    exit = Some(SliceExit::Halted(format!("memcheck: {summary}")));
+                }
+            }
+        }
+        self.bus.mc = Some(mc);
+        exit
+    }
+
+    /// Refresh the tasks' stack high-water marks.
+    fn memcheck_scan_stacks(&mut self) {
+        if let Some(mut mc) = self.bus.mc.take() {
+            mc.scan_stacks(|a, n| self.bus.peek_bytes(a, n));
+            self.bus.mc = Some(mc);
+        }
+    }
+
     /// Bind symbols and HLE hooks to the app the bootloader is about to start.
     fn select_app(&mut self) {
         let Some(app) = firmware::booting_app(&self.bus.flash.data) else {
@@ -206,6 +264,9 @@ impl Esp32c3 {
         syms.merge(&self.apps[i].1);
         let mut hooks = Hooks::default();
         hle::idf::install(&mut hooks, &syms);
+        if let Some(mc) = self.bus.mc.as_deref_mut() {
+            hle::memcheck::install(&mut hooks, &syms, mc);
+        }
         for name in &self.trace {
             if !hooks.trace(&syms, name) {
                 log::warn!("--trace: no symbol named {name}");
@@ -287,6 +348,9 @@ impl Esp32c3 {
         if self.bus.clock.cycles >= self.next_sample {
             *self.samples.entry(self.cpu.pc).or_default() += 1;
             self.next_sample = self.bus.clock.cycles + 100_000;
+        }
+        if self.bus.mc.as_deref_mut().is_some_and(|mc| mc.stack_scan_due(now)) {
+            self.memcheck_scan_stacks();
         }
     }
 
@@ -383,6 +447,9 @@ impl Esp32c3 {
         self.bus.mmu = [bus::MMU_INVALID; bus::MMU_ENTRIES];
         self.hooks.clear_pending();
         self.hle.chip_reset();
+        if let Some(mc) = self.bus.mc.as_deref_mut() {
+            mc.chip_reset();
+        }
         self.light_sleep = None;
         self.irq = None;
         self.trap_depth = 0;
@@ -446,8 +513,9 @@ impl Machine for Esp32c3 {
                         break;
                     }
                 }
+                let pc = self.cpu.pc;
                 if let Some(cov) = &mut self.coverage {
-                    cov.hit(self.cpu.pc);
+                    cov.hit(pc);
                 }
                 match self.cpu.step(&mut self.bus) {
                     Step::Ok => {}
@@ -474,6 +542,11 @@ impl Machine for Esp32c3 {
                     if let Some(r) = self.bus.p.reset_request.take() {
                         self.handle_reset_request(r);
                         break;
+                    }
+                    if self.bus.mc.as_ref().is_some_and(|mc| mc.pending.is_some())
+                        && let Some(exit) = self.memcheck_poll(pc)
+                    {
+                        return exit;
                     }
                 }
                 if let Some((line, pri)) = self.irq
@@ -647,6 +720,16 @@ impl Machine for Esp32c3 {
 
     fn partitions(&self) -> Vec<sim_api::PartitionInfo> {
         firmware::partitions(&self.bus.flash.data)
+    }
+
+    fn memcheck_json(&mut self) -> Option<String> {
+        self.memcheck_scan_stacks();
+        self.bus.mc.as_ref().map(|mc| mc.json().to_string())
+    }
+
+    fn memcheck_summary(&mut self) -> Option<String> {
+        self.memcheck_scan_stacks();
+        self.bus.mc.as_ref().map(|mc| mc.summary())
     }
 
     fn net_status(&self) -> NetStatus {

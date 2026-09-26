@@ -74,7 +74,7 @@ mod scan;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use super::{GuestCpu, MemBus};
+use super::{GuestCpu, MemBus, ReturnPatch};
 use decode::{Insn, Op, decode, insn_len};
 
 // ------------------------------------------------------------------------------------------------
@@ -1633,6 +1633,47 @@ impl Xtensa {
         Step::Ok
     }
 
+    /// Windowed-ABI call chain (pcs, innermost first): live frames from the register
+    /// file, spilled ones from their base save areas. `at_hook`: the pc is the first
+    /// instruction of a function called with CALLn, so the caller's window is current.
+    pub fn call_chain(&self, read: &dyn Fn(u32) -> Option<u32>, max: usize, at_hook: bool) -> Vec<u32> {
+        let mut out = vec![self.pc];
+        let mut pc = self.pc;
+        if at_hook {
+            pc = self.return_address();
+            if pc >= SYNTH_CALL_PC & 0xff00_0000 {
+                return out; // called by the simulator
+            }
+            out.push(pc);
+        }
+        let (mut a0, mut sp, mut wb) = (self.a(0), self.a(1), self.wb);
+        let mut live = true;
+        while out.len() < max {
+            let inc = a0 >> 30;
+            if inc == 0 || a0 == 0 {
+                break;
+            }
+            pc = (a0 & 0x3fff_ffff) | (pc & 0xc000_0000);
+            if pc >= SYNTH_CALL_PC & 0xff00_0000 {
+                break; // an HLE trampoline
+            }
+            out.push(pc);
+            let cwb = (wb + 16 - inc) & 15;
+            if live && self.ws >> cwb & 1 != 0 && cwb != self.wb {
+                a0 = self.ar[(cwb * 4) as usize];
+                sp = self.ar[(cwb * 4 + 1) as usize];
+                wb = cwb;
+            } else {
+                live = false;
+                match (read(sp.wrapping_sub(16)), read(sp.wrapping_sub(12))) {
+                    (Some(r), Some(s)) => (a0, sp) = (r, s),
+                    _ => break,
+                }
+            }
+        }
+        out
+    }
+
     /// Hook-context register base: 4 * PS.CALLINC.
     fn hook_base(&self) -> u8 {
         (self.callinc() * 4) as u8
@@ -1733,6 +1774,31 @@ impl GuestCpu for Xtensa {
             callinc,
         });
         self.pc = SYNTH_CALL_PC;
+    }
+    /// The return address register is the caller's a(4n) (a0 after CALL0); the value
+    /// keeps its window increment, so RETW rotates back and jumps to `to` (which must
+    /// share the function's top two address bits once decoded, like the HLE trampolines).
+    fn redirect_return(&mut self, to: u32) -> ReturnPatch {
+        let base = self.hook_base();
+        let ra = self.a(base);
+        let return_to = self.return_address();
+        let patched = if self.callinc() == 0 { to } else { (ra & 0xc000_0000) | (to & 0x3fff_ffff) };
+        self.set_a(base, patched);
+        ReturnPatch { return_to, ra_reg: base, ra, ret_reg: base + 2 }
+    }
+    fn finish_return(&mut self, p: &ReturnPatch) -> u32 {
+        self.set_a(p.ra_reg, p.ra);
+        self.pc = p.return_to;
+        self.a(p.ret_reg)
+    }
+    fn backtrace(&self, read: &dyn Fn(u32) -> Option<u32>, max: usize) -> Vec<u32> {
+        if self.callinc() == 0 {
+            return vec![self.pc];
+        }
+        self.call_chain(read, max, true)
+    }
+    fn core_id(&self) -> usize {
+        (self.prid == 0xABAB) as usize
     }
     /// Level-1 interrupts are deliverable.
     fn irq_enabled(&self) -> bool {

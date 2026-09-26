@@ -321,6 +321,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         c.push_sim(line);
                     }
                 }
+                Command::Memcheck(reply) => {
+                    let _ = reply.send(m.memcheck_json().unwrap_or_else(|| r#"{"enabled": false}"#.into()));
+                }
                 Command::Pause(p) => {
                     paused = p;
                     rebase = true;
@@ -632,6 +635,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             m.instructions() as f64 / 1e6,
             m.instructions() as f64 / 1e6 / wall
         );
+        if let Some(summary) = m.memcheck_summary() {
+            eprint!("\n{summary}");
+        }
     }
     if opts.coverage.is_some() {
         match write_coverage(m.as_mut(), opts.coverage.as_mut(), None, false) {

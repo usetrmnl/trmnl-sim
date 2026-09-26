@@ -19,6 +19,7 @@
 use crate::arch::{BusFault, BusResult, MemBus};
 use crate::board::Board;
 use crate::devices::spi_flash::SpiFlash;
+use crate::memcheck::Memcheck;
 use crate::soc::esp32c3::bus::Clock;
 
 use super::periph::Periph;
@@ -61,6 +62,8 @@ pub struct S3Bus {
     /// Which core is executing (for per-core registers and the tick rule).
     pub core: usize,
     pub last_fault: Option<(u32, bool)>,
+    /// `--memcheck`: shadow checks of CPU loads and stores.
+    pub mc: Option<Box<Memcheck>>,
 }
 
 enum Region {
@@ -89,6 +92,7 @@ impl S3Bus {
             irq_dirty: true,
             core: 0,
             last_fault: None,
+            mc: None,
         }
     }
 
@@ -179,6 +183,25 @@ impl S3Bus {
         (PERIPH_BASE..PERIPH_BASE + PERIPH_SIZE as u32).contains(&addr)
     }
 
+    /// Check a CPU access against the memcheck shadow. A bad one is looked at by the run
+    /// loop once the instruction retired, which `irq_dirty` makes it do.
+    #[inline(always)]
+    fn check(&mut self, addr: u32, len: u32, write: bool) {
+        if self.mc.is_some() {
+            self.check_shadow(addr, len, write);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn check_shadow(&mut self, addr: u32, len: u32, write: bool) {
+        if let Some(mc) = self.mc.as_deref_mut()
+            && mc.access(addr, len, write)
+        {
+            self.irq_dirty = true;
+        }
+    }
+
     fn fault(&mut self, addr: u32, write: bool) -> BusFault {
         self.last_fault = Some((addr, write));
         BusFault
@@ -220,6 +243,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn read8(&mut self, addr: u32) -> BusResult<u8> {
+        self.check(addr, 1, false);
         if let Some((m, o)) = self.mem(addr, 1) {
             return Ok(m[o]);
         }
@@ -232,6 +256,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn read16(&mut self, addr: u32) -> BusResult<u16> {
+        self.check(addr, 2, false);
         if let Some((m, o)) = self.mem(addr, 2) {
             return Ok(u16::from_le_bytes([m[o], m[o + 1]]));
         }
@@ -244,6 +269,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn read32(&mut self, addr: u32) -> BusResult<u32> {
+        self.check(addr, 4, false);
         if let Some((m, o)) = self.mem(addr, 4) {
             return Ok(u32::from_le_bytes([m[o], m[o + 1], m[o + 2], m[o + 3]]));
         }
@@ -255,6 +281,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn write8(&mut self, addr: u32, v: u8) -> BusResult<()> {
+        self.check(addr, 1, true);
         if let Some((m, o)) = self.mem_mut(addr, 1) {
             m[o] = v;
             return Ok(());
@@ -271,6 +298,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn write16(&mut self, addr: u32, v: u16) -> BusResult<()> {
+        self.check(addr, 2, true);
         if let Some((m, o)) = self.mem_mut(addr, 2) {
             m[o..o + 2].copy_from_slice(&v.to_le_bytes());
             return Ok(());
@@ -287,6 +315,7 @@ impl MemBus for S3Bus {
 
     #[inline(always)]
     fn write32(&mut self, addr: u32, v: u32) -> BusResult<()> {
+        self.check(addr, 4, true);
         if let Some((m, o)) = self.mem_mut(addr, 4) {
             m[o..o + 4].copy_from_slice(&v.to_le_bytes());
             return Ok(());

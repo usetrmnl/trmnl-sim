@@ -7,11 +7,12 @@
 //! (e.g. `esp_event_post`) and resume in a continuation when it returns.
 
 pub mod idf;
+pub mod memcheck;
 pub mod wifi;
 
 use std::collections::HashMap;
 
-use crate::arch::GuestCpu;
+use crate::arch::{GuestCpu, ReturnPatch};
 use crate::firmware::Symbols;
 
 /// Guest memory access for HLE code (no peripheral side effects).
@@ -23,6 +24,10 @@ pub trait GuestMem {
     }
     fn write_u32(&mut self, addr: u32, v: u32) -> bool {
         self.write_bytes(addr, &v.to_le_bytes())
+    }
+    /// The memory checker, when `--memcheck` is on.
+    fn memcheck(&mut self) -> Option<&mut crate::memcheck::Memcheck> {
+        None
     }
 }
 
@@ -59,9 +64,13 @@ pub enum Flow {
     Call { func: u32, args: Vec<u32>, then: Cont },
     /// The CPU already has been redirected by the hook.
     Redirected,
+    /// Execute the original function; `then` runs when it returns (the CPU is then
+    /// back in the caller), with its return value.
+    Wrap(AfterReturn),
 }
 
 pub type Cont = Box<dyn FnOnce(&mut HleCtx, u32) -> Flow + Send>;
+pub type AfterReturn = Box<dyn FnOnce(&mut HleCtx, u32) + Send>;
 
 /// Wake-up sources configured through the IDF sleep API.
 #[derive(Default, Clone, Debug)]
@@ -121,6 +130,8 @@ pub struct Hooks {
     /// Continuations of guest calls, keyed by their return trampoline: (continuation,
     /// the hooked function's return address).
     pending: HashMap<u32, (Cont, u32)>,
+    /// `Flow::Wrap` functions in progress, keyed by their redirected return address.
+    returns: HashMap<u32, (AfterReturn, ReturnPatch)>,
     next_magic: u32,
     /// Fixed trampolines (e.g. HLE-owned task entry points).
     pub trampolines: HashMap<u32, (&'static str, HookFn)>,
@@ -135,6 +146,7 @@ impl Default for Hooks {
             by_addr: HashMap::new(),
             filter: vec![0; FILTER_BITS / 64],
             pending: HashMap::new(),
+            returns: HashMap::new(),
             next_magic: MAGIC_BASE + 0x10_0000,
             trampolines: HashMap::new(),
             traced: HashMap::new(),
@@ -197,6 +209,7 @@ impl Hooks {
 
     pub fn clear_pending(&mut self) {
         self.pending.clear();
+        self.returns.clear();
     }
 
     /// Run the hook at the CPU's pc, if any. Returns true if the CPU was redirected.
@@ -227,6 +240,11 @@ impl Hooks {
             let t = ctx.env.now_ns() as f64 / 1e9;
             ctx.env.console(&format!("trace @{t:.6}: {name}({}) from {from}{extra}", args.join(", ")));
         }
+        if let Some((then, patch)) = self.returns.remove(&pc) {
+            let ret = ctx.cpu.finish_return(&patch);
+            then(ctx, ret);
+            return true;
+        }
         let flow = if let Some((cont, ra)) = self.pending.remove(&pc) {
             let ret = ctx.cpu.ret_val();
             ctx.cpu.restore_after_call(ra);
@@ -252,15 +270,27 @@ impl Hooks {
                 true
             }
             Flow::Call { func, args, then } => {
-                let magic = self.next_magic;
-                self.next_magic += 2;
-                if self.next_magic >= 0x7FFF_FFF0 {
-                    self.next_magic = MAGIC_BASE + 0x10_0000;
-                }
+                let magic = self.magic();
                 self.pending.insert(magic, (then, ctx.cpu.return_address()));
                 ctx.cpu.begin_call(func, &args, magic);
                 true
             }
+            Flow::Wrap(then) => {
+                let magic = self.magic();
+                let patch = ctx.cpu.redirect_return(magic);
+                self.returns.insert(magic, (then, patch));
+                false
+            }
         }
+    }
+
+    /// A fresh continuation trampoline address.
+    fn magic(&mut self) -> u32 {
+        let magic = self.next_magic;
+        self.next_magic += 2;
+        if self.next_magic >= 0x7FFF_FFF0 {
+            self.next_magic = MAGIC_BASE + 0x10_0000;
+        }
+        magic
     }
 }

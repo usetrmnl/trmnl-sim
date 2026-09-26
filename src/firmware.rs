@@ -68,6 +68,15 @@ impl Symbols {
         format!("{addr:#010x}")
     }
 
+    /// Address ranges (start, end) of the sized symbols whose name satisfies `pred`.
+    pub fn ranges(&self, pred: impl Fn(&str) -> bool) -> Vec<(u32, u32)> {
+        self.sorted
+            .iter()
+            .filter(|(_, size, name)| *size > 0 && pred(name))
+            .map(|(a, size, _)| (a & !1, (a & !1) + size))
+            .collect()
+    }
+
     pub fn names_with_prefix(&self, prefix: &str) -> Vec<String> {
         let mut v: Vec<String> = self.by_name.keys().filter(|k| k.starts_with(prefix)).cloned().collect();
         v.sort();

@@ -27,6 +27,7 @@
 //! | POST   | `/restore`             | `{"path": "..."}` or `{"id": 3}` (in-memory slot) | `{"ok", "savepoint"}`; 409 on failure |
 //! | GET    | `/savepoints`          |                                                | `{"savepoints": [...]}` (in-memory slots) |
 //! | POST   | `/coverage`            | `{"path": "out.info", "reset": false}` (both optional) write lcov now | `{"ok", "path", "lines_found", "lines_hit", ...}` |
+//! | GET    | `/memcheck`            |                                                | `--memcheck` report: violations, heap stats, stack marks |
 //! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
 //! | GET    | `/faults`              |                                                | faults, partitions, flash counters |
 //! | POST   | `/faults`              | faults JSON, merged into the current ones (see [`faults`]) | as GET |
@@ -210,6 +211,13 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
                 Ok(Err(e)) => Ok(err(409, e)),
                 Err(_) => Ok(err(504, "no coverage report from the emulator")),
             }
+        }
+        (Method::Get, "/memcheck") => {
+            let (tx, rx) = crossbeam_channel::bounded(1);
+            h.send(Command::Memcheck(tx));
+            let report = rx.recv_timeout(Duration::from_secs(30)).map_err(|_| "the emulator did not answer")?;
+            let v: Value = serde_json::from_str(&report).map_err(|e| format!("bad report: {e}"))?;
+            Ok(json_reply(200, v))
         }
         (Method::Post, "/quit") => {
             h.send(Command::Quit);

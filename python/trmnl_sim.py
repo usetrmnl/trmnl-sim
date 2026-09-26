@@ -53,6 +53,11 @@ class Simulator:
         extra_args: more CLI arguments.
         faults: faults injected from the start (as for `set_faults`), e.g.
             {"power_loss": {"partition": "nvs"}}.
+        memcheck: run with the memory checker: "halt" (stop at the first violation) or
+            "log" (report and carry on). Leaving the `with` block then fails if there
+            were violations; `memcheck()` returns the full report.
+        memcheck_suppress: functions whose (known) memory bugs to tolerate: a violation
+            with one of them in its backtrace, allocation or free stack is only counted.
         name: label for artifacts. If $TRMNL_SIM_ARTIFACTS is set, the log and final
             screen of every simulator are saved there on close (handy in CI).
         restore: start from this save point file (see `save_point`) instead of booting.
@@ -78,6 +83,8 @@ class Simulator:
         name: Optional[str] = None,
         restore: Optional[str | os.PathLike] = None,
         coverage: Optional[str | os.PathLike] = None,
+        memcheck: Optional[str] = None,
+        memcheck_suppress: tuple[str, ...] = (),
     ):
         self.build_dir = Path(build_dir)
         self._tmpdir = tempfile.mkdtemp(prefix="trmnl-sim-")
@@ -85,6 +92,7 @@ class Simulator:
         self.log_path = Path(self._tmpdir) / "sim.log"
         self.cursor = 0  # console line index after the last matched line
         self.name = name or "sim"
+        self.memcheck_mode = memcheck
         binary = Path(binary or os.environ.get("TRMNL_SIM_BIN") or REPO / "target" / "release" / "trmnl-sim")
         if not binary.exists():
             raise SimError(f"{binary} not found; run `cargo build --release` in {REPO}")
@@ -116,6 +124,10 @@ class Simulator:
             args += ["--coverage", str(self.coverage_path)]
         if faults:
             args += ["--faults", json.dumps(faults)]
+        if memcheck:
+            args.append(f"--memcheck={memcheck}")
+            if memcheck_suppress:
+                args += ["--memcheck-suppress", ",".join(memcheck_suppress)]
         args += list(extra_args)
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(args, stdout=self._log, stderr=subprocess.STDOUT)
@@ -171,8 +183,12 @@ class Simulator:
     def __enter__(self) -> "Simulator":
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.close()
+    def __exit__(self, exc_type, *exc) -> None:
+        try:
+            if exc_type is None and self.memcheck_mode and self.proc.poll() is None:
+                self.assert_no_memory_errors()
+        finally:
+            self.close()
 
     # ---- HTTP -------------------------------------------------------------------------------
 
@@ -413,6 +429,25 @@ class Simulator:
             actual = golden.with_suffix(".actual.png")
             self.screenshot(actual, region)
             raise AssertionError(f"screen differs from {golden}: {r['diff_pixels']} px ({r['diff_ratio']:.4%}); actual saved to {actual}")
+
+    # ---- memory checking ---------------------------------------------------------------------------
+
+    def memcheck(self) -> dict:
+        """The --memcheck report: `violations` (each with `kind`, `address`, `backtrace`,
+        `report` lines, and for heap errors the block's allocation and free stacks),
+        `suppressed` (the same, for violations matching --memcheck-suppress), `heap`
+        statistics (live and peak bytes per memory) and `stacks` (per-task high-water marks,
+        `low` if within `stack_margin` bytes of overflowing). `{"enabled": False}` without
+        --memcheck."""
+        return self._get_json("/memcheck")
+
+    def assert_no_memory_errors(self) -> None:
+        """Fail with the full reports if memcheck found violations."""
+        report = self.memcheck()
+        violations = report.get("violations", [])
+        if violations:
+            text = "\n".join(l for v in violations for l in v["report"])
+            raise AssertionError(f"memcheck found {len(violations)} violation(s):\n{text}")
 
     # ---- captive portal ---------------------------------------------------------------------------
 

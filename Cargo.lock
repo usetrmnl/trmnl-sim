@@ -4010,6 +4010,7 @@ dependencies = [
  "object",
  "parking_lot",
  "rand",
+ "serde_json",
  "sha2",
  "sim-api",
  "sim-control",

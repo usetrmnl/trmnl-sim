@@ -210,6 +210,8 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--coverage FILE` | Record which firmware instructions run; write an lcov tracefile on exit (see [Code coverage](#code-coverage)) |
 | `--coverage-root DIR` | Write source paths under DIR relative to it (default: the firmware checkout of `<build_dir>`) |
 | `--coverage-include P,..` | Only report source files whose path starts with one of these, e.g. `src/,lib/` |
+| `--memcheck[=halt]` | Check the firmware's [memory use](#memory-checking): report heap errors and carry on, or (`=halt`) stop at the first one |
+| `--memcheck-suppress F,..` | Tolerate known memory bugs: ignore violations with one of these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
@@ -317,6 +319,7 @@ unresponsive modem.
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
+| `TRMNL_SIM_MEMCHECK=1` | Run every simulator with [`--memcheck=halt`](#memory-checking); a test fails on any memory error |
 | `TRMNL_SIM_COVERAGE=DIR` | Record firmware code coverage in every simulator; merge and report it after the run (see [Code coverage](#code-coverage)) |
 | `TRMNL_SIM_NETWORK=1` | Also run tests against the real trmnl.app |
 | `TRMNL_SIM_BIN` | Simulator binary (default `target/release/trmnl-sim`) |
@@ -397,6 +400,9 @@ Useful pieces:
 - `sim.set_faults(net={...}, power_loss={...}, ...)`, `sim.set_net_faults(dns="servfail")`,
   `sim.arm_power_loss("nvs", cut="torn")`, `sim.clear_faults()` and `sim.faults()` inject
   [faults](#fault-injection); `Simulator(..., faults={...})` starts with them.
+- `Simulator(..., memcheck="halt")` runs under the [memory checker](#memory-checking);
+  `sim.memcheck()` returns its report and `sim.assert_no_memory_errors()` fails on
+  violations (also done when the `with` block ends).
 
 ### Control API
 
@@ -430,6 +436,7 @@ Useful pieces:
 | `POST /restore {"path": str}` or `{"id": N}` | restore from a file or an in-memory save point; 409 on failure (e.g. another firmware build) |
 | `GET /savepoints` | the in-memory save points |
 | `POST /coverage {"path": "x.info", "reset": bool}` | with `--coverage`: write the lcov tracefile now (default path: the `--coverage` file), then optionally start over; returns `lines_found`/`lines_hit`/`functions_found`/`functions_hit`/`files` |
+| `GET /memcheck` | with `--memcheck`: `violations` and `suppressed` (kind, address, pc, task, backtrace, block with allocation/free stacks, `report` lines), `heap` (allocs, frees, live/peak bytes for internal RAM and PSRAM), `stacks` (per task: size, `min_free`, `low`); `{"enabled": false}` otherwise |
 | `GET /faults` | injected faults, `summary`, `power_losses`, flash `programs`/`erases`, the partition table |
 | `POST /faults {...}`, `DELETE /faults` | merge [faults](#fault-injection) into the current ones; clear them all |
 
@@ -471,6 +478,59 @@ line tables for them), and functions replaced by [HLE](#architecture) hooks (the
 guest code never runs, so they are left out of the report rather than counted as
 missed). A simulator killed rather than quit writes no tracefile.
 
+### Memory checking
+
+`--memcheck` finds memory bugs in the firmware as they happen, with symbolized stacks,
+instead of waiting for them to crash it:
+
+- **heap-use-after-free**, **heap-buffer-overflow** (past the end of a block, into its
+  successor's header, or before it), accesses to never-allocated heap or allocator
+  metadata, and **stack-overflow** below the running task's stack;
+- **double-free** and **invalid-free** (a pointer that isn't a live block; also for
+  realloc). The bad free is not passed on, so the heap stays consistent;
+- **stack high-water marks** of every FreeRTOS task (from the 0xA5 fill pattern), by
+  task name across boots, flagged `low` within 256 bytes of the end;
+- heap statistics: allocations, frees, live and peak bytes in internal RAM and PSRAM.
+
+```
+[sim] memcheck: heap-use-after-free: 1-byte read at 0x3fcaad88 (pc dns_gethostbyname_addrtype+0x8, task "tiT", core 0)
+[sim]   backtrace: dns_gethostbyname_addrtype+0x8 <- dns_gethostbyname+0xa <- sntp_request+0x52 <- ...
+[sim]   0x3fcaad88 is the start of a 16-byte block at 0x3fcaad88
+[sim]   allocated by task "loopTask": _ZN6String12changeBufferEj+0x40 <- ... <- _ZN11Preferences9getStringEPKc6String+0x40
+[sim]   freed by task "loopTask": _ZN6String10invalidateEv+0x1c <- _ZN6StringD2Ev+0x8 <- _ZN5Clock14setTimeFromNTPEv+0xec <- ...
+```
+
+Each distinct violation (same kind and block, or same pc) is reported once on the
+console and counted after that. `--memcheck=halt` stops the machine at the first one
+(`sim.wait` then fails with it); plain `--memcheck` carries on. `GET /memcheck`
+(Python: `sim.memcheck()`) returns the full report, and a summary with the stack marks
+is printed when the run ends. `Simulator(memcheck="halt")` fails the `with` block if
+there were violations (`sim.assert_no_memory_errors()` checks explicitly), and
+`TRMNL_SIM_MEMCHECK=1 bin/spec` runs the whole suite that way. Known firmware bugs are
+listed in `KNOWN_MEMORY_BUGS` in [support.py](tests/integration/support.py), passed as
+`--memcheck-suppress` so the rest of each run is still checked, with an expected failure
+for each in [test_memcheck.py](tests/integration/test_memcheck.py).
+
+How it works: HLE hooks on the IDF heap's `multi_heap_*` layer, which every allocation
+goes through exactly once (`malloc`, `heap_caps_*`, `new`, newlib in ROM; IDF 4.4 and
+5.x), see each block with its size, TLSF block size and a short backtrace. A shadow
+byte per byte of SRAM (and of the S3's 32 MB PSRAM window) marks user bytes of live
+blocks, freed blocks, block headers and the slack after a block, and never-allocated
+heap; every CPU load and store is checked against it (DMA and simulator accesses are
+not), except by the allocator's own code. Freed blocks wait in a small quarantine
+(16 KB internal, 256 KB PSRAM; blocks over a quarter of that are freed at once) before
+the allocator gets them back, and `realloc` always moves the block, so stale pointers
+keep pointing at poisoned memory. Off, its cost is within measurement noise (0-3%);
+on, it slows emulation by about 5-12%.
+
+Limitations: stacks are exact on the X (windowed ABI) but heuristic on the OG/BWRY
+(no frame pointers: return addresses found on the stack, so a frame may be stale).
+Checks are byte-exact, except that an aligned load starting inside a block may run past
+its end (word-at-a-time `strlen`/`memcpy` do that); an overflow that lands inside
+another live block isn't seen. Static and global buffers
+aren't checked, nor task stacks outside the heap. The quarantine and the moving
+realloc make the heap look a little fuller than it is.
+
 ### CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs format, clippy and unit
@@ -496,7 +556,8 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 │                      I2C chips (TCA9535, TPS65185, IQS323, BQ27427)
 ├─ coverage/           executed-instruction bitmaps, DWARF line mapping, lcov output
 ├─ hle/                ESP-IDF function replacements by ELF symbol (WiFi driver, sleep,
-│                      ADC), ISA-neutral; hooks can call back into guest code
+│                      ADC), ISA-neutral; hooks can call back into guest code or wrap it
+├─ memcheck.rs         heap tracker, shadow memory, stack marks (--memcheck)
 └─ firmware.rs         build artifacts, ELF symbols, OTA slot and app selection
 crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
@@ -547,6 +608,8 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
   register.
 - **A peripheral register isn't modelled**: run with `RUST_LOG=trmnl_sim=trace` to log
   first accesses to unmodelled registers.
+- **Memory corruption or a crash in freed memory**: run with `--memcheck` (see
+  [Memory checking](#memory-checking)) to catch the bad access where it happens.
 - **Something hangs or crashes on the TRMNL X**: `POST /debug` (Python: `sim.debug()`)
   prints both cores' registers, a windowed-ABI backtrace (through HLE calls) and the
   running FreeRTOS task. `SIM_PEEK=addr,addr` adds memory words to that dump.

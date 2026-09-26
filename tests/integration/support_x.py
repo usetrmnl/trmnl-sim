@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from support import ROOT, TURBO, MockTrmnl, Simulator
+from support import KNOWN_MEMORY_BUGS, MEMCHECK, ROOT, TURBO, MockTrmnl, Simulator
 
 X_BUILD = Path(os.environ.get("TRMNL_X_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/TRMNL_X"))
 X_MAC = "D8:3B:DA:00:00:01"
@@ -19,6 +19,8 @@ def x_sim(**kw) -> Simulator:
     kw.setdefault("name", _current_test_id())
     kw.setdefault("mac", X_MAC)
     kw.setdefault("turbo", TURBO)
+    kw.setdefault("memcheck", MEMCHECK)
+    kw.setdefault("memcheck_suppress", KNOWN_MEMORY_BUGS)
     extra = tuple(kw.pop("extra_args", ()))
     if "--offline" not in extra:
         extra += ("--offline",)

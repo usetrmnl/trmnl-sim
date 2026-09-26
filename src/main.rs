@@ -8,6 +8,7 @@ mod devices;
 mod faults;
 mod firmware;
 mod hle;
+mod memcheck;
 mod periph;
 mod runner;
 mod savepoint;
@@ -95,6 +96,16 @@ struct Cli {
     /// src/,lib/ (repeatable).
     #[arg(long, value_name = "PREFIX", value_delimiter = ',')]
     coverage_include: Vec<String>,
+    /// Check the firmware's memory use: heap use-after-free, overflows, double and invalid
+    /// frees, stack high-water marks. `--memcheck` reports and carries on, `--memcheck=halt`
+    /// stops at the first violation.
+    #[arg(long, value_name = "MODE", num_args = 0..=1, require_equals = true, default_missing_value = "log",
+          value_parser = ["log", "halt"])]
+    memcheck: Option<String>,
+    /// Tolerate known memory bugs: a violation is ignored if one of these functions is in
+    /// its backtrace or in its block's allocation or free stack (comma separated).
+    #[arg(long, value_name = "FUNCTIONS", value_delimiter = ',')]
+    memcheck_suppress: Vec<String>,
     /// Panel revision returned by the UC8179 REV command.
     #[arg(long, default_value = "0x0a0c1b2c", value_parser = parse_u32)]
     panel_rev: u32,
@@ -155,6 +166,10 @@ fn main() -> Result<()> {
         let a = firmware::ExtraApp::from_elf(p)?;
         apps.push((a.elf_sha256, a.symbols, a.name));
     }
+    let memcheck_mode = cli.memcheck.as_deref().map(|m| match m {
+        "halt" => memcheck::Mode::Halt,
+        _ => memcheck::Mode::Log,
+    });
     let net = vnet::NetConfig { offline: cli.offline, dns_overrides: cli.dns.clone(), ..Default::default() };
 
     let mut panel = mock_trmnl::Panel::Og;
@@ -177,6 +192,9 @@ fn main() -> Result<()> {
             }
             m.set_portal_port(cli.portal_port);
             m.set_net_config(net);
+            if let Some(mode) = memcheck_mode {
+                m.enable_memcheck(mode, cli.memcheck_suppress.clone());
+            }
             (Box::new(m), frame)
         }
         _ => {
@@ -194,6 +212,9 @@ fn main() -> Result<()> {
             }
             m.set_portal_port(cli.portal_port);
             m.set_net_config(net);
+            if let Some(mode) = memcheck_mode {
+                m.enable_memcheck(mode, cli.memcheck_suppress.clone());
+            }
             (Box::new(m), frame)
         }
     };

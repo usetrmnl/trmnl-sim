@@ -425,6 +425,8 @@ pub enum Command {
         reset: bool,
         reply: Sender<Result<CoverageSummary, String>>,
     },
+    /// Reply with the `--memcheck` report (JSON; `{"enabled": false}` when it's off).
+    Memcheck(Sender<String>),
     Quit,
 }
 

@@ -1,6 +1,6 @@
 //! RV32IMAC interpreter (machine mode only), as found in the ESP32-C3.
 
-use super::{GuestCpu, MemBus};
+use super::{GuestCpu, MemBus, ReturnPatch};
 
 pub const MSTATUS_MIE: u32 = 1 << 3;
 pub const MSTATUS_MPIE: u32 = 1 << 7;
@@ -566,6 +566,17 @@ const RA: usize = 1;
 const SP: usize = 2;
 const A0: usize = 10;
 
+/// Whether `v` looks like a return address: in code (ROM, IRAM or flash) and right after
+/// a `jal ra`, `jalr ra`, `c.jal` or `c.jalr`.
+fn is_return_address(read: &dyn Fn(u32) -> Option<u32>, v: u32) -> bool {
+    if v & 1 != 0 || !matches!(v >> 24, 0x40 | 0x42) {
+        return false;
+    }
+    let jal = |w: u32| (w & 0xfff) == 0x0ef || (w & 0x7fff) == 0x00e7;
+    let cjal = |h: u32| (h & 0xf07f) == 0x9002 && (h >> 7) & 0x1f != 0 || (h & 0xe003) == 0x2001;
+    read(v.wrapping_sub(4)).is_some_and(jal) || read(v.wrapping_sub(2)).is_some_and(|w| cjal(w & 0xffff))
+}
+
 impl GuestCpu for Rv32 {
     fn pc(&self) -> u32 {
         self.pc
@@ -607,6 +618,38 @@ impl GuestCpu for Rv32 {
     }
     fn restore_after_call(&mut self, return_address: u32) {
         self.x[RA] = return_address;
+    }
+    fn redirect_return(&mut self, to: u32) -> ReturnPatch {
+        let ra = self.x[RA];
+        self.x[RA] = to;
+        ReturnPatch { return_to: ra, ra_reg: RA as u8, ra, ret_reg: A0 as u8 }
+    }
+    fn finish_return(&mut self, p: &ReturnPatch) -> u32 {
+        self.x[p.ra_reg as usize] = p.ra;
+        self.pc = p.return_to;
+        self.x[p.ret_reg as usize]
+    }
+    /// Without frame pointers this is a heuristic: `ra`, then words on the stack that
+    /// are return addresses (the instruction before them is a `jal`/`jalr` to `ra`).
+    fn backtrace(&self, read: &dyn Fn(u32) -> Option<u32>, max: usize) -> Vec<u32> {
+        let mut out = vec![self.pc];
+        let push = |v: u32, out: &mut Vec<u32>| {
+            if out.len() < max && out.last() != Some(&v) && is_return_address(read, v) {
+                out.push(v);
+            }
+        };
+        push(self.x[RA], &mut out);
+        let sp = self.x[SP];
+        for i in 0..256 {
+            if out.len() >= max {
+                break;
+            }
+            match read(sp.wrapping_add(4 * i)) {
+                Some(v) => push(v, &mut out),
+                None => break,
+            }
+        }
+        out
     }
     fn irq_enabled(&self) -> bool {
         self.csr.mstatus & MSTATUS_MIE != 0

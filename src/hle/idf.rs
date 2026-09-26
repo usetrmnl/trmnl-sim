@@ -48,7 +48,7 @@ fn arduino_log_line(c: &mut HleCtx) -> Flow {
     Flow::Continue
 }
 
-fn read_cstr(c: &HleCtx, addr: u32, max: usize) -> String {
+pub(super) fn read_cstr(c: &HleCtx, addr: u32, max: usize) -> String {
     let mut out = Vec::new();
     for i in 0..max as u32 {
         match c.mem.read_bytes(addr + i, 1) {

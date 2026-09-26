@@ -1,0 +1,156 @@
+"""--memcheck: whole onboarding and refresh cycles of the OG and the X under the memory
+checker (heap use-after-free, overflows, bad frees; stack high-water marks).
+
+Firmware bugs it found are in support.KNOWN_MEMORY_BUGS: the clean-cycle tests tolerate
+them (so everything else is still checked), and each has an expected failure here."""
+
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+
+from support import BUILD, BWRY_BUILD, MockTrmnl, big_number, sim
+from support_x import SSID_24, X_BUILD, onboard, x_sim
+
+SNTP_BUG = ("_ZN5Clock14setTimeFromNTPEv", "sntp_request")
+
+
+def assert_no_low_stacks(test: unittest.TestCase, report: dict) -> None:
+    low = [(t["task"], t["min_free"]) for t in report["stacks"] if t["low"]]
+    test.assertEqual(low, [], "tasks close to overflowing their stacks")
+
+
+class MemcheckOG(unittest.TestCase):
+    def onboard(self, s, mock):
+        s.wait(portal=True, timeout_s=90)
+        s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)
+        mock.wait_for_request("/api/display", timeout_s=120)
+        s.wait(state="deep_sleep", timeout_s=120)
+
+    def test_onboarding_and_refresh_cycles_are_clean(self):
+        with MockTrmnl() as mock, sim(BUILD, erase=True, memcheck="halt", extra_args=("--offline",)) as s:
+            mock.set_image("one", big_number("1"))
+            mock.display = {"image": "one", "refresh_rate": 300}
+            self.onboard(s, mock)
+            n = len(mock.requests)
+            s.wake()
+            mock.wait_for_request("/api/display", after=n, timeout_s=90)
+            s.wait(state="deep_sleep", timeout_s=90)
+            n = len(mock.requests)
+            s.press(150)
+            mock.wait_for_request("/api/display", after=n, timeout_s=90)
+            s.wait(state="deep_sleep", timeout_s=90)
+
+            report = s.memcheck()
+            self.assertTrue(report["enabled"])
+            self.assertEqual(report["violations"], [])
+            heap = report["heap"]
+            self.assertGreater(heap["allocs"], 500)
+            self.assertGreater(heap["internal"]["peak_bytes"], 50_000)
+            self.assertEqual(heap["psram"]["peak_bytes"], 0)
+            stacks = {t["task"]: t for t in report["stacks"]}
+            self.assertEqual(stacks["loopTask"]["size"], 8192)
+            self.assertGreater(stacks["loopTask"]["max_used"], 1000)
+            self.assertGreaterEqual(stacks["loopTask"]["instances"], 3)  # one per boot
+            assert_no_low_stacks(self, report)
+
+    @unittest.expectedFailure
+    def test_sntp_server_name_is_not_used_after_free(self):
+        # Clock::sync hands configTime() the c_str() of a String that setTimeFromNTP frees on
+        # return; SNTP keeps the pointer and resolves it again on every retry.
+        with MockTrmnl() as mock, sim(BUILD, erase=True, memcheck="log", memcheck_suppress=(),
+                                      extra_args=("--offline",)) as s:
+            self.onboard(s, mock)
+            s.assert_no_memory_errors()
+
+    @unittest.expectedFailure
+    def test_api_display_body_is_not_read_past_its_end(self):
+        # bodyAsString() calls String::concat(body, size), which copies size + 1 bytes of a
+        # body that isn't NUL-terminated. The built-in server sends a Content-Length, which
+        # takes the path with a malloc'd body.
+        with sim(BUILD, erase=True, memcheck="log", memcheck_suppress=SNTP_BUG, extra_args=("--offline",)) as s:
+            url = s.mock.start()
+            s.mock.display(refresh_rate=300)
+            s.wait(portal=True, timeout_s=90)
+            s.portal_connect("TRMNL-Sim", "password", server=url)
+            s.mock.wait_for_request("/api/display", timeout_s=120)
+            s.wait(state="deep_sleep", timeout_s=120)
+            s.assert_no_memory_errors()
+
+
+class MemcheckBwry(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not (BWRY_BUILD / "firmware.elf").exists():
+            raise unittest.SkipTest(f"no trmnl_4clr build at {BWRY_BUILD} (set TRMNL_BWRY_BUILD)")
+
+    @unittest.expectedFailure
+    def test_1bit_bmp_is_not_sent_as_a_2bit_plane(self):
+        # display_show_image hands an uncompressed 1-bit BMP to the driver as the frame
+        # buffer; on the 4-color panel writePlane reads it as 2 bits per pixel, 48 KB past
+        # the end of the 48 KB buffer.
+        with MockTrmnl() as mock, sim(BWRY_BUILD, erase=True, memcheck="log", memcheck_suppress=SNTP_BUG,
+                                      extra_args=("--offline",)) as s:
+            mock.display = {"image": "default", "refresh_rate": 300}  # the OG's BMP
+            s.wait(portal=True, timeout_s=90)
+            s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)
+            mock.wait_for_request("/api/display", timeout_s=120)
+            s.wait(state="deep_sleep", timeout_s=180)
+            s.assert_no_memory_errors()
+
+
+class MemcheckX(unittest.TestCase):
+    """A factory-fresh X (the QA flow and modem flashing run under memcheck too), then
+    onboarding on 2.4 GHz: WiFi stop/start around the portal is where Arduino once freed a
+    netif the event task still used."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not (X_BUILD / "firmware.elf").exists():
+            raise unittest.SkipTest(f"no TRMNL_X build at {X_BUILD} (set TRMNL_X_BUILD)")
+        cls.dir = Path(tempfile.mkdtemp(prefix="trmnl-x-memcheck-"))
+        cls.shipped = cls.dir / "shipped.bin"
+        with x_sim(flash=cls.shipped, erase=True, memcheck="halt", name="x-memcheck-factory") as s:
+            s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=180)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def boot(self, **kw):
+        flash = self.dir / f"flash-{len(list(self.dir.iterdir()))}.bin"
+        shutil.copy(self.shipped, flash)
+        return x_sim(flash=flash, **kw)
+
+    def test_onboarding_and_refresh_are_clean(self):
+        with MockTrmnl() as mock, self.boot(memcheck="halt") as s:
+            mock.set_png("dots", lambda x, y: (x // 8 + y // 8) & 1)
+            mock.display = {"image": "dots", "refresh_rate": 300}
+            onboard(s, mock, SSID_24)
+            n = len(mock.requests)
+            s.touch("center", 150)
+            mock.wait_for_request("/api/display", after=n, timeout_s=120)
+            s.wait(state="deep_sleep", timeout_s=120)
+
+            report = s.memcheck()
+            self.assertEqual(report["violations"], [])
+            heap = report["heap"]
+            self.assertGreater(heap["allocs"], 500)
+            self.assertGreater(heap["psram"]["peak_bytes"], 1_000_000)  # frame buffers
+            stacks = {t["task"]: t for t in report["stacks"]}
+            for task in ("loopTask", "sys_evt", "tiT", "IDLE0", "IDLE1"):
+                self.assertIn(task, stacks)
+            assert_no_low_stacks(self, report)
+
+    @unittest.expectedFailure
+    def test_bmp_image_is_flipped_within_its_buffer(self):
+        # display_show_image flips an uncompressed BMP with the panel's dimensions: an
+        # 800x480 BMP (48 KB) is flipped as 1872x1404, far past the end of its buffer.
+        with MockTrmnl() as mock, self.boot(memcheck="log", memcheck_suppress=SNTP_BUG) as s:
+            mock.display = {"image": "default", "refresh_rate": 300}  # the OG's BMP
+            onboard(s, mock, SSID_24)
+            s.assert_no_memory_errors()
+
+
+if __name__ == "__main__":
+    unittest.main()

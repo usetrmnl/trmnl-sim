@@ -11,6 +11,20 @@ pub struct BusFault;
 
 pub type BusResult<T> = Result<T, BusFault>;
 
+/// A hooked function's return redirected by [`GuestCpu::redirect_return`]: what
+/// [`GuestCpu::finish_return`] needs to complete the return to the real caller.
+#[derive(Debug, Clone, Copy)]
+pub struct ReturnPatch {
+    /// Where the function would have returned.
+    pub return_to: u32,
+    /// The register holding the return address at the call (ISA-specific number)...
+    pub ra_reg: u8,
+    /// ...and its original value.
+    pub ra: u32,
+    /// The register holding the return value once the function returned.
+    pub ret_reg: u8,
+}
+
 /// The memory system as seen by a core.
 pub trait MemBus {
     fn fetch16(&mut self, addr: u32) -> BusResult<u16>;
@@ -63,6 +77,18 @@ pub trait GuestCpu {
     /// After a `begin_call` returned: restore the hooked function's return address
     /// (needed where the call clobbered it, e.g. RISC-V `ra`).
     fn restore_after_call(&mut self, _return_address: u32) {}
+    /// Let the hooked function run, but make it return to `to` instead of its caller.
+    fn redirect_return(&mut self, to: u32) -> ReturnPatch;
+    /// The CPU reached `to` of a [`redirect_return`](Self::redirect_return): continue in
+    /// the real caller and return the function's return value.
+    fn finish_return(&mut self, p: &ReturnPatch) -> u32;
+    /// Return addresses of the call chain of the hooked function, innermost first and
+    /// starting with the pc; at most `max` entries. `read` reads a guest word.
+    fn backtrace(&self, read: &dyn Fn(u32) -> Option<u32>, max: usize) -> Vec<u32>;
+    /// Which core this is (0 on single-core chips).
+    fn core_id(&self) -> usize {
+        0
+    }
     fn irq_enabled(&self) -> bool;
     fn enter_interrupt(&mut self, line: u32, level: u32);
     fn gpr_dump(&self) -> String;
