@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run the integration tests: real firmware builds in the simulator against a mock server.
+#
+#   bin/spec                      # all of them (about 2.5 minutes)
+#   bin/spec test_trmnl_x         # a module, class or test (unittest selectors)
+#   bin/spec test_refresh_cycle.RefreshCycle.test_long_press_resets_wifi
+#
+# Uses ../trmnl-firmware/.pio/build/{trmnl,trmnl_4clr,TRMNL_X} (TRMNL_FIRMWARE=<checkout>
+# to use another one); the X and BWRY tests skip themselves when their build is missing.
+# The firmware is not built here. See scripts/integration-tests.sh for more variables.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+case "${1:-}" in
+  -h | --help)
+    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+    exit 0
+    ;;
+esac
+exec scripts/integration-tests.sh "$@"

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Build the simulator (release, with the GUI). Extra arguments go to cargo, e.g.
+#   bin/build
+#   bin/build --no-default-features    # headless only, no GUI toolkit
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec cargo build --release "$@"

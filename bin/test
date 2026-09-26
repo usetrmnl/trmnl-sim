@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run the fast checks CI runs: fmt, clippy (with and without the GUI) and unit tests.
+# No firmware builds needed. The integration tests are bin/spec.
+#
+#   bin/test
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
+
+say "cargo fmt --check"
+cargo fmt --all --check
+say "cargo clippy"
+cargo clippy --workspace --all-targets -q -- -D warnings
+cargo clippy --workspace --all-targets --no-default-features -q -- -D warnings
+say "unit tests"
+cargo test --workspace -q

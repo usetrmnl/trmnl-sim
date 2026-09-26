@@ -66,6 +66,18 @@ panel; detected from the firmware):
 ## Quick start
 
 ```sh
+bin/setup      # install Rust (rustup), a C toolchain, Python 3, the ESP32 ROM ELFs
+bin/build      # cargo build --release
+bin/dev        # build, then run the OG build from ../trmnl-firmware
+bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X
+bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
+bin/test       # fmt, clippy and unit tests
+bin/spec       # integration tests (bin/spec test_trmnl_x for a subset)
+```
+
+Or by hand:
+
+```sh
 cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl     # TRMNL OG
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr  # TRMNL BWRY

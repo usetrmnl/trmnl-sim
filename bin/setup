@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Install what building and running the simulator needs:
+#   - Rust (stable, via rustup) with clippy and rustfmt
+#   - a C toolchain (for crates with build scripts)
+#   - Python 3 (integration tests)
+#   - the ESP32 ROM ELFs from PlatformIO (only if PlatformIO is installed)
+#
+#   bin/setup
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---- system packages -----------------------------------------------------------------------------
+case "$(uname -s)" in
+  Darwin)
+    if ! xcode-select -p >/dev/null 2>&1; then
+      say "Installing the Xcode command line tools (follow the dialog, then re-run bin/setup)"
+      xcode-select --install || true
+      exit 1
+    fi
+    have python3 || warn "python3 not found (needed for the integration tests): brew install python"
+    ;;
+  Linux)
+    if have apt-get; then
+      pkgs=()
+      have cc || pkgs+=(build-essential)
+      have pkg-config || pkgs+=(pkg-config)
+      have python3 || pkgs+=(python3)
+      have curl || pkgs+=(curl)
+      if ((${#pkgs[@]})); then
+        say "Installing ${pkgs[*]}"
+        sudo apt-get update
+        sudo apt-get install -y "${pkgs[@]}"
+      fi
+    else
+      have cc || warn "no C compiler found: install gcc or clang with your package manager"
+      have python3 || warn "python3 not found (needed for the integration tests)"
+    fi
+    ;;
+esac
+
+# ---- Rust ----------------------------------------------------------------------------------------
+if ! have rustup; then
+  if have cargo; then
+    warn "cargo found without rustup; make sure it is Rust 1.85 or newer ($(cargo --version))"
+  else
+    say "Installing Rust (rustup)"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+  fi
+fi
+if have rustup; then
+  say "Updating the stable Rust toolchain"
+  rustup toolchain install stable --profile minimal --component clippy,rustfmt
+fi
+
+# ---- PlatformIO ROM ELFs -------------------------------------------------------------------------
+if have pio; then
+  if ! ls -d "$HOME"/.platformio/packages/tool-esp-rom-elfs* >/dev/null 2>&1; then
+    say "Installing the ESP32 ROM ELFs (tool-esp-rom-elfs)"
+    pio pkg install -g -t platformio/tool-esp-rom-elfs
+  fi
+else
+  warn "PlatformIO (pio) not found. You need it to build the firmware the simulator runs,
+         and for the ESP32 ROM ELFs: https://platformio.org/install/cli"
+fi
+
+firmware="${TRMNL_FIRMWARE:-../trmnl-firmware}"
+[[ -d "$firmware" ]] || warn "no firmware checkout at $firmware (set TRMNL_FIRMWARE to point elsewhere)"
+
+say "Done. Next: bin/build, or bin/dev to build and run."
