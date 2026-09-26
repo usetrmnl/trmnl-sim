@@ -26,8 +26,4 @@ BIN="$(pwd)/target/release/trmnl-sim"
 export TRMNL_SIM_BIN="$BIN"
 
 cd tests/integration
-if [[ $# -gt 0 ]]; then
-  python3 -m unittest -v "$@"
-else
-  python3 -m unittest -v
-fi
+exec python3 run.py -v "$@"

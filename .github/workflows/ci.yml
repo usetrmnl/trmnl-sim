@@ -120,7 +120,8 @@ jobs:
           TRMNL_X_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/TRMNL_X
           TRMNL_BWRY_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/trmnl_4clr
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
-        run: python -m unittest -v
+          FORCE_COLOR: "1"
+        run: python run.py -v
 
       - name: Collect screen diffs
         if: failure()
