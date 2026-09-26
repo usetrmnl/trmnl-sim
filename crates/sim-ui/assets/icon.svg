@@ -1,16 +1,17 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <!-- App icon: a TRMNL OG showing the TRMNL glyph (https://trmnl.com/brand). -->
+  <!-- App icon: a TRMNL OG showing the TRMNL glyph (https://trmnl.com/brand). Its chin is
+       2.6x the bezel, like the device (and the simulator's OG frame). -->
   <defs>
     <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#2e2e2b"/>
       <stop offset="1" stop-color="#141413"/>
     </linearGradient>
   </defs>
-  <ellipse cx="256" cy="412" rx="200" ry="14" fill="#000" opacity="0.18"/>
-  <rect x="28" y="104" width="456" height="300" rx="30" fill="url(#body)"/>
-  <rect x="29.5" y="105.5" width="453" height="297" rx="28.5" fill="none" stroke="#fff" stroke-opacity="0.08" stroke-width="3"/>
-  <rect x="66" y="140" width="380" height="228" rx="5" fill="#e8e6df"/>
-  <g transform="translate(256 254) scale(1.1) translate(-80 -81)" fill="#1d1d1b">
+  <ellipse cx="256" cy="437" rx="200" ry="14" fill="#000" opacity="0.18"/>
+  <rect x="28" y="71" width="456" height="358" rx="30" fill="url(#body)"/>
+  <rect x="29.5" y="72.5" width="453" height="355" rx="28.5" fill="none" stroke="#fff" stroke-opacity="0.08" stroke-width="3"/>
+  <rect x="66" y="107" width="380" height="228" rx="5" fill="#e8e6df"/>
+  <g transform="translate(256 221) scale(1.1) translate(-80 -81)" fill="#1d1d1b">
     <path fill-rule="evenodd" d="M43.2322 11.3438L85.6168 27.2379L77.7459 48.2271L35.3613 32.3328L43.2322 11.3438Z"/>
 <path fill-rule="evenodd" d="M111.192 6.1543L125.192 49.2018L103.875 56.1345L89.875 13.0871L111.192 6.1543Z"/>
 <path fill-rule="evenodd" d="M157.609 56.0686L132.682 93.8537L113.971 81.5097L138.898 43.7246L157.609 56.0686Z"/>

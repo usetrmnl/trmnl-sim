@@ -9,6 +9,10 @@ pub const INK: [u8; 3] = [0x1d, 0x1d, 0x1b];
 
 /// Bezel border as a fraction of the screen width.
 pub const BEZEL_RATIO: f32 = 0.03;
+/// Bezel below the screen as a fraction of the screen height (TRMNL OG / BWRY).
+pub const CHIN_RATIO: f32 = 0.13;
+/// The same for the TRMNL X.
+pub const CHIN_RATIO_X: f32 = 0.12;
 
 pub struct Screen {
     frame: SharedFrame,
@@ -169,7 +173,7 @@ pub struct Look {
 #[derive(Clone, Copy, Debug)]
 pub struct Geometry {
     pub border: f32,
-    /// Extra bezel below the screen holding the touch bar.
+    /// Extra bezel below the screen (on the TRMNL X it holds the touch bar).
     pub chin: f32,
     /// Space reserved below the body for the dock.
     pub dock: f32,
@@ -178,7 +182,11 @@ pub struct Geometry {
 
 impl Geometry {
     pub fn new(scr: Vec2, touchbar: bool, has_dock: bool) -> Self {
-        let (border, chin) = if touchbar { (scr.x * 0.018, scr.y * 0.085) } else { (scr.x * BEZEL_RATIO, 0.0) };
+        let border = if touchbar { scr.x * 0.018 } else { scr.x * BEZEL_RATIO };
+        // Measured on product photos: below the screen, the body is about 13% of the screen
+        // height on the OG/BWRY and 12% on the X, against a thinner bezel elsewhere.
+        let bottom = scr.y * if touchbar { CHIN_RATIO_X } else { CHIN_RATIO };
+        let chin = (bottom - border).max(0.0);
         let dock = if has_dock { scr.y * 0.05 } else { 0.0 };
         Geometry { border, chin, dock, touchbar }
     }
