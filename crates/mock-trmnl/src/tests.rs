@@ -185,7 +185,12 @@ fn stop_and_restart() {
     assert_eq!(m.device_url(), Some(format!("http://10.0.2.2:{port}")));
     m.stop();
     assert_eq!(m.device_url(), None);
-    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    // tiny_http closes its listener from its own accept thread, shortly after stop().
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(std::time::Instant::now() < deadline, "port {port} still accepting after stop()");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let port2 = m.start(0).unwrap().port();
     assert_eq!(get_json(port2, "/api/display", &[])["status"], 0);
 }
