@@ -281,6 +281,8 @@ pub struct EspAtModem {
     wifi_available: bool,
     /// Faults: AT input is ignored; network faults for the HTTP client.
     unresponsive: bool,
+    /// Fault: AT commands starting with one of these answer ERROR.
+    at_errors: Vec<String>,
     net_faults: vnet::NetFaults,
     flash: Option<Vec<u8>>,
     stats: ModemStats,
@@ -322,6 +324,7 @@ impl EspAtModem {
             rom_free_at: 0,
             wifi_available: true,
             unresponsive: false,
+            at_errors: Vec::new(),
             net_faults: vnet::NetFaults::default(),
             flash: None,
             stats: ModemStats::default(),
@@ -416,6 +419,11 @@ impl EspAtModem {
 
     /// Fault: stop answering AT commands (everything the host sends is ignored; replies
     /// already on their way still arrive). The ROM loader is unaffected.
+    /// Fault: answer ERROR to AT commands that start with one of `prefixes`.
+    pub fn set_at_errors(&mut self, prefixes: &[String]) {
+        self.at_errors = prefixes.to_vec();
+    }
+
     pub fn set_unresponsive(&mut self, on: bool) {
         self.unresponsive = on;
     }
@@ -701,6 +709,10 @@ impl EspAtModem {
         log::debug!(target: "modem", "t={t} AT {cmd}");
         let t0 = t.max(self.cmd_free_at) + self.timing.cmd_ns;
         self.cmd_free_at = t0;
+        if self.at_errors.iter().any(|p| cmd.starts_with(p.as_str())) {
+            self.error(t0);
+            return;
+        }
         if !self.dispatch(t0, &cmd) {
             self.stats.unknown_commands += 1;
             self.stats.last_unknown_command = Some(cmd);

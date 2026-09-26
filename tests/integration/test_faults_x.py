@@ -88,6 +88,41 @@ class FaultsX(unittest.TestCase):
     def test_touch_controller_ati_error(self):
         self.touch_bar_fault("ati_error")
 
+    def modem_errors(self, *prefixes) -> dict:
+        """Asleep on 5 GHz, the modem starts answering ERROR to these commands; the device
+        must still get back to sleep after a timer wake. Returns the status."""
+        with dev.boot_asleep() as s:
+            s.wait(state="deep_sleep", timeout_s=15)
+            s.set_faults(modem_at_errors=list(prefixes))
+            s.wake()
+            st = s.wait(state="deep_sleep", timeout_s=30, settle_ms=300)["status"]
+            self.assertNotEqual(st["state"], "halted")
+            return st
+
+    def test_modem_station_mode_fails(self):
+        self.modem_errors("AT+CWMODE")
+
+    def test_modem_auto_connect_setting_fails(self):
+        self.modem_errors("AT+CWAUTOCONN")
+
+    def test_modem_baud_rate_change_fails(self):
+        self.modem_errors("AT+UART_CUR")
+
+    def test_modem_cannot_join(self):
+        self.modem_errors("AT+CWJAP=")
+
+    def test_modem_http_headers_rejected(self):
+        self.modem_errors("AT+HTTPCHEAD")
+
+    def test_modem_time_sync_fails(self):
+        self.modem_errors("AT+CIPSNTPCFG")
+
+    def test_modem_time_query_fails(self):
+        self.modem_errors("AT+CIPSNTPTIME")
+
+    def test_modem_mac_and_signal_queries_fail(self):
+        self.modem_errors("AT+CIPSTAMAC", "AT+CWJAP?")
+
     def test_panel_power_failure(self):
         # The PMIC's power good never comes: the panel gets no drive voltages.
         with dev.boot(faults={"panel_busy_stuck": True}) as s:

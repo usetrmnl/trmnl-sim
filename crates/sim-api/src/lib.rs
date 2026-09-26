@@ -161,6 +161,9 @@ pub struct Faults {
     /// The TRMNL X modem stops answering AT commands (input is ignored; the ROM loader
     /// still works).
     pub modem_unresponsive: bool,
+    /// The TRMNL X modem answers ERROR to AT commands starting with one of these
+    /// (e.g. "AT+CWMODE").
+    pub modem_at_errors: Vec<String>,
     /// The TRMNL X touch controller (IQS323) misbehaves.
     pub touch_bar: Option<TouchBarFault>,
 }
@@ -245,6 +248,9 @@ impl Faults {
         }
         if self.panel_busy_stuck {
             v.push("panel busy stuck".into());
+        }
+        if !self.modem_at_errors.is_empty() {
+            v.push(format!("modem ERROR for {}", self.modem_at_errors.join(", ")));
         }
         if let Some(t) = self.touch_bar {
             v.push(format!("touch bar {}", t.name()));

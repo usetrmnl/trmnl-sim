@@ -10,6 +10,7 @@
 //!  "i2c_absent": [85, "0x55"],
 //!  "panel_busy_stuck": true,
 //!  "modem_unresponsive": true,
+//!  "modem_at_errors": ["AT+CWMODE", "AT+HTTPCHEAD"],
 //!  "touch_bar": "reset" | "lockup" | "ati_error"}
 //! ```
 //!
@@ -42,6 +43,16 @@ pub fn merge_faults(base: &Faults, v: &Value) -> Result<Faults, String> {
             "i2c_absent" => f.i2c_absent = if v.is_null() { Vec::new() } else { i2c_addrs(v)? },
             "panel_busy_stuck" => f.panel_busy_stuck = flag(v, k)?,
             "modem_unresponsive" => f.modem_unresponsive = flag(v, k)?,
+            "modem_at_errors" => {
+                f.modem_at_errors = match v {
+                    Value::Null => Vec::new(),
+                    Value::Array(a) => a
+                        .iter()
+                        .map(|p| p.as_str().map(String::from).ok_or("modem_at_errors: strings"))
+                        .collect::<Result<_, _>>()?,
+                    _ => return Err("modem_at_errors: a list of command prefixes".into()),
+                }
+            }
             "touch_bar" => {
                 f.touch_bar = match v {
                     Value::Null => None,
@@ -172,6 +183,7 @@ pub fn faults_json(f: &Faults) -> Value {
         "i2c_absent": f.i2c_absent,
         "panel_busy_stuck": f.panel_busy_stuck,
         "modem_unresponsive": f.modem_unresponsive,
+        "modem_at_errors": f.modem_at_errors,
         "touch_bar": f.touch_bar.map(|t| t.name()),
     })
 }

@@ -274,6 +274,7 @@ impl Board for TrmnlX {
             tps.rail_fault = faults.panel_busy_stuck;
         }
         self.modem.set_unresponsive(faults.modem_unresponsive);
+        self.modem.set_at_errors(&faults.modem_at_errors);
         let now = self.last_now;
         let iqs = self.iqs();
         iqs.lockup = faults.touch_bar == Some(sim_api::TouchBarFault::Lockup);
