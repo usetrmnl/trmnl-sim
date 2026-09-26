@@ -220,9 +220,9 @@ mod tests {
         a.start(0, true);
         let d: Vec<u8> = (0..6).map(|_| a.read(0, true)).collect();
         // bb_temperature's conversion
-        let h = ((d[1] as u32) << 12 | (d[2] as u32) << 4 | (d[3] as u32) >> 4) * 100 >> 20;
-        let t = (((d[3] as u32 & 0xf) << 16 | (d[4] as u32) << 8 | d[5] as u32) >> 10) as i32;
+        let h = ((((d[1] as u32) << 12) | ((d[2] as u32) << 4) | ((d[3] as u32) >> 4)) * 100) >> 20;
+        let t = ((((d[3] as u32 & 0xf) << 16) | ((d[4] as u32) << 8) | d[5] as u32) >> 10) as i32;
         assert_eq!(h, 44);
-        assert_eq!((t * 2000 >> 10) - 500, 224);
+        assert_eq!(((t * 2000) >> 10) - 500, 224);
     }
 }
