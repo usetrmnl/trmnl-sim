@@ -374,6 +374,13 @@ pub enum Command {
     Press {
         ms: u64,
     },
+    /// `count` presses of `ms` each, `gap_ms` apart (virtual time), e.g. a double click;
+    /// counts as one press in `presses_done` once the last one is released.
+    PressRepeat {
+        ms: u64,
+        gap_ms: u64,
+        count: u32,
+    },
     /// Tap a touch bar zone (finger down for `ms` of virtual time, default ~120 ms).
     Touch {
         zone: TouchZone,

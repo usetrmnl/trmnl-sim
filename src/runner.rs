@@ -175,6 +175,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
     let mut last_portal: Option<String> = None;
     let mut was_realtime = true;
     let mut release_at: Option<u64> = None;
+    // A PressRepeat in progress: the next press starts at `press_at`; (ms, gap, presses left).
+    let mut press_at: Option<u64> = None;
+    let mut repeat: Option<(u64, u64, u32)> = None;
     let mut presses_done = 0u64;
     let mut touch_release_at: Option<(u64, sim_api::TouchZone)> = None;
     let mut touches_done = 0u64;
@@ -231,6 +234,15 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 Command::Press { ms } => {
                     button = true;
                     release_at = Some(m.now_ns() + ms * 1_000_000);
+                    (press_at, repeat) = (None, None);
+                    m.board().set_button(true);
+                    ports.status.lock().button_down = true;
+                }
+                Command::PressRepeat { ms, gap_ms, count } => {
+                    button = true;
+                    release_at = Some(m.now_ns() + ms * 1_000_000);
+                    press_at = None;
+                    repeat = Some((ms, gap_ms, count.max(1) - 1));
                     m.board().set_button(true);
                     ports.status.lock().button_down = true;
                 }
@@ -378,9 +390,10 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         let _ = m.set_faults(&faults);
                         ports.console.lock().push_sim(&describe_restore(&sp));
                         // Inputs in progress end with the old device.
-                        if release_at.take().is_some() {
+                        if release_at.take().is_some() || press_at.take().is_some() {
                             presses_done += 1;
                         }
+                        repeat = None;
                         if touch_release_at.take().is_some() {
                             touches_done += 1;
                         }
@@ -437,10 +450,27 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             release_at = None;
             button = false;
             m.board().set_button(false);
-            presses_done += 1;
+            match repeat {
+                Some((_, gap, left)) if left > 0 => press_at = Some(m.now_ns() + gap * 1_000_000),
+                _ => {
+                    repeat = None;
+                    presses_done += 1;
+                }
+            }
             let mut st = ports.status.lock();
             st.button_down = false;
             st.presses_done = presses_done;
+        }
+        if let Some(t) = press_at
+            && m.now_ns() >= t
+            && let Some((ms, gap, left)) = repeat
+        {
+            press_at = None;
+            repeat = Some((ms, gap, left - 1));
+            button = true;
+            release_at = Some(m.now_ns() + ms * 1_000_000);
+            m.board().set_button(true);
+            ports.status.lock().button_down = true;
         }
 
         if let Some((t, zone)) = touch_release_at
@@ -471,7 +501,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 was_realtime = realtime;
                 let wall_target = anchor_virt + anchor_wall.elapsed().as_nanos() as u64;
                 let mut target = if realtime { wall_target.min(now_v + 20_000_000) } else { now_v + 20_000_000 };
-                for t in [release_at, touch_release_at.map(|t| t.0)].into_iter().flatten() {
+                for t in [release_at, press_at, touch_release_at.map(|t| t.0)].into_iter().flatten() {
                     target = target.min(t.max(now_v + 1));
                 }
                 if target <= now_v {

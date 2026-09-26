@@ -255,9 +255,8 @@ class Simulator:
         self._post("/press", {"ms": ms}, timeout=ms / 1000 * 20 + 30)
 
     def double_click(self, ms: int = 80, gap_ms: int = 150) -> None:
-        self.press(ms)
-        time.sleep(gap_ms / 1000)
-        self.press(ms)
+        """Two presses of `ms`, `gap_ms` apart, timed in virtual time."""
+        self._post("/press", {"ms": ms, "count": 2, "gap_ms": gap_ms}, timeout=(ms + gap_ms) * 2 / 1000 * 20 + 30)
 
     def touch(self, zone: str, ms: int = 120) -> None:
         """Tap the touch bar ("left", "center" or "right") for `ms` of virtual time (TRMNL X)."""

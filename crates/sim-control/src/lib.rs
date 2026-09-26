@@ -8,7 +8,7 @@
 //! |--------|------------------------|------------------------------------------------|--------|
 //! | GET    | `/status`              |                                                | status JSON |
 //! | POST   | `/button`              | `{"down": true}`                               | |
-//! | POST   | `/press`               | `{"ms": 1200}` hold for virtual ms, then release | |
+//! | POST   | `/press`               | `{"ms": 1200}` hold for virtual ms, then release; `"count": 2, "gap_ms": 150` repeats it | |
 //! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift | |
 //! | POST   | `/dock`                | `{"docked": true}`                             | |
 //! | POST   | `/reset`               |                                                | |
@@ -135,8 +135,11 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             ok()
         }
         (Method::Post, "/press") => {
-            let ms = body_json(body)?["ms"].as_u64().unwrap_or(100);
-            press(h, ms)?;
+            let b = body_json(body)?;
+            let ms = b["ms"].as_u64().unwrap_or(100);
+            let count = b["count"].as_u64().unwrap_or(1) as u32;
+            let gap_ms = b["gap_ms"].as_u64().unwrap_or(150);
+            press(h, ms, count, gap_ms)?;
             ok()
         }
         (Method::Post, "/touch") => {
@@ -418,10 +421,11 @@ fn set_faults(h: &SimHandle, f: sim_api::Faults) -> Result<(), String> {
 
 /// Hold the button for exactly `ms` of *virtual* time (timed by the emulator),
 /// returning once it has been released.
-fn press(h: &SimHandle, ms: u64) -> Result<(), String> {
+fn press(h: &SimHandle, ms: u64, count: u32, gap_ms: u64) -> Result<(), String> {
     let before = h.status.lock().presses_done;
-    h.send(Command::Press { ms });
-    let deadline = Instant::now() + Duration::from_millis(ms * 20 + 30_000);
+    h.send(if count > 1 { Command::PressRepeat { ms, gap_ms, count } } else { Command::Press { ms } });
+    let total = (ms + gap_ms) * count.max(1) as u64;
+    let deadline = Instant::now() + Duration::from_millis(total * 20 + 30_000);
     while h.status.lock().presses_done <= before {
         if Instant::now() > deadline {
             return Err("timed out waiting for the press to complete (is the simulator paused?)".into());

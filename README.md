@@ -412,7 +412,7 @@ Useful pieces:
 |---|---|
 | `GET /status` | state, virtual time, display busy and refresh count, WiFi/IP, portal URL, boot count, … |
 | `POST /button {"down": bool}` | hold or release the button |
-| `POST /press {"ms": N}` | press for N virtual ms; returns after release |
+| `POST /press {"ms": N}` | press for N virtual ms; returns after release (`"count": 2, "gap_ms": 150`: a double click, timed in virtual ms) |
 | `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap; returns after lift |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
