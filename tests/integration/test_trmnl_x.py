@@ -1,7 +1,9 @@
 """TRMNL X: factory flow, shipment mode and the dock, onboarding over 2.4 GHz (S3 WiFi) and
 5 GHz (ESP32-C5 modem), the 1872x1404 parallel panel, the touch bar, and charging headers."""
 
+import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -193,6 +195,27 @@ class TouchAndDock(ProvisionedCase):
 
 
 class Onboarding(unittest.TestCase):
+    def test_portal_rescans_both_radios_and_joins_the_chosen_band(self):
+        with MockTrmnl() as mock, shipped().boot() as s:
+            s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=30)
+            s.dock(True)
+            s.wait(portal=True, timeout_s=30)
+            s.dock(False)
+            c = s.status()["console_total"]
+            s.portal_request("/scan?force=1")
+            s.wait(console=r"Modem re-scan found", since=c, timeout_s=30)
+            deadline = time.time() + 30
+            while (code := s.portal_request("/scan")[0]) != 200 and time.time() < deadline:
+                time.sleep(0.5)
+            code, body = s.portal_request("/scan")
+            if code == 200:
+                scan = json.loads(body)
+                self.assertIn("mac_5ghz", scan)
+            body = {"ssid": SSID_24, "pswd": "password", "server": mock.device_url, "band": "2.4GHz"}
+            self.assertEqual(s.portal_request("/connect", body)[0], 200)
+            req = mock.wait_for_request("/api/display", timeout_s=30)
+            self.assertEqual(req.headers["RSSI"], "-54")  # the S3's own radio
+
     def test_onboarding_on_2_4_ghz_uses_the_s3_radio(self):
         with MockTrmnl() as mock, shipped().boot() as s:
             onboard(s, mock, SSID_24)
