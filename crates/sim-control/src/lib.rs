@@ -1,0 +1,393 @@
+//! HTTP/JSON control interface for driving a running simulator from integration
+//! tests (or scripts). Everything the GUI can do is available here, plus
+//! screenshots, screen comparison and blocking waits on console/state/display.
+//!
+//! All endpoints are on a local address (e.g. `--control 127.0.0.1:7878`):
+//!
+//! | method | path                   | body / query                                   | result |
+//! |--------|------------------------|------------------------------------------------|--------|
+//! | GET    | `/status`              |                                                | status JSON |
+//! | POST   | `/button`              | `{"down": true}`                               | |
+//! | POST   | `/press`               | `{"ms": 1200}` hold for virtual ms, then release | |
+//! | POST   | `/reset`               |                                                | |
+//! | POST   | `/power-cycle`         |                                                | |
+//! | POST   | `/wake`                |                                                | |
+//! | POST   | `/wifi`                | `{"available": false}`                         | |
+//! | POST   | `/battery`             | `{"mv": 3300}`                                 | |
+//! | POST   | `/turbo`               | `{"on": true}`                                 | |
+//! | POST   | `/pause`               | `{"on": true}`                                 | |
+//! | POST   | `/quit`                |                                                | |
+//! | GET    | `/console`             | `?since=N`                                     | `{"total", "lines":[{"i","text"}]}` |
+//! | POST   | `/wait`                | see [`WaitSpec`]                               | `{"ok", ...}` or 408 |
+//! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` |
+//! | POST   | `/screenshot/compare`  | PNG body; `?x=&y=&w=&h=&tolerance=&max_ratio=` | `{"match", "diff_pixels", "diff_ratio"}` |
+//!
+//! Screens are grayscale with 0 = black ink and 255 = paper.
+
+use std::net::SocketAddr;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+use sim_api::{Command, RunState, SimHandle, Status};
+use tiny_http::{Header, Method, Request, Response, Server};
+
+pub fn serve(handle: SimHandle, addr: SocketAddr) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
+    let server = Server::http(addr).map_err(std::io::Error::other)?;
+    let bound = server.server_addr().to_ip().unwrap_or(addr);
+    let t = std::thread::Builder::new().name("control".into()).spawn(move || {
+        // One thread per request so a long /wait doesn't block other calls.
+        for req in server.incoming_requests() {
+            let h = handle.clone();
+            std::thread::spawn(move || handle_request(&h, req));
+        }
+    })?;
+    Ok((bound, t))
+}
+
+type Reply = Response<std::io::Cursor<Vec<u8>>>;
+
+fn json_reply(code: u16, v: Value) -> Reply {
+    Response::from_data(serde_json::to_vec_pretty(&v).unwrap())
+        .with_status_code(code)
+        .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+}
+
+fn err(code: u16, msg: impl Into<String>) -> Reply {
+    json_reply(code, json!({ "ok": false, "error": msg.into() }))
+}
+
+fn handle_request(h: &SimHandle, mut req: Request) {
+    let method = req.method().clone();
+    let url = req.url().to_string();
+    let (path, query) = url.split_once('?').unwrap_or((&url, ""));
+    let path = path.to_string();
+    let q = parse_query(query);
+    let mut body = Vec::new();
+    let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
+    let reply = match route(h, &method, &path, &q, &body) {
+        Ok(r) => r,
+        Err(e) => err(400, e),
+    };
+    let _ = req.respond(reply);
+}
+
+fn parse_query(q: &str) -> Vec<(String, String)> {
+    q.split('&')
+        .filter(|s| !s.is_empty())
+        .map(|kv| {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            (k.to_string(), v.to_string())
+        })
+        .collect()
+}
+
+fn qget<T: std::str::FromStr>(q: &[(String, String)], k: &str) -> Option<T> {
+    q.iter().find(|(kk, _)| kk == k).and_then(|(_, v)| v.parse().ok())
+}
+
+fn body_json(body: &[u8]) -> Result<Value, String> {
+    if body.iter().all(|b| b.is_ascii_whitespace()) {
+        return Ok(json!({}));
+    }
+    serde_json::from_slice(body).map_err(|e| format!("bad JSON body: {e}"))
+}
+
+fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], body: &[u8]) -> Result<Reply, String> {
+    let ok = || Ok(json_reply(200, json!({ "ok": true })));
+    match (method, path) {
+        (Method::Get, "/status") => Ok(json_reply(200, status_json(h))),
+        (Method::Post, "/button") => {
+            let down = body_json(body)?["down"].as_bool().ok_or("need {\"down\": bool}")?;
+            h.send(Command::Button(down));
+            ok()
+        }
+        (Method::Post, "/press") => {
+            let ms = body_json(body)?["ms"].as_u64().unwrap_or(100);
+            press(h, ms)?;
+            ok()
+        }
+        (Method::Post, "/reset") => {
+            h.send(Command::Reset);
+            ok()
+        }
+        (Method::Post, "/power-cycle") => {
+            h.send(Command::PowerCycle);
+            ok()
+        }
+        (Method::Post, "/wake") => {
+            h.send(Command::WakeFromSleep);
+            ok()
+        }
+        (Method::Post, "/wifi") => {
+            let on = body_json(body)?["available"].as_bool().ok_or("need {\"available\": bool}")?;
+            h.send(Command::SetWifiAvailable(on));
+            ok()
+        }
+        (Method::Post, "/battery") => {
+            let mv = body_json(body)?["mv"].as_u64().ok_or("need {\"mv\": number}")?;
+            h.send(Command::SetBatteryMv(mv as u32));
+            ok()
+        }
+        (Method::Post, "/turbo") => {
+            let on = body_json(body)?["on"].as_bool().unwrap_or(true);
+            h.send(Command::SetTurbo(on));
+            ok()
+        }
+        (Method::Post, "/pause") => {
+            let on = body_json(body)?["on"].as_bool().unwrap_or(true);
+            h.send(Command::Pause(on));
+            ok()
+        }
+        (Method::Post, "/quit") => {
+            h.send(Command::Quit);
+            ok()
+        }
+        (Method::Get, "/console") => {
+            let since = qget(q, "since").unwrap_or(0u64);
+            let c = h.console.lock();
+            let lines: Vec<Value> = c.lines_since(since).into_iter().map(|(i, t)| json!({"i": i, "text": t})).collect();
+            Ok(json_reply(200, json!({ "total": c.total, "lines": lines })))
+        }
+        (Method::Post, "/wait") => {
+            let spec = WaitSpec::from_json(&body_json(body)?)?;
+            Ok(wait(h, &spec))
+        }
+        (Method::Get, "/screenshot") => {
+            let (w, hgt, px) = screen(h, crop(q));
+            let png = encode_png(w, hgt, &px);
+            Ok(Response::from_data(png).with_header(Header::from_bytes("Content-Type", "image/png").unwrap()))
+        }
+        (Method::Post, "/screenshot/compare") => {
+            let (rw, rh, reference) = decode_png(body)?;
+            let (w, hgt, px) = screen(h, crop(q));
+            if (rw, rh) != (w, hgt) {
+                return Ok(err(422, format!("reference is {rw}x{rh}, screen region is {w}x{hgt}")));
+            }
+            let tol: i32 = qget(q, "tolerance").unwrap_or(48);
+            let max_ratio: f64 = qget(q, "max_ratio").unwrap_or(0.001);
+            let diff = px.iter().zip(&reference).filter(|(a, b)| (**a as i32 - **b as i32).abs() > tol).count();
+            let ratio = diff as f64 / px.len().max(1) as f64;
+            Ok(json_reply(
+                200,
+                json!({ "match": ratio <= max_ratio, "diff_pixels": diff, "diff_ratio": ratio, "width": w, "height": hgt }),
+            ))
+        }
+        _ => Ok(err(404, format!("no route {method} {path}"))),
+    }
+}
+
+// ---- status ------------------------------------------------------------------------------------
+
+fn state_name(s: &RunState) -> &'static str {
+    match s {
+        RunState::Running => "running",
+        RunState::Paused => "paused",
+        RunState::Idle => "idle",
+        RunState::LightSleep { .. } => "light_sleep",
+        RunState::DeepSleep { .. } => "deep_sleep",
+        RunState::Halted(_) => "halted",
+    }
+}
+
+fn status_json(h: &SimHandle) -> Value {
+    let st: Status = h.status.lock().clone();
+    let generation = h.frame.lock().generation;
+    let total = h.console.lock().total;
+    let wake = match &st.state {
+        RunState::DeepSleep { wake_at_ns } | RunState::LightSleep { wake_at_ns } => *wake_at_ns,
+        _ => None,
+    };
+    json!({
+        "state": state_name(&st.state),
+        "halted_reason": match &st.state { RunState::Halted(m) => Some(m.clone()), _ => None },
+        "wake_at_s": wake.map(|n| n as f64 / 1e9),
+        "sim_time_s": st.sim_time_ns as f64 / 1e9,
+        "mips": st.mips,
+        "speed_ratio": st.speed_ratio,
+        "battery_mv": st.battery_mv,
+        "button_down": st.button_down,
+        "wifi_available": st.wifi_available,
+        "wifi_connected": st.wifi_connected,
+        "ip": st.ip,
+        "portal_url": st.portal_url,
+        "display_busy": st.display_busy,
+        "display_refreshes": st.display_refreshes,
+        "display_generation": generation,
+        "boot_count": st.boot_count,
+        "firmware": st.firmware,
+        "turbo": st.turbo,
+        "console_total": total,
+    })
+}
+
+// ---- button ---------------------------------------------------------------------------------------
+
+/// Hold the button for exactly `ms` of *virtual* time (timed by the emulator),
+/// returning once it has been released.
+fn press(h: &SimHandle, ms: u64) -> Result<(), String> {
+    let before = h.status.lock().presses_done;
+    h.send(Command::Press { ms });
+    let deadline = Instant::now() + Duration::from_millis(ms * 20 + 30_000);
+    while h.status.lock().presses_done <= before {
+        if Instant::now() > deadline {
+            return Err("timed out waiting for the press to complete (is the simulator paused?)".into());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+// ---- waits -------------------------------------------------------------------------------------------
+
+/// Conditions for `POST /wait`. All given conditions must hold at once.
+///
+/// ```json
+/// {"console": "regex", "since": 120, "state": "deep_sleep", "min_refreshes": 3,
+///  "display_idle": true, "wifi_connected": true, "timeout_s": 60, "settle_ms": 0}
+/// ```
+pub struct WaitSpec {
+    console: Option<regex::Regex>,
+    since: u64,
+    state: Option<String>,
+    min_refreshes: Option<u64>,
+    min_boots: Option<u64>,
+    display_idle: bool,
+    wifi_connected: Option<bool>,
+    portal: Option<bool>,
+    timeout: Duration,
+    /// Once satisfied, keep waiting this long (wall ms) and re-check; e.g. to
+    /// let a refresh animation finish.
+    settle: Duration,
+}
+
+impl WaitSpec {
+    fn from_json(v: &Value) -> Result<Self, String> {
+        let console = match v["console"].as_str() {
+            Some(r) => Some(regex::Regex::new(r).map_err(|e| format!("bad regex: {e}"))?),
+            None => None,
+        };
+        let state = v["state"].as_str().map(str::to_string);
+        if let Some(s) = &state
+            && !["running", "paused", "idle", "light_sleep", "deep_sleep", "halted"].contains(&s.as_str())
+        {
+            return Err(format!("unknown state {s}"));
+        }
+        Ok(WaitSpec {
+            console,
+            since: v["since"].as_u64().unwrap_or(0),
+            state,
+            min_refreshes: v["min_refreshes"].as_u64(),
+            min_boots: v["min_boots"].as_u64(),
+            display_idle: v["display_idle"].as_bool().unwrap_or(false),
+            wifi_connected: v["wifi_connected"].as_bool(),
+            portal: v["portal"].as_bool(),
+            timeout: Duration::from_secs_f64(v["timeout_s"].as_f64().unwrap_or(60.0)),
+            settle: Duration::from_millis(v["settle_ms"].as_u64().unwrap_or(0)),
+        })
+    }
+}
+
+fn check(h: &SimHandle, s: &WaitSpec) -> Option<Value> {
+    let mut found = Value::Null;
+    if let Some(re) = &s.console {
+        let c = h.console.lock();
+        let hit = c.lines_since(s.since).into_iter().find(|(_, l)| re.is_match(l))?;
+        found = json!({"i": hit.0, "text": hit.1});
+    }
+    let st = h.status.lock().clone();
+    if let Some(want) = &s.state
+        && state_name(&st.state) != want
+    {
+        return None;
+    }
+    if s.min_refreshes.is_some_and(|n| st.display_refreshes < n)
+        || s.min_boots.is_some_and(|n| (st.boot_count as u64) < n)
+        || (s.display_idle && st.display_busy)
+        || s.wifi_connected.is_some_and(|w| st.wifi_connected != w)
+        || s.portal.is_some_and(|p| st.portal_url.is_some() != p)
+    {
+        return None;
+    }
+    Some(found)
+}
+
+fn wait(h: &SimHandle, s: &WaitSpec) -> Reply {
+    let start = Instant::now();
+    loop {
+        if let Some(line) = check(h, s) {
+            if s.settle.is_zero() {
+                return json_reply(
+                    200,
+                    json!({"ok": true, "elapsed_s": start.elapsed().as_secs_f64(), "line": line, "status": status_json(h)}),
+                );
+            }
+            std::thread::sleep(s.settle);
+            if let Some(line) = check(h, s) {
+                return json_reply(
+                    200,
+                    json!({"ok": true, "elapsed_s": start.elapsed().as_secs_f64(), "line": line, "status": status_json(h)}),
+                );
+            }
+        }
+        if let RunState::Halted(m) = &h.status.lock().state
+            && s.state.as_deref() != Some("halted")
+        {
+            return json_reply(409, json!({"ok": false, "error": format!("simulator halted: {m}")}));
+        }
+        if start.elapsed() > s.timeout {
+            return json_reply(408, json!({"ok": false, "error": "timeout", "status": status_json(h)}));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+// ---- screen ---------------------------------------------------------------------------------------
+
+fn crop(q: &[(String, String)]) -> Option<(usize, usize, usize, usize)> {
+    Some((qget(q, "x")?, qget(q, "y")?, qget(q, "w")?, qget(q, "h")?))
+}
+
+/// The screen (optionally cropped) as 8-bit gray, 0 = black, 255 = paper.
+fn screen(h: &SimHandle, crop: Option<(usize, usize, usize, usize)>) -> (usize, usize, Vec<u8>) {
+    let f = h.frame.lock();
+    let (x0, y0, w, hh) = crop.unwrap_or((0, 0, f.width, f.height));
+    let (x0, y0) = (x0.min(f.width), y0.min(f.height));
+    let (w, hh) = (w.min(f.width - x0), hh.min(f.height - y0));
+    let mut px = Vec::with_capacity(w * hh);
+    for y in y0..y0 + hh {
+        px.extend(f.pixels[y * f.width + x0..y * f.width + x0 + w].iter().map(|d| 255 - d));
+    }
+    (w, hh, px)
+}
+
+pub fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut wr = enc.write_header().unwrap();
+        wr.write_image_data(px).unwrap();
+    }
+    out
+}
+
+/// Decode any common PNG into 8-bit gray.
+fn decode_png(data: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
+    let mut dec = png::Decoder::new(std::io::Cursor::new(data));
+    dec.set_transformations(png::Transformations::normalize_to_color8());
+    let mut r = dec.read_info().map_err(|e| format!("bad PNG: {e}"))?;
+    let mut buf = vec![0; r.output_buffer_size().ok_or("PNG too large")?];
+    let info = r.next_frame(&mut buf).map_err(|e| format!("bad PNG: {e}"))?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let ch = info.color_type.samples();
+    let gray = buf[..info.buffer_size()]
+        .chunks(ch)
+        .map(|p| match ch {
+            1 | 2 => p[0],
+            _ => ((p[0] as u32 * 30 + p[1] as u32 * 59 + p[2] as u32 * 11) / 100) as u8,
+        })
+        .collect();
+    Ok((w, h, gray))
+}

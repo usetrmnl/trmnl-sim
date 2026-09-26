@@ -1,0 +1,600 @@
+//! ESP32-C3: single RV32IMC core at up to 160 MHz.
+
+pub mod bus;
+pub mod crypto;
+pub mod i2c;
+pub mod periph;
+pub mod sha;
+
+use std::collections::HashMap;
+
+use crate::arch::GuestCpu;
+use crate::arch::riscv::{Rv32, Step};
+use crate::board::Board;
+use crate::devices::spi_flash::SpiFlash;
+use crate::firmware::{self, Symbols};
+use crate::hle::{self, GuestMem, HleCtx, HleEnv, HleState, Hooks, MachineRequest};
+
+use super::{Machine, NetStatus, Output, ResetKind, SliceExit};
+use bus::C3Bus;
+use periph::{ResetReason, ResetRequest};
+
+pub const ROM_ELF: &str = "esp32c3_rev3_rom.elf";
+/// Top of the ROM's boot stack (end of .stack_pro).
+const ROM_STACK_TOP: u32 = 0x3FCD_E710;
+/// How often (virtual time) peripherals/devices are serviced when nothing else is due.
+const SERVICE_NS: u64 = 500_000;
+
+pub struct Esp32c3 {
+    pub cpu: Rv32,
+    pub bus: C3Bus,
+    rom_sections: Vec<(u32, Vec<u8>)>,
+    rom_syms: Symbols,
+    /// Known app builds: (ELF SHA-256, symbols, name). HLE hooks follow the one that boots.
+    apps: Vec<([u8; 32], Symbols, String)>,
+    active_app: Option<usize>,
+    trace: Vec<String>,
+    pending_halt: Option<String>,
+    recent_resets: Vec<u64>,
+    syms: Symbols,
+    hooks: Hooks,
+    irq: Option<(u32, u32)>,
+    requests: Vec<MachineRequest>,
+    /// Simulator messages tagged with the serial output position they follow.
+    sim_msgs: Vec<(usize, String)>,
+    samples: HashMap<u32, u64>,
+    next_sample: u64,
+    boots: u32,
+    trap_depth: u32,
+    irq_counts: [u64; 32],
+    hle: HleState,
+    /// Light sleep in progress: (wake time, wake on GPIO).
+    light_sleep: Option<(Option<u64>, bool)>,
+}
+
+/// Minimal board used while the real one is lent to HLE code.
+struct NullBoard;
+impl Board for NullBoard {
+    fn gpio_out(&mut self, _: u64, _: u64, _: u64) {}
+    fn gpio_in(&mut self, _: u64) -> (u64, u64) {
+        (0, 0)
+    }
+    fn spi_transfer(&mut self, _: u64, _: u8, _: &[u8], n: usize) -> Vec<u8> {
+        vec![0; n]
+    }
+    fn adc_millivolts(&mut self, _: u8) -> u32 {
+        0
+    }
+    fn next_event_ns(&self, _: u64) -> Option<u64> {
+        None
+    }
+    fn update(&mut self, _: u64) {}
+    fn set_button(&mut self, _: bool) {}
+    fn set_battery_mv(&mut self, _: u32) {}
+    fn display_status(&self, _: u64) -> (bool, u64) {
+        (false, 0)
+    }
+}
+
+impl GuestMem for C3Bus {
+    fn read_bytes(&self, addr: u32, len: usize) -> Option<Vec<u8>> {
+        self.peek_bytes(addr, len)
+    }
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> bool {
+        self.load_bytes(addr, data)
+    }
+}
+
+struct Env<'a> {
+    now: u64,
+    board: &'a mut dyn Board,
+    requests: &'a mut Vec<MachineRequest>,
+    msgs: &'a mut Vec<(usize, String)>,
+    uart_pos: usize,
+}
+
+impl HleEnv for Env<'_> {
+    fn now_ns(&self) -> u64 {
+        self.now
+    }
+    fn adc_millivolts(&mut self, gpio: u8) -> u32 {
+        self.board.adc_millivolts(gpio)
+    }
+    fn console(&mut self, msg: &str) {
+        self.msgs.push((self.uart_pos, msg.to_string()));
+    }
+    fn request(&mut self, r: MachineRequest) {
+        self.requests.push(r);
+    }
+}
+
+impl Esp32c3 {
+    pub fn new(
+        rom_elf: &[u8],
+        flash: SpiFlash,
+        board: Box<dyn Board>,
+        apps: Vec<([u8; 32], Symbols, String)>,
+        trace: &[String],
+    ) -> anyhow::Result<Self> {
+        let rom_sections = firmware::rom_sections(rom_elf)?;
+        let rom_syms = Symbols::from_elf(rom_elf)?;
+        let mut rom = vec![0u8; bus::ROM_SIZE].into_boxed_slice();
+        for (addr, data) in &rom_sections {
+            let off = match *addr {
+                a if (bus::ROM_BASE..bus::ROM_BASE + bus::ROM_SIZE as u32).contains(&a) => (a - bus::ROM_BASE) as usize,
+                a if (bus::DROM_ROM_BASE..bus::DROM_ROM_BASE + 0x2_0000).contains(&a) => {
+                    (a - bus::DROM_ROM_BASE) as usize + 0x4_0000
+                }
+                _ => continue,
+            };
+            let end = (off + data.len()).min(rom.len());
+            rom[off..end].copy_from_slice(&data[..end - off]);
+        }
+        let mut m = Esp32c3 {
+            cpu: Rv32::new(),
+            bus: C3Bus::new(rom, flash, board),
+            rom_sections,
+            syms: rom_syms.clone(),
+            rom_syms,
+            apps,
+            active_app: None,
+            trace: trace.to_vec(),
+            pending_halt: None,
+            recent_resets: Vec::new(),
+            hooks: Hooks::default(),
+            irq: None,
+            requests: Vec::new(),
+            sim_msgs: Vec::new(),
+            samples: HashMap::new(),
+            next_sample: 0,
+            boots: 0,
+            trap_depth: 0,
+            irq_counts: [0; 32],
+            hle: HleState::new(periph::Periph::new().mac),
+            light_sleep: None,
+        };
+        m.reset(ResetKind::PowerOn);
+        Ok(m)
+    }
+
+    /// Set the factory MAC (eFuse) and restart from power-on.
+    pub fn set_mac(&mut self, mac: [u8; 6]) {
+        self.bus.p.mac = mac;
+        let (cfg, portal) = (self.hle.wifi.net_config.clone(), self.hle.wifi.portal_forward);
+        self.hle = HleState::new(mac);
+        self.hle.wifi.set_net_config(cfg);
+        self.hle.wifi.portal_forward = portal;
+        self.reset(ResetKind::PowerOn);
+        self.boots = 1;
+    }
+
+    pub fn set_net_config(&mut self, cfg: vnet::NetConfig) {
+        self.hle.wifi.set_net_config(cfg);
+    }
+
+    pub fn set_portal_port(&mut self, port: u16) {
+        self.hle.wifi.portal_forward = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    }
+
+    /// Bind symbols and HLE hooks to the app the bootloader is about to start.
+    fn select_app(&mut self) {
+        let Some((off, sha, version)) = firmware::booting_app(&self.bus.flash.data) else {
+            self.pending_halt = Some("no bootable app image in flash".into());
+            return;
+        };
+        let Some(i) = self.apps.iter().position(|a| a.0 == sha) else {
+            self.pending_halt = Some(format!(
+                "the app at {off:#x} (version {version}, ELF sha256 {}) has no matching ELF; \
+                 HLE needs symbols. Pass it with --elf <firmware.elf>",
+                firmware::hex(&sha)
+            ));
+            return;
+        };
+        if self.active_app == Some(i) {
+            return;
+        }
+        let mut syms = self.rom_syms.clone();
+        syms.merge(&self.apps[i].1);
+        let mut hooks = Hooks::default();
+        hle::idf::install(&mut hooks, &syms);
+        for name in &self.trace {
+            if !hooks.trace(&syms, name) {
+                log::warn!("--trace: no symbol named {name}");
+            }
+        }
+        if self.active_app.is_some() {
+            let name = self.apps[i].2.clone();
+            self.msg(format!("booting a different app at {off:#x}: {version} ({name})"));
+        }
+        self.syms = syms;
+        self.hooks = hooks;
+        self.active_app = Some(i);
+    }
+
+    fn msg(&mut self, s: String) {
+        log::info!("{s}");
+        self.sim_msgs.push((self.bus.p.uart_out.len(), s));
+    }
+
+    /// The ROM's first boot stage: load the 2nd-stage bootloader from flash and jump to it.
+    fn rom_boot(&mut self) -> anyhow::Result<()> {
+        // ROM .data initial values; .bss is zero (SRAM was cleared).
+        for (addr, data) in &self.rom_sections {
+            if (bus::SRAM_D_BASE..bus::SRAM_D_BASE + bus::SRAM_SIZE as u32).contains(addr) {
+                self.bus.load_bytes(*addr, data);
+            }
+        }
+        let (entry, segs) = firmware::parse_image(&self.bus.flash.data, 0)?;
+        let rst = self.bus.p.reset_reason;
+        let banner = format!(
+            "ESP-ROM:esp32c3-api1-20210207\r\nBuild:Feb  7 2021\r\nrst:{:#x} ({}),boot:0xc (SPI_FAST_FLASH_BOOT)\r\n",
+            rst as u32,
+            match rst {
+                ResetReason::PowerOn => "POWERON",
+                ResetReason::DeepSleep => "DSLEEP",
+                ResetReason::SwSys => "RTC_SW_SYS_RST",
+                ResetReason::SwCpu => "RTC_SW_CPU_RST",
+                _ => "OTHER",
+            }
+        );
+        let mut out = banner.into_bytes();
+        for (addr, data) in &segs {
+            if !self.bus.load_bytes(*addr, data) {
+                anyhow::bail!("bootloader segment at {addr:#x} is not in RAM");
+            }
+            out.extend(format!("load:{:#010x},len:{:#x}\r\n", addr, data.len()).bytes());
+        }
+        out.extend(format!("entry {entry:#010x}\r\n").bytes());
+        self.bus.p.uart_out.extend(out);
+        self.cpu = Rv32::new();
+        self.cpu.pc = entry;
+        self.cpu.x[2] = ROM_STACK_TOP;
+        self.cpu.csr.mtvec = bus::ROM_BASE | 1;
+        Ok(())
+    }
+
+    fn service(&mut self) {
+        let now = self.bus.now_ns();
+        self.bus.systimer_update(now);
+        self.bus.board.update(now);
+        self.bus.gpio_sample(now);
+        let mut next = now + SERVICE_NS;
+        if let Some(t) = self.bus.systimer_next_ns(now) {
+            next = next.min(t);
+        }
+        if let Some(t) = self.bus.board.next_event_ns(now) {
+            next = next.min(t.max(now + 1));
+        }
+        self.bus.next_event = self.bus.clock.cycles_at(next);
+        self.bus.irq_dirty = true;
+        if self.bus.clock.cycles >= self.next_sample {
+            *self.samples.entry(self.cpu.pc).or_default() += 1;
+            self.next_sample = self.bus.clock.cycles + 100_000;
+        }
+    }
+
+    #[inline]
+    fn update_irq(&mut self) {
+        self.bus.irq_dirty = false;
+        self.bus.refresh_sources();
+        self.irq = self.bus.p.intc.best();
+    }
+
+    fn run_hook(&mut self) -> bool {
+        let board = std::mem::replace(&mut self.bus.board, Box::new(NullBoard));
+        let mut board = board;
+        let now = self.bus.now_ns();
+        let redirected = {
+            let uart_pos = self.bus.p.uart_out.len();
+            let mut env =
+                Env { now, board: board.as_mut(), requests: &mut self.requests, msgs: &mut self.sim_msgs, uart_pos };
+            let mut ctx = HleCtx {
+                cpu: &mut self.cpu,
+                mem: &mut self.bus,
+                env: &mut env,
+                syms: &self.syms,
+                state: &mut self.hle,
+            };
+            self.hooks.dispatch(&mut ctx)
+        };
+        self.bus.board = board;
+        redirected
+    }
+
+    fn handle_trap(&mut self, cause: u32, tval: u32) -> Option<SliceExit> {
+        let pc = self.cpu.pc;
+        self.trap_depth += 1;
+        let desc = format!(
+            "CPU exception {} at {} (mtval={tval:#x})",
+            match cause {
+                1 => "instruction access fault",
+                2 => "illegal instruction",
+                3 => "breakpoint",
+                5 => "load access fault",
+                7 => "store access fault",
+                11 => "ecall",
+                _ => "?",
+            },
+            self.syms.describe(pc)
+        );
+        if cause != 11 {
+            self.msg(desc.clone());
+        }
+        if self.trap_depth > 4 || self.cpu.csr.mtvec & !3 == 0 {
+            return Some(SliceExit::Halted(format!("{desc}\n{}", self.debug_dump())));
+        }
+        self.cpu.take_trap(cause, tval, pc);
+        None
+    }
+
+    fn handle_reset_request(&mut self, r: ResetRequest) {
+        self.msg(format!("software reset ({r:?})"));
+        // A firmware stuck restarting is a failure worth surfacing, not spinning on.
+        let now = self.bus.now_ns();
+        self.recent_resets.retain(|t| now - *t < 2_000_000_000);
+        self.recent_resets.push(now);
+        if self.recent_resets.len() > 10 {
+            self.pending_halt = Some("reset loop: more than 10 software resets within 2 s".into());
+        }
+        self.bus.p.reset_reason = match r {
+            ResetRequest::System => ResetReason::SwSys,
+            ResetRequest::Cpu => ResetReason::SwCpu,
+        };
+        self.reset_internal(false);
+    }
+
+    fn reset_internal(&mut self, power_on: bool) {
+        self.bus.flash.flush().ok();
+        let reason = self.bus.p.reset_reason;
+        let wake = self.bus.p.wakeup_cause;
+        self.bus.p.chip_reset(!power_on);
+        self.bus.p.reset_reason = reason;
+        self.bus.p.wakeup_cause = wake;
+        // Keep the RTC time running across resets.
+        let now = self.bus.now_ns();
+        self.bus.p.rtc_ticks_base = self.bus.rtc_ticks(now);
+        let cycles = self.bus.clock.cycles;
+        self.bus.clock = bus::Clock::new(40_000_000);
+        self.bus.clock.cycles = cycles;
+        self.bus.clock.set_base(now);
+        self.bus.p.systimer.reset_counters(now);
+        self.bus.sram.fill(0);
+        if power_on {
+            self.bus.rtc.fill(0);
+        }
+        self.bus.mmu = [bus::MMU_INVALID; bus::MMU_ENTRIES];
+        self.hooks.clear_pending();
+        self.hle.chip_reset();
+        self.light_sleep = None;
+        self.irq = None;
+        self.trap_depth = 0;
+        self.bus.irq_dirty = true;
+        self.boots += 1;
+        self.select_app();
+        if let Err(e) = self.rom_boot() {
+            self.msg(format!("boot failed: {e:#}"));
+        }
+        self.service();
+    }
+}
+
+impl Machine for Esp32c3 {
+    fn run_slice(&mut self, until_ns: u64) -> SliceExit {
+        if let Some(m) = self.pending_halt.take() {
+            return SliceExit::Halted(m);
+        }
+        let until = self.bus.clock.cycles_at(until_ns);
+        loop {
+            if self.bus.clock.cycles >= until {
+                return SliceExit::Reached;
+            }
+            if let Some((wake_at, gpio)) = self.light_sleep {
+                // CPU parked: only time passes (paced by the runner).
+                let now = self.bus.now_ns();
+                let button_low = gpio && self.bus.board.gpio_in(now).0 & 0x3f_ffff != 0x3f_ffff;
+                if wake_at.is_some_and(|t| now >= t) || button_low {
+                    self.light_sleep = None;
+                    self.bus.p.wakeup_cause = if button_low { 1 << 2 } else { 1 << 3 };
+                } else {
+                    let target = wake_at.map_or(until, |t| until.min(self.bus.clock.cycles_at(t)));
+                    self.bus.clock.cycles = self.bus.clock.cycles.max(target);
+                    self.service();
+                    continue;
+                }
+            }
+            let stop = until.min(self.bus.next_event);
+            while self.bus.clock.cycles < stop {
+                if self.hooks.maybe(self.cpu.pc) {
+                    if self.run_hook() {
+                        if !self.requests.is_empty() {
+                            break;
+                        }
+                        continue;
+                    }
+                    if !self.requests.is_empty() {
+                        break;
+                    }
+                }
+                match self.cpu.step(&mut self.bus) {
+                    Step::Ok => {}
+                    Step::Wfi => {
+                        if self.bus.irq_dirty {
+                            self.update_irq();
+                        }
+                        if self.irq.is_none() {
+                            self.bus.clock.cycles = self.bus.clock.cycles.max(stop);
+                            break;
+                        }
+                    }
+                    Step::Trap(t) => {
+                        if let Some(exit) = self.handle_trap(t.cause, t.tval) {
+                            return exit;
+                        }
+                    }
+                }
+                if self.bus.irq_dirty {
+                    self.update_irq();
+                    if let Some(r) = self.bus.p.reset_request.take() {
+                        self.handle_reset_request(r);
+                        break;
+                    }
+                }
+                if let Some((line, pri)) = self.irq
+                    && self.cpu.irq_enabled()
+                {
+                    self.cpu.enter_interrupt(line, pri);
+                    self.irq_counts[line as usize] += 1;
+                    self.trap_depth = 0;
+                }
+            }
+            if let Some(r) = self.bus.p.reset_request.take() {
+                self.handle_reset_request(r);
+            }
+            if !self.requests.is_empty() {
+                for r in std::mem::take(&mut self.requests) {
+                    match r {
+                        MachineRequest::DeepSleep { timer_ns, gpio_low_mask } => {
+                            self.bus.flash.flush().ok();
+                            return SliceExit::DeepSleep { timer_ns, gpio_low_mask };
+                        }
+                        MachineRequest::Halt(m) => return SliceExit::Halted(m),
+                        MachineRequest::LightSleep { timer_ns, gpio } => {
+                            let now = self.bus.now_ns();
+                            self.light_sleep = Some((timer_ns.map(|t| now + t), gpio));
+                        }
+                    }
+                }
+            }
+            if self.bus.clock.cycles >= self.bus.next_event {
+                self.service();
+            }
+        }
+    }
+
+    fn reset(&mut self, kind: ResetKind) {
+        match kind {
+            ResetKind::PowerOn => {
+                self.bus.p.reset_reason = ResetReason::PowerOn;
+                self.bus.p.wakeup_cause = 0;
+                self.bus.p.rtc_ticks_base = 0;
+                self.reset_internal(true);
+            }
+            ResetKind::ResetPin => {
+                self.bus.p.reset_reason = ResetReason::PowerOn;
+                self.bus.p.wakeup_cause = 0;
+                self.reset_internal(false);
+            }
+            ResetKind::DeepSleepWake { by_timer, by_gpio } => {
+                self.bus.p.reset_reason = ResetReason::DeepSleep;
+                // RTC_CNTL wakeup cause bits: GPIO = BIT(2), timer = BIT(3)
+                self.bus.p.wakeup_cause = (by_gpio as u32) << 2 | (by_timer as u32) << 3;
+                self.reset_internal(false);
+            }
+        }
+    }
+
+    fn now_ns(&self) -> u64 {
+        self.bus.now_ns()
+    }
+
+    fn advance_time(&mut self, ns: u64) {
+        let t = self.bus.now_ns() + ns;
+        self.bus.clock.advance_to_ns(t);
+        self.bus.board.update(t);
+    }
+
+    fn instructions(&self) -> u64 {
+        self.bus.clock.cycles
+    }
+
+    fn board(&mut self) -> &mut dyn Board {
+        self.bus.board.as_mut()
+    }
+
+    fn take_output(&mut self) -> Vec<Output> {
+        let uart = std::mem::take(&mut self.bus.p.uart_out);
+        let mut out = Vec::new();
+        let mut pos = 0;
+        for (at, msg) in std::mem::take(&mut self.sim_msgs) {
+            let at = at.min(uart.len());
+            if at > pos {
+                out.push(Output::Serial(uart[pos..at].to_vec()));
+                pos = at;
+            }
+            out.push(Output::Sim(msg));
+        }
+        if pos < uart.len() {
+            out.push(Output::Serial(uart[pos..].to_vec()));
+        }
+        out
+    }
+
+    fn flush(&mut self) {
+        if let Err(e) = self.bus.flash.flush() {
+            log::error!("saving flash: {e}");
+        }
+    }
+
+    fn debug_dump(&self) -> String {
+        let c = &self.cpu;
+        let mut s = format!("pc  {}\nra  {}\n", self.syms.describe(c.pc), self.syms.describe(c.x[1]));
+        s += &c.gpr_dump();
+        s += &format!(
+            "irqs taken per line: {:?}\n",
+            self.irq_counts.iter().enumerate().filter(|(_, n)| **n > 0).collect::<Vec<_>>()
+        );
+        s += &format!("intc: {:?}\n", self.bus.p.intc);
+        s += &format!(
+            "systimer raw={:#x} conf={:#x} ena={:#x}\n",
+            self.bus.p.systimer.raw,
+            self.bus.p.store_get(0x6002_3000),
+            self.bus.p.store_get(0x6002_3064)
+        );
+        // Heuristic backtrace: code addresses found on the stack.
+        s += "stack scan:";
+        let sp = c.x[2];
+        let mut n = 0;
+        for i in 0..256 {
+            if let Some(v) = self.bus.peek32(sp + 4 * i)
+                && ((0x4200_0000..0x4280_0000).contains(&v) || (0x4037_C000..0x403E_0000).contains(&v))
+            {
+                s += &format!("\n  {}", self.syms.describe(v));
+                n += 1;
+                if n >= 12 {
+                    break;
+                }
+            }
+        }
+        s
+    }
+
+    fn profile(&mut self) -> Vec<(String, u64)> {
+        let mut by_sym: HashMap<String, u64> = HashMap::new();
+        for (pc, n) in self.samples.drain() {
+            let d = self.syms.describe(pc);
+            let name = d.split('+').next().unwrap_or(&d).to_string();
+            *by_sym.entry(name).or_default() += n;
+        }
+        let mut v: Vec<_> = by_sym.into_iter().collect();
+        v.sort_by_key(|e| std::cmp::Reverse(e.1));
+        v
+    }
+
+    fn boot_count(&self) -> u32 {
+        self.boots
+    }
+
+    fn set_wifi_available(&mut self, on: bool) {
+        let now = self.bus.now_ns();
+        self.hle.wifi.set_available(on, now);
+    }
+
+    fn realtime_required(&self) -> bool {
+        self.hle.wifi.net_busy()
+    }
+
+    fn net_status(&self) -> NetStatus {
+        let w = &self.hle.wifi;
+        NetStatus { connected: w.is_connected(), ip: w.ip().map(|i| i.to_string()), portal_url: w.portal_url() }
+    }
+}

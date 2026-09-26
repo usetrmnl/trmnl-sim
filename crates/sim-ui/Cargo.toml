@@ -1,0 +1,13 @@
+[package]
+name = "sim-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+eframe = "0.36.2"
+egui = "0.36.2"
+parking_lot = "0.12.5"
+png = "0.18.1"
+rfd = "0.17.2"
+sim-api = { version = "0.1.0", path = "../sim-api" }

@@ -1,0 +1,15 @@
+# Copy to trmnl-firmware/.github/workflows/simulator.yml to run the simulator
+# integration tests against every firmware PR. It reuses trmnl-sim's CI
+# workflow, building the PR's firmware and running the full suite on it.
+name: simulator
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  simulator:
+    uses: usetrmnl/trmnl-sim/.github/workflows/ci.yml@main
+    with:
+      firmware_repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      firmware_ref: ${{ github.event.pull_request.head.sha || github.sha }}

@@ -1,0 +1,6 @@
+/target
+__pycache__/
+*.pyc
+sim-flash.bin
+/sim-artifacts/
+tests/integration/golden/*.actual.png

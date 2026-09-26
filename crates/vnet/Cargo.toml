@@ -1,0 +1,8 @@
+[package]
+name = "vnet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.34"
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "log", "medium-ethernet", "medium-ip", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "socket-icmp"] }
