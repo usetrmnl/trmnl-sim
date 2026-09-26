@@ -39,6 +39,8 @@ def ask_to_reset_wifi(s, since: int):
     hold_edges(s, "left", "right")
     s.wait(console=r"Entering WiFi reset confirmation mode", since=since, timeout_s=15)
     lift(s, "left", "right")
+    # The display is still idle right after that line; wait for the prompt to be drawn.
+    s.wait(console=r"display_show_msg end", since=since, timeout_s=15)
     s.wait(display_idle=True, settle_ms=100, timeout_s=15)
 
 

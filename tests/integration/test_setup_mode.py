@@ -17,7 +17,9 @@ class FreshDevice(unittest.TestCase):
         cls.sim.close()
 
     def test_setup_screen(self):
-        self.sim.assert_screen(GOLDEN / "setup_screen.png")
+        # All but the "TRMNL firmware <version> (<git hash>)" line, which changes every commit.
+        self.sim.assert_screen(GOLDEN / "setup_screen_body.png", region=(0, 56, 800, 424))
+        self.sim.assert_screen(GOLDEN / "setup_screen_top_right.png", region=(320, 0, 480, 56))
 
     def test_setup_screen_names_the_access_point(self):
         # Just the "Connect ... to TRMNL-XXXXXX" line, so version bumps don't break it.
