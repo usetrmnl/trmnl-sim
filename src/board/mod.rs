@@ -57,6 +57,8 @@ pub trait Board: Send {
     /// Finger down (true) or lifted (false) on a touch bar zone.
     fn set_touch(&mut self, _zone: sim_api::TouchZone, _down: bool) {}
     fn set_docked(&mut self, _docked: bool) {}
+    /// Show (true) or hide the display's refresh flashes.
+    fn set_refresh_flashing(&mut self, _on: bool) {}
     /// The battery is currently charging.
     fn charging(&self) -> bool {
         false

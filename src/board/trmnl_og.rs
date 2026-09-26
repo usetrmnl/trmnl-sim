@@ -90,7 +90,16 @@ impl Board for TrmnlOg {
 
     fn info(&self) -> sim_api::BoardInfo {
         let name = if self.panel.is_bwry() { "TRMNL BWRY" } else { "TRMNL OG" };
-        sim_api::BoardInfo { name: name.into(), has_button: true, ..Default::default() }
+        sim_api::BoardInfo {
+            name: name.into(),
+            has_button: true,
+            has_refresh_flashing: self.panel.is_bwry(),
+            ..Default::default()
+        }
+    }
+
+    fn set_refresh_flashing(&mut self, on: bool) {
+        self.panel.flashing = on;
     }
 
     fn set_button(&mut self, down: bool) {

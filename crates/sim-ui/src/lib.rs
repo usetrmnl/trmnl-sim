@@ -129,6 +129,8 @@ struct SimApp {
     /// The user picked a zoom preset (disables the initial auto-fit fallback).
     zoom_user_set: bool,
     white_bezel: bool,
+    /// Show the panel's refresh flashes (boards with `has_refresh_flashing`).
+    refresh_flashing: bool,
     touch: TouchInput,
     docked_pending: Option<Pending<bool>>,
     button: ButtonState,
@@ -157,6 +159,7 @@ impl SimApp {
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
             zoom_user_set: false,
             white_bezel: false,
+            refresh_flashing: true,
             touch: TouchInput::default(),
             docked_pending: None,
             button: ButtonState::default(),
@@ -492,6 +495,17 @@ impl SimApp {
                 ui.selectable_value(&mut self.white_bezel, false, "Black");
                 ui.selectable_value(&mut self.white_bezel, true, "White");
             });
+            if self.board().has_refresh_flashing
+                && ui
+                    .checkbox(&mut self.refresh_flashing, "Refresh flashing")
+                    .on_hover_text(
+                        "Show the black/white flashes of a refresh, or keep the old image up \
+                         until the new one appears (timing is the same either way)",
+                    )
+                    .changed()
+            {
+                self.send(Command::SetRefreshFlashing(self.refresh_flashing));
+            }
             if ui.button("📷 Save screenshot…").on_hover_text("Save the panel as a PNG (⌘S / Ctrl+S)").clicked() {
                 self.save_screenshot();
             }
@@ -1018,8 +1032,14 @@ mod render_tests {
     #[test]
     #[ignore]
     fn render_x() {
-        let board =
-            BoardInfo { name: "TRMNL X".into(), has_button: false, has_touchbar: true, has_dock: true, has_5ghz: true };
+        let board = BoardInfo {
+            name: "TRMNL X".into(),
+            has_button: false,
+            has_touchbar: true,
+            has_dock: true,
+            has_5ghz: true,
+            ..Default::default()
+        };
         let (mut h, ports) = harness(1872, 1404, board, true);
         h.run_steps(3);
         // Hold the left zone via keyboard past the tap window: expect TouchDown(Left).

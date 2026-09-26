@@ -39,7 +39,14 @@ fn main() -> anyhow::Result<()> {
         let mut s = handle.status.lock();
         s.firmware = "trmnl-firmware 1.8.14 (demo)".into();
         s.board = if x {
-            BoardInfo { name: "TRMNL X".into(), has_button: false, has_touchbar: true, has_dock: true, has_5ghz: true }
+            BoardInfo {
+                name: "TRMNL X".into(),
+                has_button: false,
+                has_touchbar: true,
+                has_dock: true,
+                has_5ghz: true,
+                ..Default::default()
+            }
         } else {
             BoardInfo {
                 name: "TRMNL OG".into(),
@@ -47,6 +54,7 @@ fn main() -> anyhow::Result<()> {
                 has_touchbar: false,
                 has_dock: false,
                 has_5ghz: false,
+                has_refresh_flashing: false,
             }
         };
     }
@@ -219,6 +227,7 @@ impl Fake {
                 self.combo_logged = false;
                 self.update_touching();
             }
+            Command::SetRefreshFlashing(_) => {}
             Command::SetDocked(d) => {
                 self.p.status.lock().docked = d;
                 self.idf('I', "power", if d { "USB power connected (docked)" } else { "USB power removed" });

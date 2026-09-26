@@ -236,6 +236,7 @@ fn status_json(h: &SimHandle) -> Value {
             "has_touchbar": st.board.has_touchbar,
             "has_dock": st.board.has_dock,
             "has_5ghz": st.board.has_5ghz,
+            "has_refresh_flashing": st.board.has_refresh_flashing,
         },
         "docked": st.docked,
         "charging": st.charging,

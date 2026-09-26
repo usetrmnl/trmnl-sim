@@ -38,12 +38,25 @@ const BWRY_RGB: [[u8; 3]; 4] = {
     t[BWRY_RED as usize] = [255, 0, 0];
     t
 };
-/// The 4-color panel's refresh: (start ms, what the panel shows from then on).
-/// The OTP waveform shakes the particles black and white before the colors settle;
-/// the whole update takes about 16 s (the firmware waits up to 30 s).
-const BWRY_STAGES: [(u64, Option<u8>); 4] =
-    [(0, Some(BWRY_BLACK)), (3_000, Some(BWRY_WHITE)), (6_000, Some(BWRY_BLACK)), (9_000, None)];
+/// The 4-color panel's refresh: the OTP waveform shakes the particles with rapid
+/// black/white flashes (one color every `BWRY_FLASH_MS`) for `BWRY_IMAGE_MS`, then the
+/// image settles. The whole update takes about 16 s (the firmware waits up to 30 s).
+const BWRY_FLASH_MS: u64 = 100;
+const BWRY_IMAGE_MS: u64 = 9_000;
+const BWRY_STAGE_COUNT: usize = (BWRY_IMAGE_MS / BWRY_FLASH_MS) as usize + 1;
 const BWRY_REFRESH_MS: u64 = 16_000;
+
+/// Stage `i` of the 4-color refresh: (start ms, what the panel shows from then on,
+/// a solid color or `None` for the image).
+fn bwry_stage(i: usize) -> Option<(u64, Option<u8>)> {
+    match i {
+        _ if i + 1 < BWRY_STAGE_COUNT => {
+            Some((i as u64 * BWRY_FLASH_MS, Some(if i.is_multiple_of(2) { BWRY_BLACK } else { BWRY_WHITE })))
+        }
+        _ if i + 1 == BWRY_STAGE_COUNT => Some((BWRY_IMAGE_MS, None)),
+        _ => None,
+    }
+}
 /// The viewer plays a refresh's waveform this many times faster than the panel's frame
 /// rate (it reads as long next to real e-paper); BUSY still lasts the full waveform.
 const ANIMATION_SPEEDUP: u64 = 2;
@@ -103,6 +116,8 @@ pub struct Uc8179 {
     /// 4-color panel: the 2 bit/pixel image RAM, and the refresh in progress
     /// (start, stages shown so far).
     bwry: Option<Vec<u8>>,
+    /// Show the black/white flashes of a 4-color refresh (else the old image stays up).
+    pub flashing: bool,
     bwry_refresh: Option<(u64, usize)>,
     pub frame: SharedFrame,
     pub refresh_count: u64,
@@ -143,6 +158,7 @@ impl Uc8179 {
             state: vec![0.0; WIDTH * HEIGHT],
             bwry: None,
             bwry_refresh: None,
+            flashing: true,
             frame: Arc::new(Mutex::new(frame)),
             refresh_count: 0,
         }
@@ -185,7 +201,7 @@ impl Uc8179 {
     /// Next time the panel wants to be polled (for refresh animation / busy release).
     pub fn next_event(&self, now: u64) -> Option<u64> {
         if let Some((start, shown)) = self.bwry_refresh {
-            let next = BWRY_STAGES.get(shown).map_or(BWRY_REFRESH_MS, |s| s.0);
+            let next = bwry_stage(shown).map_or(BWRY_REFRESH_MS, |s| s.0);
             return Some(start + next * MS);
         }
         if let Some(r) = &self.refresh {
@@ -508,11 +524,15 @@ impl Uc8179 {
         let elapsed_ms = now.saturating_sub(start) / MS;
         // Only the latest stage that has started matters.
         let mut stage = None;
-        while shown < BWRY_STAGES.len() && BWRY_STAGES[shown].0 <= elapsed_ms {
-            stage = Some(BWRY_STAGES[shown].1);
+        while let Some((at, what)) = bwry_stage(shown)
+            && at <= elapsed_ms
+        {
+            stage = Some(what);
             shown += 1;
         }
-        if let Some(solid) = stage {
+        if let Some(solid) = stage
+            && (solid.is_none() || self.flashing)
+        {
             self.show_bwry(solid);
         }
         self.bwry_refresh = if elapsed_ms >= BWRY_REFRESH_MS { None } else { Some((start, shown)) };
@@ -619,8 +639,22 @@ mod tests {
         cmd(&mut p, 0, 0x10, &img);
         cmd(&mut p, 0, 0x12, &[0x00]);
         assert!(!p.busy_n(MS));
-        p.update(4_000 * MS);
-        assert_eq!(&p.frame.lock().rgb.as_ref().unwrap()[..3], &[255, 255, 255]); // flashing white
+        // Rapid black/white flashes until the image appears.
+        let first = |p: &Uc8179| p.frame.lock().rgb.as_ref().unwrap()[..3].to_vec();
+        let mut flashes = 0;
+        let mut last = None;
+        let mut t = 0;
+        while t < BWRY_IMAGE_MS {
+            p.update(t * MS);
+            let c = first(&p);
+            assert!(c == [0, 0, 0] || c == [255, 255, 255], "{c:?} at {t} ms");
+            if last.as_ref() != Some(&c) {
+                flashes += 1;
+            }
+            last = Some(c);
+            t += BWRY_FLASH_MS / 2;
+        }
+        assert!(flashes >= 60, "{flashes} flashes");
         let done = BWRY_REFRESH_MS * MS;
         p.update(9_500 * MS);
         assert_eq!(p.next_event(9_500 * MS), Some(done));
@@ -635,5 +669,25 @@ mod tests {
         assert_eq!(at(2 * w4 + 10, 200), &[255, 255, 0]);
         assert_eq!(at(3 * w4 + 10, 479), &[255, 0, 0]);
         assert_eq!(p.refresh_count, 1);
+    }
+
+    #[test]
+    fn bwry_refresh_without_flashing_keeps_the_old_image() {
+        let mut p = Uc8179::new_bwry(0);
+        p.flashing = false;
+        let red = vec![BWRY_RED * 0x55; WIDTH * HEIGHT / 4];
+        cmd(&mut p, 0, 0x04, &[]);
+        cmd(&mut p, 0, 0x10, &red);
+        cmd(&mut p, 0, 0x12, &[0x00]);
+        let first = |p: &Uc8179| p.frame.lock().rgb.as_ref().map(|c| c[..3].to_vec());
+        let before = first(&p);
+        for t in (0..BWRY_IMAGE_MS).step_by(BWRY_FLASH_MS as usize / 2) {
+            p.update(t * MS);
+            assert_eq!(first(&p), before, "changed at {t} ms");
+        }
+        p.update(BWRY_IMAGE_MS * MS);
+        assert_eq!(first(&p), Some(BWRY_RGB[BWRY_RED as usize].to_vec()));
+        assert!(!p.busy_n(BWRY_IMAGE_MS * MS)); // timing unchanged
+        assert!(p.busy_n(BWRY_REFRESH_MS * MS));
     }
 }

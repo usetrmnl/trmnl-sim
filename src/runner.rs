@@ -107,6 +107,10 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, opts: RunnerOptions) -> Run
                     st.docked = docked;
                     st.charging = charging;
                 }
+                Command::SetRefreshFlashing(on) => {
+                    m.board().set_refresh_flashing(on);
+                    ports.console.lock().push_sim(if on { "refresh flashing on" } else { "refresh flashing off" });
+                }
                 Command::SetBatteryMv(mv) => {
                     m.board().set_battery_mv(mv);
                     let charging = m.board().charging();

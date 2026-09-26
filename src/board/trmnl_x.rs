@@ -217,7 +217,14 @@ impl Board for TrmnlX {
     }
 
     fn info(&self) -> BoardInfo {
-        BoardInfo { name: "TRMNL X".into(), has_button: false, has_touchbar: true, has_dock: true, has_5ghz: true }
+        BoardInfo {
+            name: "TRMNL X".into(),
+            has_button: false,
+            has_touchbar: true,
+            has_dock: true,
+            has_5ghz: true,
+            ..Default::default()
+        }
     }
 
     fn set_button(&mut self, _down: bool) {}

@@ -94,6 +94,8 @@ pub struct BoardInfo {
     pub has_touchbar: bool,
     pub has_dock: bool,
     pub has_5ghz: bool,
+    /// The panel's refresh flashes can be switched off (`Command::SetRefreshFlashing`).
+    pub has_refresh_flashing: bool,
 }
 
 /// Requests from the front-end to the emulator thread.
@@ -119,6 +121,9 @@ pub enum Command {
     SetDocked(bool),
     /// Battery voltage in millivolts.
     SetBatteryMv(u32),
+    /// Show the black/white flashes of a (4-color) panel refresh (true, the default), or
+    /// keep the old image until the new one appears (false). Refresh timing is unchanged.
+    SetRefreshFlashing(bool),
     /// Press the reset button (chip reset, RTC memory and display kept).
     Reset,
     /// Remove and restore power: RTC memory is lost; flash and display are kept.
