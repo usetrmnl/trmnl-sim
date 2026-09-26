@@ -157,6 +157,31 @@ class Png(Case):
             self.assertEqual([r.path for r in self.device().mock.requests[n:]], ["/api/display"])
             self.assertEqual(s.status()["display_refreshes"], refreshes)
 
+    def test_new_version_of_a_plugin_image_replaces_the_cached_one(self):
+        m = self.device().mock
+        old, new = png_image(digit(0, 1, "1"), 800, 480, 1), png_image(digit(0, 1, "2"), 800, 480, 1)
+        m.set_file("/img/v1.png", "image/png", old)
+        m.set_file("/img/v2.png", "image/png", new)
+        m.display_queue = [{"image_url": m.device_url + "/img/v1.png", "filename": "plugin-abc123-1000", "refresh_rate": 300}]
+        m.display = {"image_url": m.device_url + "/img/v2.png", "filename": "plugin-abc123-2000", "refresh_rate": 300}
+        with self.device().boot() as s:
+            m.wait_for_request("/img/v1.png", timeout_s=15)
+            s.wait(state="deep_sleep", timeout_s=15)
+            c = s.status()["console_total"]
+            s.wake()
+            s.wait(console=r"Deleting older version of plugin image", since=c, timeout_s=15)
+            s.wait(state="deep_sleep", timeout_s=15)
+            self.assert_shows(s, expected_gray(digit(0, 1, "2"), 800, 480, 1))
+
+    def test_long_filenames_are_shortened(self):
+        level = digit(0, 1)
+        path = self.serve("long.png", png_image(level, 800, 480, 1), "image/png")
+        self.device().mock.display["filename"] = "mashup-066cc3-weather-and-calendar-1771674964"
+        with self.device().boot() as s:
+            self.device().mock.wait_for_request(path, timeout_s=15)
+            s.wait(state="deep_sleep", timeout_s=15)
+            self.assert_shows(s, expected_gray(level, 800, 480, 1))
+
     def test_temperature_profile_is_saved(self):
         level = digit(0, 1)
         data = png_image(level, 800, 480, 1)
