@@ -118,6 +118,9 @@ struct Cli {
     /// Its flash replaces the --flash image.
     #[arg(long, value_name = "FILE")]
     restore: Option<PathBuf>,
+    /// Environment sensor on the TRMNL OG's I2C header (repeatable): scd41, aht20.
+    #[arg(long, value_enum)]
+    sensor: Vec<board::trmnl_og::Sensor>,
     /// Access points in range of the device's own radio, replacing the defaults: a JSON
     /// array, e.g. '[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'
     /// (keys: ssid, password, rssi, channel, open, internet).
@@ -221,7 +224,7 @@ fn main() -> Result<()> {
                 panel = mock_trmnl::Panel::Bwry;
             }
             let frame = epd.frame.clone();
-            let board = Box::new(board::trmnl_og::TrmnlOg::new(epd));
+            let board = Box::new(board::trmnl_og::TrmnlOg::new(epd, &cli.sensor));
             let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);

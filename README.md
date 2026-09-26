@@ -214,6 +214,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--memcheck-suppress F,..` | Tolerate known memory bugs: ignore violations with one of these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
+| `--sensor NAME` | Environment sensor on the TRMNL OG's I2C header (repeatable): `scd41` (CO2, 0x62), `aht20` (temperature/humidity, 0x38) |
 | `--wifi-networks JSON` | Access points in range of the device's own radio, replacing the defaults, e.g. `'[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'` (keys: `ssid`, `password` (null: any), `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
 

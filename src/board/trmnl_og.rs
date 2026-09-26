@@ -1,7 +1,10 @@
 //! TRMNL OG: ESP32-C3, UC8179 7.5" panel on GPSPI2, one button, LiPo via divider.
 //! The TRMNL BWRY (`trmnl_4clr`) is the same board with a 4-color panel.
+//! Optional environment sensors (`--sensor`) sit on I2C0 (the firmware's SDA 21 / SCL 20).
 
 use super::Board;
+use crate::devices::i2c::I2cBus;
+use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
 use crate::devices::uc8179::Uc8179;
 use crate::savepoint::{StateReader, StateWriter};
 
@@ -19,9 +22,19 @@ pub struct Pins {
 /// Matches the "og" row of `device_list[]` in the firmware's display.cpp.
 pub const PINS: Pins = Pins { sck: 7, mosi: 8, cs: 6, rst: 10, dc: 5, busy: 4, button: 2, battery_adc: 3 };
 
+/// An environment sensor on the I2C header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Sensor {
+    /// Sensirion SCD41 CO2 sensor (0x62).
+    Scd41,
+    /// ASAIR AHT20 temperature/humidity sensor (0x38).
+    Aht20,
+}
+
 pub struct TrmnlOg {
     pub pins: Pins,
     pub panel: Uc8179,
+    i2c: I2cBus,
     button_down: bool,
     battery_mv: u32,
     out: u64,
@@ -29,8 +42,15 @@ pub struct TrmnlOg {
 }
 
 impl TrmnlOg {
-    pub fn new(panel: Uc8179) -> Self {
-        TrmnlOg { pins: PINS, panel, button_down: false, battery_mv: 4100, out: 0, oe: 0 }
+    pub fn new(panel: Uc8179, sensors: &[Sensor]) -> Self {
+        let mut i2c = I2cBus::new();
+        for s in sensors {
+            match s {
+                Sensor::Scd41 => i2c.add(Box::new(Scd41::new(Climate::default()))),
+                Sensor::Aht20 => i2c.add(Box::new(Aht20::new(Climate::default()))),
+            };
+        }
+        TrmnlOg { pins: PINS, panel, i2c, button_down: false, battery_mv: 4100, out: 0, oe: 0 }
     }
 
     fn level(&self, pin: u8) -> bool {
@@ -39,6 +59,22 @@ impl TrmnlOg {
 }
 
 impl Board for TrmnlOg {
+    fn i2c_start(&mut self, now: u64, bus: u8, addr: u8, read: bool) -> bool {
+        bus == 0 && self.i2c.start(now, addr, read)
+    }
+
+    fn i2c_write(&mut self, now: u64, _bus: u8, byte: u8) -> bool {
+        self.i2c.write(now, byte)
+    }
+
+    fn i2c_read(&mut self, now: u64, _bus: u8, ack: bool) -> u8 {
+        self.i2c.read(now, ack)
+    }
+
+    fn i2c_stop(&mut self, now: u64, _bus: u8) {
+        self.i2c.stop(now);
+    }
+
     fn gpio_out(&mut self, now: u64, out: u64, oe: u64) {
         self.out = out;
         self.oe = oe;

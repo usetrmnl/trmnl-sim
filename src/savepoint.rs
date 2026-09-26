@@ -518,8 +518,8 @@ mod tests {
     fn og_and_bwry_boards_round_trip() {
         use crate::board::trmnl_og::TrmnlOg;
         use crate::devices::uc8179::Uc8179;
-        board_round_trip(|| Box::new(TrmnlOg::new(Uc8179::new(0x1234))), |b| b.set_battery_mv(3456));
-        board_round_trip(|| Box::new(TrmnlOg::new(Uc8179::new_bwry(0x1234))), |b| b.set_battery_mv(3900));
+        board_round_trip(|| Box::new(TrmnlOg::new(Uc8179::new(0x1234), &[])), |b| b.set_battery_mv(3456));
+        board_round_trip(|| Box::new(TrmnlOg::new(Uc8179::new_bwry(0x1234), &[])), |b| b.set_battery_mv(3900));
     }
 
     #[test]
