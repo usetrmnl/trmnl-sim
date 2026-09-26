@@ -7,7 +7,7 @@ from pathlib import Path
 
 from support import MockTrmnl, big_number, close_fixtures, fixture
 from trmnl_mock import expected_gray, png_image
-from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard
+from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -39,6 +39,14 @@ class FactoryAndDock(unittest.TestCase):
         log = "\n".join(shipped().factory_console)
         self.assertIn("[MODEM] FLASH COMPLETE!", log)
         self.assertIn("Entering shipment mode light sleep loop", log)
+
+    def test_factory_flow_waits_until_taken_off_the_dock_to_ship(self):
+        # Still on USB power when QA is done: "ready to ship" until it comes off the dock.
+        with x_sim(erase=True) as s:
+            s.dock(True)
+            s.wait_for_console(r"USB power still detected", timeout_s=30)
+            s.dock(False)
+            s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=30)
 
     def test_shipment_mode_waits_for_the_dock(self):
         with shipped().boot() as s:
