@@ -11,6 +11,7 @@ shipped: ShippedX
 dev: ProvisionedX
 
 FUEL_GAUGE = 0x55  # BQ27427
+TOUCH_BAR = 0x44  # IQS323
 
 
 def setUpModule():
@@ -49,6 +50,15 @@ class FaultsX(unittest.TestCase):
             self.assertEqual(float(req.headers["Battery-Voltage"]), -1.0)
             s.wait(state="deep_sleep", timeout_s=120, settle_ms=300)
             self.assertTrue(self.shows_image(s))
+
+    @unittest.expectedFailure
+    def test_touch_controller_absent(self):
+        # bl_init() restarts the device when the IQS323 task fails to initialize, on every
+        # boot: a device whose touch controller died boot-loops (never reaching the server,
+        # draining the battery) instead of carrying on without its touch bar.
+        with dev.boot(faults={"i2c_absent": [TOUCH_BAR]}) as s:
+            dev.mock.wait_for_request("/api/display", timeout_s=15)
+            self.assertLess(s.status()["boot_count"], 3)
 
     def test_panel_power_failure(self):
         # The PMIC's power good never comes: the panel gets no drive voltages.
