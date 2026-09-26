@@ -96,6 +96,17 @@ class Probes(unittest.TestCase):
         self.assertIn("TRMNL-Sim", [n["name"] for n in json.loads(body)["networks"]])
 
 
+class ScanList(unittest.TestCase):
+    def test_access_points_are_merged_by_ssid(self):
+        nets = [{"ssid": "TRMNL-Sim", "rssi": -75}, {"ssid": "TRMNL-Sim", "rssi": -45, "channel": 11},
+                {"ssid": "Cafe", "open": True, "rssi": -60}, {"ssid": "TRMNL", "rssi": -30}]
+        with fresh(networks=nets) as s:
+            scan = {n["name"]: n for n in s.portal_scan()["networks"]}
+            self.assertEqual(scan["TRMNL-Sim"]["rssi"], "-45")  # the strongest of the two
+            self.assertTrue(scan["Cafe"]["open"])
+            self.assertNotIn("TRMNL", scan)  # another device's setup network
+
+
 class JoinOptions(unittest.TestCase):
     def join(self, s, mock, **fields):
         body = {"ssid": "TRMNL-Sim", "pswd": "password", "server": mock.device_url, **fields}

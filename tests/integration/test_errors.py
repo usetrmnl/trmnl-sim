@@ -1,6 +1,7 @@
 """Error handling on the TRMNL OG: the error screens (and their weak-WiFi variants), quiet
 retries on timer wakes, /api/setup failures during onboarding, and factory QA."""
 
+import json
 import time
 import unittest
 
@@ -125,6 +126,18 @@ class SetupErrors(unittest.TestCase):
                 st = settle(s)
                 self.assertEqual((st["boot_count"], st["state"]), (1, "deep_sleep"))
                 self.assertEqual(mock.count("/api/display"), 0)
+
+    def test_long_unregistered_message_is_wrapped(self):
+        message = ("Your device " + "is not yet registered with any account, " * 3 +
+                   "visit https://usetrmnl.com/signup/with-a-very-long-link-that-cannot-be-wrapped-anywhere-at-all "
+                   "and enter Device ID SIMTST")
+        with MockTrmnl() as mock:
+            mock.setup = None
+            mock.set_fault("/api/setup", body=json.dumps({"status": 404, "api_key": None, "friendly_id": None,
+                                                          "image_url": None, "message": message}))
+            with self.onboard(mock) as s:
+                st = settle(s, timeout_s=30)
+                self.assertEqual((st["boot_count"], st["state"]), (1, "deep_sleep"))
 
     def test_setup_server_error(self):
         with MockTrmnl() as mock:
