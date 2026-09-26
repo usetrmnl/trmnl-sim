@@ -101,8 +101,8 @@ class SpecialFunctions(Case):
     def test_send_to_me_keeps_the_current_image(self):
         # After showing /current.bmp, send_to_me leaves status=false/HTTPS_SUCCESS, so
         # downloadAndShow() takes the "image already cached" path with the answer's filename.
-        # The OG never caches images under their filename (only the X does), so it is always
-        # "empty or unreadable": the device submits an error log and draws an error message
+        # The OG doesn't cache BMP images under their filename (only PNG and JPEG), so with a
+        # BMP it is always "empty or unreadable": the device submits an error log and draws an error message
         # over the image it just showed.
         two = dev().mock.set_image("two", big_number("2"))
         with dev().boot() as s:
