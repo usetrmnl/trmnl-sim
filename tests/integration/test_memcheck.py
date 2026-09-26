@@ -12,6 +12,8 @@ from pathlib import Path
 from support import BUILD, BWRY_BUILD, MockTrmnl, big_number, sim
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
+PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
+
 SNTP_BUG = ("_ZN5Clock14setTimeFromNTPEv", "sntp_request")
 
 

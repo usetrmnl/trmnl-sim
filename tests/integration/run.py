@@ -5,7 +5,9 @@
     python3 run.py -j 1             # one at a time, in this process
 
 Each selector (by default, each test_*.py) runs in its own worker process, up to -j N
-(default: the number of CPUs) at a time, slowest modules first. A worker's output is
+(default: the number of CPUs) at a time, slowest modules first. A module that sets
+PARALLEL_BY_CLASS = True (its fixtures are built lazily, see support.fixture) is split
+further: each of its classes gets a worker. A worker's output is
 printed in one piece when it finishes, followed by the combined verdict. A single
 selector, or -j 1, runs in-process with the output streamed as usual.
 
@@ -124,7 +126,7 @@ def report_coverage(cov_dir: str) -> None:
 
 # Started first so the longest ones don't end up running alone at the end (slowest first,
 # from a full run); anything not listed follows in name order.
-SLOW_FIRST = ["test_trmnl_x", "test_faults", "test_memcheck", "test_faults_x", "test_refresh_cycle"]
+SLOW_FIRST = ["test_trmnl_x", "test_faults_x", "test_memcheck", "test_faults", "test_refresh_cycle"]
 
 COUNTS = ("run", "failures", "errors", "skipped", "expected_failures", "unexpected_successes")
 
@@ -158,6 +160,29 @@ def parse_args(argv: list[str]) -> tuple[int, list[str], list[str]]:
         else:
             selectors.append(a)
     return max(1, jobs), flags, selectors
+
+
+def split_by_class(unit: str) -> list[str]:
+    """`unit`'s test classes if it is a module with PARALLEL_BY_CLASS, else just `unit`."""
+    if "." in unit:
+        return [unit]
+    import importlib
+
+    sys.path.insert(0, str(HERE))
+    module = importlib.import_module(unit)
+    if not getattr(module, "PARALLEL_BY_CLASS", False):
+        return [unit]
+    classes: list[str] = []
+
+    def walk(suite):
+        for t in suite:
+            if isinstance(t, unittest.TestSuite):
+                walk(t)
+            elif type(t).__name__ not in classes:
+                classes.append(type(t).__name__)
+
+    walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+    return [f"{unit}.{c}" for c in classes]
 
 
 def run_parallel(jobs: int, flags: list[str], units: list[str]) -> bool:
@@ -226,7 +251,7 @@ if __name__ == "__main__":
     if jobs == 1 or len(units) == 1:
         ok = run_here([*flags, *selectors])
     else:
-        ok = run_parallel(jobs, flags, units)
+        ok = run_parallel(jobs, flags, [u for unit in units for u in split_by_class(unit)])
     # Workers only write tracefiles; the top-level run merges and reports them.
     if os.environ.get("TRMNL_SIM_COVERAGE") and not os.environ.get("TRMNL_SPEC_RESULT"):
         report_coverage(os.environ["TRMNL_SIM_COVERAGE"])

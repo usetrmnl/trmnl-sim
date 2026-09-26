@@ -70,6 +70,32 @@ def sim(build: Path = BUILD, **kw) -> Simulator:
     return Simulator(build, **kw)
 
 
+_built_fixtures: list = []
+
+
+def fixture(make):
+    """A module fixture built on first use, so a worker running one class of a module
+    (run.py splits modules that set PARALLEL_BY_CLASS) only builds what that class needs.
+    Call the returned function to get it; close_fixtures() (in tearDownModule) closes the
+    ones built."""
+    value = None
+
+    def get():
+        nonlocal value
+        if value is None:
+            value = make()
+            _built_fixtures.append(value)
+        return value
+
+    return get
+
+
+def close_fixtures():
+    """Close the fixtures built so far, newest first."""
+    while _built_fixtures:
+        _built_fixtures.pop().close()
+
+
 class ProvisionedDevice:
     """A mock API server plus a flash image of a device that already completed
     onboarding against it. `boot()` starts a simulator from a copy of that flash."""
@@ -99,4 +125,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "BWRY_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "BWRY_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
