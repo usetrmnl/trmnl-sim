@@ -59,9 +59,6 @@ fn bwry_stage(i: usize) -> Option<(u64, Option<u8>)> {
         _ => None,
     }
 }
-/// The viewer plays a refresh's waveform this many times faster than the panel's frame
-/// rate (it reads as long next to real e-paper); BUSY still lasts the full waveform.
-const ANIMATION_SPEEDUP: u64 = 2;
 
 /// Particle response per frame of drive: each frame towards black moves a pixel this
 /// fraction of the way to full black, each frame towards white this fraction of the way
@@ -81,7 +78,7 @@ fn optical(d: f32) -> f32 {
 /// A refresh in progress: a per-pixel drive schedule played out over time.
 struct Refresh {
     start: u64,
-    /// Time per waveform frame in the viewer animation.
+    /// Time per waveform frame.
     frame_ns: u64,
     /// Per LUT (index = old<<1 | new, in "color" space: 1=black), the flattened phases.
     schedules: [Vec<Phase>; 4],
@@ -598,16 +595,8 @@ impl Uc8179 {
             }
         }
         self.busy_until = now + total_frames as u64 * frame_ns + 5 * MS;
-        self.refresh = Some(Refresh {
-            start: now,
-            frame_ns: frame_ns / ANIMATION_SPEEDUP,
-            schedules,
-            total_frames,
-            region,
-            sel,
-            start_state,
-            frames_done: 0,
-        });
+        self.refresh =
+            Some(Refresh { start: now, frame_ns, schedules, total_frames, region, sel, start_state, frames_done: 0 });
         self.refresh_count += 1;
         if self.cdi[0] & 0x08 != 0 {
             // N2OCP: copy NEW to OLD after refresh
