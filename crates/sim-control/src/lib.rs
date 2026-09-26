@@ -9,7 +9,8 @@
 //! | GET    | `/status`              |                                                | status JSON |
 //! | POST   | `/button`              | `{"down": true}`                               | |
 //! | POST   | `/press`               | `{"ms": 1200}` hold for virtual ms, then release; `"count": 2, "gap_ms": 150` repeats it | |
-//! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift | |
+//! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift; `"down": bool` holds / lifts instead | |
+//! | POST   | `/gesture`             | `{"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | |
 //! | POST   | `/dock`                | `{"docked": true}`                             | |
 //! | POST   | `/reset`               |                                                | |
 //! | POST   | `/power-cycle`         |                                                | |
@@ -44,7 +45,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use sim_api::{Command, RunState, SavePointInfo, SavePointSource, SimHandle, Status, TouchZone};
+use sim_api::{Command, RunState, SavePointInfo, SavePointSource, SimHandle, SliderGesture, Status, TouchZone};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub fn serve(handle: SimHandle, addr: SocketAddr) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
@@ -149,7 +150,19 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
                 .as_str()
                 .and_then(TouchZone::parse)
                 .ok_or("need {\"zone\": \"left\"|\"center\"|\"right\"}")?;
-            touch(h, zone, b["ms"].as_u64().unwrap_or(120))?;
+            match b["down"].as_bool() {
+                Some(true) => h.send(Command::TouchDown(zone)),
+                Some(false) => h.send(Command::TouchUp(zone)),
+                None => touch(h, zone, b["ms"].as_u64().unwrap_or(120))?,
+            }
+            ok()
+        }
+        (Method::Post, "/gesture") => {
+            let g = body_json(body)?["gesture"]
+                .as_str()
+                .and_then(SliderGesture::parse)
+                .ok_or("need {\"gesture\": \"swipe_next\"|\"swipe_back\"|\"flick_next\"|\"flick_back\"}")?;
+            h.send(Command::Gesture(g));
             ok()
         }
         (Method::Post, "/dock") => {

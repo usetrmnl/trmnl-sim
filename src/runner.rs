@@ -267,6 +267,13 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         st.touching = None;
                     }
                 }
+                Command::Gesture(g) => {
+                    let accepted = m.board().gesture(g);
+                    ports
+                        .console
+                        .lock()
+                        .push_sim(&format!("touch bar {g:?}{}", if accepted { "" } else { " (not enabled: ignored)" }));
+                }
                 Command::SetDocked(docked) => {
                     m.board().set_docked(docked);
                     ports.console.lock().push_sim(if docked { "placed on dock" } else { "removed from dock" });

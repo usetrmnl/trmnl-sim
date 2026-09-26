@@ -160,9 +160,9 @@ class Png(Case):
     def test_temperature_profile_is_saved(self):
         level = digit(0, 1)
         data = png_image(level, 800, 480, 1)
-        with self.show("temp.png", data, "image/png", temp_profile=1) as s:
+        with self.show("temp.png", data, "image/png", temperature_profile="a") as s:
             self.assert_shows(s, expected_gray(level, 800, 480, 1))
-            self.serve("temp2.png", png_image(digit(0, 1, "8"), 800, 480, 1), "image/png", temp_profile=1)
+            self.serve("temp2.png", png_image(digit(0, 1, "8"), 800, 480, 1), "image/png", temperature_profile="b")
             n = len(self.device().mock.requests)
             s.wake()
             self.device().mock.wait_for_request("/img/temp2.png", after=n, timeout_s=90)
@@ -173,6 +173,16 @@ class Png(Case):
         level = digit(0, 1)
         with self.show("compat.png", png_image(level, 800, 480, 1), "image/png", maximum_compatibility=True) as s:
             self.assert_shows(s, expected_gray(level, 800, 480, 1))
+
+    def test_long_refresh_rates_use_fast_instead_of_partial_refreshes(self):
+        with self.show("slow1.png", png_image(digit(0, 1), 800, 480, 1), "image/png", refresh_rate=3600) as s:
+            eight = digit(0, 1, "8")
+            self.serve("slow2.png", png_image(eight, 800, 480, 1), "image/png", refresh_rate=3600)
+            n = len(self.device().mock.requests)
+            s.wake()
+            self.device().mock.wait_for_request("/img/slow2.png", after=n, timeout_s=90)
+            s.wait(state="deep_sleep", timeout_s=90)
+            self.assert_shows(s, expected_gray(eight, 800, 480, 1))
 
 
 class Jpeg(Case):

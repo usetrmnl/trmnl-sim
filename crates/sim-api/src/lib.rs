@@ -52,6 +52,27 @@ impl Frame {
 
 pub type SharedFrame = Arc<Mutex<Frame>>;
 
+/// A swipe or flick along the TRMNL X touch bar, towards "next" (right) or "back".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliderGesture {
+    SwipeNext,
+    SwipeBack,
+    FlickNext,
+    FlickBack,
+}
+
+impl SliderGesture {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "swipe_next" => SliderGesture::SwipeNext,
+            "swipe_back" => SliderGesture::SwipeBack,
+            "flick_next" => SliderGesture::FlickNext,
+            "flick_back" => SliderGesture::FlickBack,
+            _ => return None,
+        })
+    }
+}
+
 /// A zone of a capacitive touch bar (TRMNL X).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TouchZone {
@@ -411,6 +432,9 @@ pub enum Command {
     TouchDown(TouchZone),
     /// Finger lifted from a touch bar zone.
     TouchUp(TouchZone),
+    /// A swipe or flick along the touch bar (the IQS323 reports it only when the firmware
+    /// enabled that gesture, i.e. in slide mode).
+    Gesture(SliderGesture),
     /// Put the device on (true) or take it off (false) its magnetic dock.
     SetDocked(bool),
     /// Battery voltage in millivolts.

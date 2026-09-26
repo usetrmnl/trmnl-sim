@@ -247,6 +247,18 @@ impl Board for TrmnlX {
         self.iqs().touch(now, ch, down);
     }
 
+    fn gesture(&mut self, g: sim_api::SliderGesture) -> bool {
+        use crate::devices::i2c::iqs323::Gesture;
+        let g = match g {
+            sim_api::SliderGesture::SwipeNext => Gesture::SwipePos,
+            sim_api::SliderGesture::SwipeBack => Gesture::SwipeNeg,
+            sim_api::SliderGesture::FlickNext => Gesture::FlickPos,
+            sim_api::SliderGesture::FlickBack => Gesture::FlickNeg,
+        };
+        let now = self.last_now;
+        self.iqs().gesture(now, g)
+    }
+
     fn set_docked(&mut self, docked: bool) {
         self.docked = docked;
         self.apply_power_inputs();

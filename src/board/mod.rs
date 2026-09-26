@@ -58,6 +58,11 @@ pub trait Board: Send {
     fn set_button(&mut self, down: bool);
     /// Finger down (true) or lifted (false) on a touch bar zone.
     fn set_touch(&mut self, _zone: sim_api::TouchZone, _down: bool) {}
+    /// A swipe or flick along the touch bar; false if the board has none or the gesture
+    /// isn't enabled.
+    fn gesture(&mut self, _g: sim_api::SliderGesture) -> bool {
+        false
+    }
     fn set_docked(&mut self, _docked: bool) {}
     /// Show (true) or hide the display's refresh flashes.
     fn set_refresh_flashing(&mut self, _on: bool) {}

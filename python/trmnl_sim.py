@@ -265,6 +265,18 @@ class Simulator:
         """Tap the touch bar ("left", "center" or "right") for `ms` of virtual time (TRMNL X)."""
         self._post("/touch", {"zone": zone, "ms": ms}, timeout=ms / 1000 * 20 + 30)
 
+    def touch_down(self, zone: str) -> None:
+        """Put a finger on a touch bar zone and keep it there (several may be down)."""
+        self._post("/touch", {"zone": zone, "down": True})
+
+    def touch_up(self, zone: str) -> None:
+        self._post("/touch", {"zone": zone, "down": False})
+
+    def gesture(self, name: str) -> None:
+        """A slide along the touch bar: "swipe_next", "swipe_back", "flick_next" or
+        "flick_back" (only reported in slide mode)."""
+        self._post("/gesture", {"gesture": name})
+
     def dock(self, docked: bool = True) -> None:
         """Put the device on / take it off its magnetic dock (TRMNL X). Returns once applied."""
         self._post("/dock", {"docked": docked})

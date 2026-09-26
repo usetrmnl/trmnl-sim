@@ -414,7 +414,8 @@ Useful pieces:
 | `GET /status` | state, virtual time, display busy and refresh count, WiFi/IP, portal URL, boot count, … |
 | `POST /button {"down": bool}` | hold or release the button |
 | `POST /press {"ms": N}` | press for N virtual ms; returns after release (`"count": 2, "gap_ms": 150`: a double click, timed in virtual ms) |
-| `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap; returns after lift |
+| `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap; returns after lift (`"down": true/false` instead: hold / lift a finger, several may be down) |
+| `POST /gesture {"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | TRMNL X slide along the touch bar (reported in slide mode only) |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
 | `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points in range (as `--wifi-networks`) |
