@@ -4,6 +4,7 @@
 #   scripts/integration-tests.sh                       # uses ../trmnl-firmware/.pio/build/{trmnl,trmnl_4clr,TRMNL_X}
 #   scripts/integration-tests.sh --build-firmware      # runs `pio run -e trmnl -e trmnl_4clr -e TRMNL_X` first
 #   scripts/integration-tests.sh test_refresh_cycle    # any unittest selector(s)
+#   scripts/integration-tests.sh -j 4                  # parallel workers (default: CPU count)
 #
 # Env: TRMNL_FIRMWARE (firmware checkout, default ../trmnl-firmware), TRMNL_FIRMWARE_BUILD,
 #      TRMNL_X_BUILD, TRMNL_BWRY_BUILD, TRMNL_SIM_REALTIME=1,
