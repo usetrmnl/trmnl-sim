@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         };
     }
     let emu = std::thread::spawn(move || fake_emulator(ports, cfg));
-    sim_ui::run(handle, sim_ui::UiOptions { title: "TRMNL Simulator — demo".into(), scale: 1.0 })?;
+    sim_ui::run(handle, sim_ui::UiOptions { title: "TRMNL Simulator — demo".into(), ..Default::default() })?;
     let _ = emu.join();
     Ok(())
 }

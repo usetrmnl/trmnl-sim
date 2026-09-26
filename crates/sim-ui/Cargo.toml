@@ -7,9 +7,11 @@ edition = "2024"
 anyhow = "1.0.104"
 eframe = "0.36.2"
 egui = "0.36.2"
+mock-trmnl = { path = "../mock-trmnl" }
 parking_lot = "0.12.5"
 png = "0.18.1"
 rfd = "0.17.2"
+serde_json = "1.0.151"
 sim-api = { version = "0.1.0", path = "../sim-api" }
 
 [dev-dependencies]

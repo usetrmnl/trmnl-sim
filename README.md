@@ -95,6 +95,42 @@ portal is forwarded to **http://127.0.0.1:8080/**; open it in a browser, pick
 **TRMNL-Sim** (any password is accepted) and choose the server. To use your own
 device's account, run with its MAC: `--mac D8:3B:DA:12:34:56`.
 
+### Built-in mock server
+
+To drive the device's content yourself, without an account on trmnl.app, use the
+simulator's built-in TRMNL server: run with `--mock-server` (port 8090; `--mock-server=0`
+picks a free one) or start it from the **🖧 Mock server panel** button in the side panel.
+The panel on the left shows the URL the device should use, `http://10.0.2.2:8090`, with a
+copy button.
+
+- **Onboarding.** With a fresh device in WiFi setup, **Connect it to this server** fills in
+  the setup page for you (TRMNL-Sim and the server URL). **Onboard the device here…** on an
+  already onboarded OG holds the button for 6 s so it forgets its WiFi, then does the same
+  once the portal is up (the API key is kept). You can also type the URL into the setup
+  page's server field yourself. Keep the port fixed: the device remembers the URL.
+- **Images.** Drop PNG, JPEG, BMP or GIF files on the window, or use **Add images…**.
+  They are resized (contain, cover or stretch) and dithered to what the panel takes: an
+  800×480 1-bit BMP on the OG, an 800×480 2-bit black/white/yellow/red palette PNG on the
+  BWRY (without dithering, colors are classified like the firmware does), a 1872×1404
+  4-bit gray PNG on the X. Click an image to serve it. A built-in default image is served
+  until you add your own. Each version of an image gets a server-style
+  `plugin-<id>-<timestamp>` filename, so the X's image cache behaves as with trmnl.app.
+- **Playlist.** Mark images with ☰; with **Next image on every request** each
+  `/api/display` serves the next one. Previous/Next step through it by hand.
+- **Display response.** Refresh rate, the double-click action (`special_function`:
+  identify shows the device's friendly ID, rewind goes back one playlist entry,
+  restart_playlist goes to the first), full refresh (`maximum_compatibility`), the touch
+  bar mode on the X, and under Advanced: `/api/setup` registration, the response
+  `status` (202, 500) and the friendly ID.
+- **Next request only.** **Firmware update** sends `update_firmware` with a URL on this
+  server: this build's `firmware.bin`, or a file you choose (booting another build needs
+  its ELF, see `--elf`). **Reset device** sends `reset_firmware`.
+- **Wake the device on changes** ends a deep sleep when you pick an image or queue an
+  action, so you see it right away.
+- **Requests** lists every request the device made (time in UTC, method, path, status,
+  wake source, battery, RSSI, firmware version, and what was served); hover for all
+  headers and the body.
+
 Headless, e.g. to watch serial output or grab a screenshot:
 
 ```sh
@@ -126,6 +162,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--offline` | Hermetic network: only the host (`10.0.2.2` → `127.0.0.1`) is reachable |
 | `--dns NAME=IP` | Answer DNS for NAME locally (repeatable) |
 | `--portal-port N` | Host port forwarded to the captive portal (default 8080, 0 = any free port) |
+| `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default port 8090, 0 = any free port); the device URL is `http://10.0.2.2:PORT` |
 | `--elf PATH` | Extra firmware ELFs the device may boot after an OTA (repeatable) |
 | `--seconds S` | Stop after S seconds of virtual time |
 | `--screenshot PNG` | Save the display when the run ends |
@@ -216,6 +253,15 @@ Two standard-library Python modules live in [python/](python):
   server-style `plugin-<id>-<timestamp>` filenames the X uses for its image cache, and
   returns the PNG you should expect on screen. Request header lookups are
   case-insensitive.
+- **`sim.mock`** (`trmnl_sim.BuiltinServer`) drives the simulator's
+  [built-in server](#built-in-mock-server) instead, so no second server is needed:
+  `start()` returns the device URL, `add_image(name, png_or_jpeg_bytes, current=True)`
+  converts an image for the panel and `expected(name)` returns the PNG the screen should
+  then show; `display(refresh_rate=..., image=..., special_function=..., playlist=...,
+  extra={...})`, `queue(update_firmware=True, firmware_url=...)`, `set_file(path, bytes)`,
+  `requests()`, `count(path)` and `wait_for_request(path, after=, timeout_s=)` work like
+  their `MockTrmnl` counterparts. See
+  [test_builtin_server.py](tests/integration/test_builtin_server.py).
 
 ```python
 from trmnl_sim import Simulator
@@ -280,6 +326,14 @@ Useful pieces:
 | `POST /wait {...}` | block on conditions (see above), `timeout_s`, `settle_ms`; 408 on timeout, 409 if the CPU halted |
 | `GET /screenshot[?x=&y=&w=&h=]` | 8-bit grayscale PNG (0 = ink, 255 = paper); RGB on color panels |
 | `POST /screenshot/compare?tolerance=&max_ratio=[&x=&y=&w=&h=]` | PNG body in; `{"match", "diff_pixels", "diff_ratio"}`; on color panels a pixel differs if any channel is off by more than `tolerance` |
+| `GET /mock` | built-in mock server state: running, `device_url`, images, current image, playlist, settings, queue, request count |
+| `POST /mock/start {"port": N}`, `/mock/stop` | start (0 = any free port; returns `device_url`) or stop it |
+| `POST /mock/images?name=&current=1&dither=0&fit=contain\|cover\|stretch&raw=1` | image file body (PNG/JPEG/BMP/GIF), converted for the panel (`raw=1`: a PNG/BMP served as is) |
+| `GET /mock/images/NAME/expected`, `DELETE /mock/images/NAME` | the PNG the screen should show for it; remove it |
+| `POST /mock/display {...}` | `image`, `refresh_rate`, `special_function`, `playlist`, `auto_advance`, `registered`, `friendly_id`, `api_key`, `extra` (raw `/api/display` fields; `null` removes) |
+| `POST /mock/queue {...}`, `DELETE /mock/queue` | raw fields (and `image`) for the next `/api/display` answer only |
+| `POST /mock/files?path=/x.bin` | serve the body at that path; returns its device URL |
+| `GET /mock/requests?since=N` | recorded device requests: method, path, headers, body, status, summary, `sim_time_s` |
 
 ### CI
 
@@ -310,6 +364,7 @@ crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
 ├─ sim-ui/             egui desktop window
 ├─ sim-control/        HTTP control API
+├─ mock-trmnl/         built-in mock TRMNL server and image conversion (GUI panel, /mock API)
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```
 

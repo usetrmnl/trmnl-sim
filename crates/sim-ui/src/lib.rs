@@ -5,6 +5,7 @@
 
 mod console;
 mod device;
+mod server;
 mod touch;
 
 use std::path::Path;
@@ -19,6 +20,7 @@ use sim_api::{BoardInfo, Command, RunState, SimHandle, Status};
 
 use console::ConsoleView;
 use device::{Geometry, Look, Screen, ZoneVis};
+use server::ServerPanel;
 use touch::{TouchInput, ZONES};
 
 /// Options for [`run`].
@@ -29,11 +31,13 @@ pub struct UiOptions {
     /// Initial display zoom (1.0 = one e-paper pixel per logical point).
     /// A value `<= 0.0` starts in "fit to window" mode.
     pub scale: f32,
+    /// The built-in mock TRMNL server, for the "Server" panel (shown at startup if it runs).
+    pub mock: Option<mock_trmnl::MockServer>,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
-        UiOptions { title: "TRMNL Simulator".to_string(), scale: 1.0 }
+        UiOptions { title: "TRMNL Simulator".to_string(), scale: 1.0, mock: None }
     }
 }
 
@@ -139,6 +143,8 @@ struct SimApp {
     wifi_pending: Option<Pending<bool>>,
     pause_pending: Option<Pending<bool>>,
     notice: Option<Notice>,
+    server: Option<ServerPanel>,
+    show_server: bool,
 }
 
 impl SimApp {
@@ -150,7 +156,10 @@ impl SimApp {
             _ => {}
         }
         let status = h.status.lock().clone();
+        let server = opts.mock.clone().map(ServerPanel::new);
         SimApp {
+            show_server: server.as_ref().is_some_and(|s| s.is_running()),
+            server,
             screen: Screen::new(h.frame.clone()),
             console: ConsoleView::new(h.console.clone()),
             status,
@@ -251,6 +260,41 @@ impl SimApp {
             self.button.last_hold = self.button.pressed_at.take().map(|p| now - p);
             self.button.last_release = Some(now);
         }
+    }
+
+    /// Image files dropped on the window go to the mock server.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+        let Some(p) = &mut self.server else {
+            self.notify("Dropped files go to the mock server, which this simulator doesn't have", true);
+            return;
+        };
+        for f in dropped {
+            match f.bytes() {
+                Ok(b) => p.add_file(&f.path().to_string_lossy(), b),
+                Err(e) => self.notice = Some(Notice { text: e, error: true, at: Instant::now() }),
+            }
+        }
+        self.show_server = true;
+    }
+
+    fn paint_drop_hint(&self, ctx: &egui::Context) {
+        if self.server.is_none() || ctx.input(|i| i.raw.hovered_files.is_empty()) {
+            return;
+        }
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop_hint")));
+        let rect = ctx.content_rect();
+        painter.rect_filled(rect, 0.0, Color32::from_black_alpha(160));
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "Drop images to add them to the mock server",
+            FontId::proportional(22.0),
+            Color32::WHITE,
+        );
     }
 
     // ---- screenshot ---------------------------------------------------------------------------
@@ -462,6 +506,10 @@ impl SimApp {
                 "Not connected".to_string()
             };
             ui.weak(net);
+            if self.server.is_some() {
+                ui.toggle_value(&mut self.show_server, "🖧 Mock server panel")
+                    .on_hover_text("The built-in TRMNL server: serve your own images to the device");
+            }
 
             section(ui, "Battery");
             let mut mv = Pending::resolve(&mut self.battery_pending, self.status.battery_mv);
@@ -777,6 +825,13 @@ impl eframe::App for SimApp {
         if self.notice.as_ref().is_some_and(|n| n.at.elapsed() > Duration::from_secs(8)) {
             self.notice = None;
         }
+        self.handle_dropped_files(&ctx);
+        if let Some(p) = &mut self.server {
+            p.poll(&self.status);
+            for (text, error) in std::mem::take(&mut p.notices) {
+                self.notice = Some(Notice { text, error, at: Instant::now() });
+            }
+        }
 
         egui::Panel::bottom("status_bar").resizable(false).show(ui, |ui| {
             ui.add_space(3.0);
@@ -790,6 +845,18 @@ impl eframe::App for SimApp {
             ui.add_space(4.0);
             self.controls(ui);
         });
+        let board = self.board();
+        if let Some(p) = &mut self.server {
+            let (h, status) = (self.h.clone(), self.status.clone());
+            egui::Panel::left("server").resizable(true).default_size(330.0).min_size(240.0).show_collapsible(
+                ui,
+                &mut self.show_server,
+                |ui| {
+                    ui.add_space(4.0);
+                    p.ui(ui, &h, &status, &board);
+                },
+            );
+        }
         egui::Panel::bottom("console").resizable(true).default_size(230.0).min_size(90.0).show_collapsible(
             ui,
             &mut self.show_console,
@@ -810,6 +877,7 @@ impl eframe::App for SimApp {
             }
             self.device_view(ui);
         });
+        self.paint_drop_hint(&ctx);
 
         self.apply_button();
         let h = self.h.clone();
@@ -993,6 +1061,16 @@ mod render_tests {
         board: BoardInfo,
         docked: bool,
     ) -> (egui_kittest::Harness<'static, SimApp>, sim_api::SimPorts) {
+        harness_with(w, h, board, docked, UiOptions::default())
+    }
+
+    fn harness_with(
+        w: usize,
+        h: usize,
+        board: BoardInfo,
+        docked: bool,
+        opts: UiOptions,
+    ) -> (egui_kittest::Harness<'static, SimApp>, sim_api::SimPorts) {
         let pixels = (0..w * h)
             .map(|i| if ((i % w) * 16 / w).is_multiple_of(2) { ((i / w) * 255 / h) as u8 } else { 0 })
             .collect();
@@ -1011,7 +1089,7 @@ mod render_tests {
         let harness = egui_kittest::Harness::builder()
             .with_size([1280.0, 860.0])
             .with_pixels_per_point(2.0)
-            .build_eframe(move |cc| SimApp::new(cc, handle, UiOptions::default()));
+            .build_eframe(move |cc| SimApp::new(cc, handle, opts));
         (harness, ports)
     }
 
@@ -1027,6 +1105,17 @@ mod render_tests {
         let (mut h, _p) = harness(800, 480, BoardInfo::default(), false);
         h.run_steps(5);
         save(&mut h, "og");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_mock_server() {
+        let mock = mock_trmnl::MockServer::new(mock_trmnl::Panel::Og);
+        mock.start(0).unwrap();
+        let (mut h, _p) =
+            harness_with(800, 480, BoardInfo::default(), false, UiOptions { mock: Some(mock), ..Default::default() });
+        h.run_steps(5);
+        save(&mut h, "mock_server");
     }
 
     #[test]

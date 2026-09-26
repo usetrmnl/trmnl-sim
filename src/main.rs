@@ -51,6 +51,11 @@ struct Cli {
     /// Serve the HTTP control API for integration tests on this address (e.g. 127.0.0.1:7878).
     #[arg(long)]
     control: Option<std::net::SocketAddr>,
+    /// Start the built-in mock TRMNL server on this port (default 8090; 0 = any free port).
+    /// The device reaches it at http://10.0.2.2:PORT. It can also be started from the window
+    /// or the control API.
+    #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "8090")]
+    mock_server: Option<u16>,
     /// Host port forwarded to the device's captive portal while it's in setup mode (0 = pick a free one).
     #[arg(long, default_value_t = 8080)]
     portal_port: u16,
@@ -128,6 +133,7 @@ fn main() -> Result<()> {
     }
     let net = vnet::NetConfig { offline: cli.offline, dns_overrides: cli.dns.clone(), ..Default::default() };
 
+    let mut panel = mock_trmnl::Panel::Og;
     let (machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
         firmware::CHIP_ESP32S3 => {
             let modem_mac = cli.mac.map(|mut m| {
@@ -140,6 +146,7 @@ fn main() -> Result<()> {
                 cli.dns.clone(),
             );
             let frame = board.panel.frame();
+            panel = mock_trmnl::Panel::X;
             let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, Box::new(board), apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
@@ -151,9 +158,12 @@ fn main() -> Result<()> {
         _ => {
             // trmnl_4clr (TRMNL BWRY) is the OG board with a 4-color panel.
             let bwry = fw.symbols.has_prefix("_Z13png_draw_4clr");
-            let panel = if bwry { Uc8179::new_bwry(cli.panel_rev) } else { Uc8179::new(cli.panel_rev) };
-            let frame = panel.frame.clone();
-            let board = Box::new(board::trmnl_og::TrmnlOg::new(panel));
+            let epd = if bwry { Uc8179::new_bwry(cli.panel_rev) } else { Uc8179::new(cli.panel_rev) };
+            if bwry {
+                panel = mock_trmnl::Panel::Bwry;
+            }
+            let frame = epd.frame.clone();
+            let board = Box::new(board::trmnl_og::TrmnlOg::new(epd));
             let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
@@ -175,8 +185,20 @@ fn main() -> Result<()> {
         firmware_name: fw.name.clone(),
         exit_on_halt: cli.headless && cli.control.is_none(),
     };
+    let mock = mock_trmnl::MockServer::new(panel);
+    let status = handle.status.clone();
+    mock.set_clock(move || status.lock().sim_time_ns);
+    // This build's firmware, for OTA updates from the built-in server.
+    let fw_bin = cli.build_dir.join("firmware.bin");
+    if fw_bin.exists() {
+        mock.set_file("/firmware.bin", mock_trmnl::FileSource::Path(fw_bin));
+    }
+    if let Some(port) = cli.mock_server {
+        let bound = mock.start(port).with_context(|| format!("starting the mock server on port {port}"))?;
+        eprintln!("trmnl-sim: mock server on http://{bound}/ (device URL http://10.0.2.2:{})", bound.port());
+    }
     if let Some(addr) = cli.control {
-        let (bound, _t) = sim_control::serve(handle.clone(), addr)?;
+        let (bound, _t) = sim_control::serve_with_mock(handle.clone(), addr, Some(mock.clone()))?;
         eprintln!("trmnl-sim: control API on http://{bound}/");
     }
     eprintln!("trmnl-sim: {} ({} symbols), flash {}", fw.name, fw.symbols.len(), flash_path.display());
@@ -192,7 +214,11 @@ fn main() -> Result<()> {
         #[cfg(feature = "gui")]
         sim_ui::run(
             handle.clone(),
-            sim_ui::UiOptions { title: format!("TRMNL Simulator — {}", fw.name), scale: cli.scale },
+            sim_ui::UiOptions {
+                title: format!("TRMNL Simulator — {}", fw.name),
+                scale: cli.scale,
+                mock: Some(mock.clone()),
+            },
         )?;
         #[cfg(not(feature = "gui"))]
         anyhow::bail!("built without the `gui` feature: run with --headless");

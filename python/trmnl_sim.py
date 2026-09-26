@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional
@@ -337,3 +338,106 @@ class Simulator:
         if code != 200:
             raise SimError(f"/connect -> {code}: {data[:200]!r}")
         return json.loads(data)
+
+    # ---- built-in mock server ----------------------------------------------------------------------
+
+    @property
+    def mock(self) -> "BuiltinServer":
+        """The simulator's built-in mock TRMNL server (an alternative to trmnl_mock.MockTrmnl)."""
+        return BuiltinServer(self)
+
+
+class BuiltinServer:
+    """Drives the simulator's built-in mock TRMNL server over the control API (`/mock/...`).
+    Images you add are converted for the simulated panel; `expected(name)` is the PNG a
+    screenshot should then match.
+
+        url = sim.mock.start()
+        sim.mock.add_image("hello", png_bytes, current=True)
+        sim.mock.display(refresh_rate=600)
+        sim.portal_connect("TRMNL-Sim", "pw", server=url)
+        req = sim.mock.wait_for_request("/api/display")
+        assert sim.compare_screen(sim.mock.expected("hello"))["match"]
+    """
+
+    def __init__(self, sim: Simulator):
+        self.sim = sim
+
+    def state(self) -> dict:
+        return self.sim._get_json("/mock")
+
+    def start(self, port: int = 0) -> str:
+        """Start listening (0 = any free port); returns the device URL (http://10.0.2.2:PORT)."""
+        return self.sim._post("/mock/start", {"port": port})["device_url"]
+
+    def stop(self) -> None:
+        self.sim._post("/mock/stop")
+
+    @property
+    def device_url(self) -> Optional[str]:
+        return self.state()["device_url"]
+
+    def add_image(self, name: str, data: bytes, *, current: bool = False, dither: bool = True,
+                  fit: str = "contain", raw: bool = False) -> dict:
+        """Add (or replace) an image from PNG/JPEG/BMP/GIF bytes, converted for the panel
+        (raw=True serves a PNG/BMP unchanged). Names: letters, digits, - and _."""
+        q = urllib.parse.urlencode({"name": name, "current": int(current), "dither": int(dither), "fit": fit,
+                                    "raw": int(raw)})
+        code, _, body = self.sim._request("POST", "/mock/images?" + q, raw=data)
+        out = json.loads(body)
+        if code != 200:
+            raise SimError(f"add_image({name}) -> {code}: {out.get('error', out)}")
+        return out
+
+    def expected(self, name: str) -> bytes:
+        """The PNG the screen should show for image `name`."""
+        code, _, data = self.sim._request("GET", f"/mock/images/{name}/expected")
+        if code != 200:
+            raise SimError(f"expected({name}) -> {code}: {data[:200]!r}")
+        return data
+
+    def remove_image(self, name: str) -> None:
+        self.sim._request("DELETE", f"/mock/images/{name}")
+
+    def display(self, **fields) -> dict:
+        """Change the /api/display answer: image, refresh_rate, special_function, playlist,
+        auto_advance, registered, friendly_id, api_key, extra (raw fields; None removes)."""
+        return self.sim._post("/mock/display", fields)
+
+    def queue(self, **fields) -> None:
+        """Raw /api/display fields for the next answer only, e.g. update_firmware=True,
+        firmware_url=..., or reset_firmware=True (plus image=NAME)."""
+        self.sim._post("/mock/queue", fields)
+
+    def set_file(self, path: str, data: bytes) -> str:
+        """Serve bytes at `path` (e.g. a firmware.bin for OTA); returns the device URL."""
+        code, _, body = self.sim._request("POST", "/mock/files?" + urllib.parse.urlencode({"path": path}), raw=data)
+        if code != 200:
+            raise SimError(f"set_file -> {code}: {body[:200]!r}")
+        return json.loads(body)["url"]
+
+    def requests(self, since: int = 0) -> list:
+        """Recorded requests (dicts: i, method, path, headers (case-insensitive), body,
+        status, summary, sim_time_s)."""
+        from trmnl_mock import Headers
+
+        reqs = self.sim._get_json(f"/mock/requests?since={since}")["requests"]
+        for r in reqs:
+            r["headers"] = Headers(r["headers"].items())
+        return reqs
+
+    def count(self, path: str) -> int:
+        return sum(1 for r in self.requests() if r["path"] == path)
+
+    def wait_for_request(self, path: str, after: int = 0, timeout_s: float = 60) -> dict:
+        """Wait for a request to `path` with index >= `after` (use `state()["total_requests"]`
+        as a cursor)."""
+        deadline = time.time() + timeout_s
+        while True:
+            for r in self.requests(after):
+                if r["path"] == path:
+                    return r
+            if time.time() > deadline:
+                seen = [r["path"] for r in self.requests()]
+                raise TimeoutError(f"no request to {path} within {timeout_s}s (seen: {seen})")
+            time.sleep(0.1)

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 log = "0.4.34"
+mock-trmnl = { path = "../mock-trmnl" }
 png = "0.18"
 regex = "1.13.1"
 serde_json = "1.0.151"

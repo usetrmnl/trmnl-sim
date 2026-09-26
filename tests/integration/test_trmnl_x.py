@@ -4,6 +4,7 @@
 import unittest
 
 from support import MockTrmnl, big_number
+from trmnl_mock import expected_gray, png_image
 from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard
 
 shipped: ShippedX
@@ -151,6 +152,19 @@ class Provisioned(unittest.TestCase):
             req = dev.mock.wait_for_request("/api/display", after=n, timeout_s=120)
             self.assertEqual((req.headers["USB-Connected"], req.headers["Battery-Charging"]), ("true", "1"))
             s.wait(state="deep_sleep", timeout_s=120)
+
+
+class BuiltinServer(unittest.TestCase):
+    def test_onboards_against_the_built_in_server(self):
+        with shipped.boot() as s:
+            s.mock.start()
+            s.mock.add_image("seven", png_image(digits("7"), 1872, 1404), current=True)
+            s.mock.display(refresh_rate=300)
+            onboard(s, s.mock, SSID_24)
+            self.assertEqual(s.mock.count("/images/seven.png"), 1)
+            expected = expected_gray(digits("7"), 1872, 1404)
+            self.assertTrue(s.compare_screen(expected, tolerance=64, max_ratio=0)["match"])
+            self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
 
 
 if __name__ == "__main__":

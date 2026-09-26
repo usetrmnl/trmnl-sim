@@ -23,8 +23,11 @@
 //! | POST   | `/wait`                | see [`WaitSpec`]                               | `{"ok", ...}` or 408 |
 //! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` (gray; RGB on color panels) |
 //! | POST   | `/screenshot/compare`  | PNG body; `?x=&y=&w=&h=&tolerance=&max_ratio=` | `{"match", "diff_pixels", "diff_ratio"}` |
+//! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
+
+mod mock;
 
 use std::net::SocketAddr;
 use std::thread::JoinHandle;
@@ -35,13 +38,23 @@ use sim_api::{Command, RunState, SimHandle, Status, TouchZone};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub fn serve(handle: SimHandle, addr: SocketAddr) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
+    serve_with_mock(handle, addr, None)
+}
+
+/// [`serve`], plus the `/mock/...` endpoints driving the built-in mock TRMNL server.
+pub fn serve_with_mock(
+    handle: SimHandle,
+    addr: SocketAddr,
+    mock: Option<mock_trmnl::MockServer>,
+) -> std::io::Result<(SocketAddr, JoinHandle<()>)> {
     let server = Server::http(addr).map_err(std::io::Error::other)?;
     let bound = server.server_addr().to_ip().unwrap_or(addr);
     let t = std::thread::Builder::new().name("control".into()).spawn(move || {
         // One thread per request so a long /wait doesn't block other calls.
         for req in server.incoming_requests() {
             let h = handle.clone();
-            std::thread::spawn(move || handle_request(&h, req));
+            let m = mock.clone();
+            std::thread::spawn(move || handle_request(&h, m.as_ref(), req));
         }
     })?;
     Ok((bound, t))
@@ -59,7 +72,7 @@ fn err(code: u16, msg: impl Into<String>) -> Reply {
     json_reply(code, json!({ "ok": false, "error": msg.into() }))
 }
 
-fn handle_request(h: &SimHandle, mut req: Request) {
+fn handle_request(h: &SimHandle, mock: Option<&mock_trmnl::MockServer>, mut req: Request) {
     let method = req.method().clone();
     let url = req.url().to_string();
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
@@ -67,7 +80,15 @@ fn handle_request(h: &SimHandle, mut req: Request) {
     let q = parse_query(query);
     let mut body = Vec::new();
     let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
-    let reply = match route(h, &method, &path, &q, &body) {
+    let routed = if path == "/mock" || path.starts_with("/mock/") {
+        match mock {
+            Some(m) => mock::route(m, &method, &path, &q, &body),
+            None => Ok(err(404, "no mock server in this simulator")),
+        }
+    } else {
+        route(h, &method, &path, &q, &body)
+    };
+    let reply = match routed {
         Ok(r) => r,
         Err(e) => err(400, e),
     };
