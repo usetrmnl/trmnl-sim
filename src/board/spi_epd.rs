@@ -10,6 +10,7 @@ use crate::devices::i2c::I2cBus;
 use crate::devices::i2c::axp2101::Axp2101;
 use crate::devices::i2c::bq27220::Bq27220;
 use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
+use crate::devices::ssd16xx::{Glass, Ssd16xx};
 use crate::devices::uc8179::{ColorPanel, Uc8179};
 use crate::savepoint::{StateReader, StateWriter};
 
@@ -59,6 +60,14 @@ pub enum Panel {
     Uc8179Bwry,
     /// UC8179, 7.3" 800x480 Spectra 6 (EP73_SPECTRA_800x480).
     Uc8179Spectra6,
+    /// SSD1677, 4.26" 800x480 black and white (EP426_800x480, 4-gray capable).
+    Ssd1677Ep426,
+    /// SSD1677, 3.97" 800x480 black and white (EP397_800x480, 4-gray capable).
+    Ssd1677Ep397,
+    /// The 3.97" panel mounted rotated 180 degrees (see [`Glass::Ep397Flipped`]).
+    Ssd1677Ep397Flipped,
+    /// SSD1683, 4.2" 400x300 black and white (EP42B_400x300, 4-gray capable).
+    Ssd1683Ep42b,
 }
 
 impl Panel {
@@ -67,13 +76,21 @@ impl Panel {
             Panel::Uc8179 => Box::new(Uc8179::new(rev)),
             Panel::Uc8179Bwry => Box::new(Uc8179::new_bwry(rev)),
             Panel::Uc8179Spectra6 => Box::new(Uc8179::new_color(rev, ColorPanel::Spectra6)),
+            Panel::Ssd1677Ep426 => Box::new(Ssd16xx::new(Glass::Ep426)),
+            Panel::Ssd1677Ep397 => Box::new(Ssd16xx::new(Glass::Ep397)),
+            Panel::Ssd1677Ep397Flipped => Box::new(Ssd16xx::new(Glass::Ep397Flipped)),
+            Panel::Ssd1683Ep42b => Box::new(Ssd16xx::new(Glass::Ep42b)),
         }
     }
 
     /// What the built-in mock server serves this panel.
     pub fn mock_panel(self) -> mock_trmnl::Panel {
         match self {
-            Panel::Uc8179 => mock_trmnl::Panel::Og,
+            Panel::Uc8179 | Panel::Ssd1677Ep426 | Panel::Ssd1677Ep397 | Panel::Ssd1677Ep397Flipped => {
+                mock_trmnl::Panel::Og
+            }
+            // TODO(mock): 400x300
+            Panel::Ssd1683Ep42b => mock_trmnl::Panel::Og,
             Panel::Uc8179Bwry => mock_trmnl::Panel::Bwry,
             Panel::Uc8179Spectra6 => mock_trmnl::Panel::Spectra6,
         }
@@ -93,6 +110,8 @@ pub struct BoardSpec {
     pub pins: Pins,
     pub battery: Battery,
     pub panel: Panel,
+    /// A GPIO that switches the panel's supply (on while driven high).
+    pub panel_power: Option<u8>,
 }
 
 const OG_PINS: Pins = Pins { sck: 7, mosi: 8, cs: 6, rst: 10, dc: 5, busy: 4, button: 2 };
@@ -109,6 +128,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: OG_PINS,
         battery: Battery::Adc { pin: 3, enable: None },
         panel: Panel::Uc8179,
+        panel_power: None,
     },
     BoardSpec {
         model: "og_4clr",
@@ -118,6 +138,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: OG_PINS,
         battery: Battery::Adc { pin: 3, enable: None },
         panel: Panel::Uc8179Bwry,
+        panel_power: None,
     },
     BoardSpec {
         model: "seeed_esp32c3",
@@ -127,6 +148,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: Pins { sck: 8, mosi: 10, cs: 3, rst: 2, dc: 5, busy: 4, button: 9 },
         battery: Battery::Unwired,
         panel: Panel::Uc8179,
+        panel_power: None,
     },
     BoardSpec {
         model: "seeed_esp32s3",
@@ -136,6 +158,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: Pins { sck: 7, mosi: 9, cs: 2, rst: 1, dc: 4, busy: 3, button: 0 },
         battery: Battery::Unwired,
         panel: Panel::Uc8179,
+        panel_power: None,
     },
     BoardSpec {
         model: "xiao_epaper_display",
@@ -145,6 +168,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: XIAO_EPAPER_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(6) },
         panel: Panel::Uc8179,
+        panel_power: None,
     },
     BoardSpec {
         model: "xiao_epaper_6clr",
@@ -154,6 +178,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: XIAO_EPAPER_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(6) },
         panel: Panel::Uc8179Spectra6,
+        panel_power: None,
     },
     BoardSpec {
         model: "reterminal_e1001",
@@ -163,6 +188,7 @@ pub static SPECS: &[BoardSpec] = &[
         pins: RETERMINAL_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(21) },
         panel: Panel::Uc8179,
+        panel_power: None,
     },
     BoardSpec {
         model: "reterminal_e1002",
@@ -172,6 +198,60 @@ pub static SPECS: &[BoardSpec] = &[
         pins: RETERMINAL_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(21) },
         panel: Panel::Uc8179Spectra6,
+        panel_power: None,
+    },
+    BoardSpec {
+        model: "xteink_x4",
+        envs: &["xteink_x4", "xteink_x4_pwr_btn"],
+        name: "Xteink X4",
+        chip: Chip::Esp32c3,
+        pins: Pins { sck: 8, mosi: 10, cs: 21, rst: 5, dc: 4, busy: 6, button: 3 },
+        // The LiPo's divider is on GPIO0 (config.h PIN_BATTERY), but device_list[] has
+        // batt_pin 0xff: the firmware never reads it and reports 0 V.
+        battery: Battery::Adc { pin: 0, enable: None },
+        panel: Panel::Ssd1677Ep426,
+        panel_power: None,
+    },
+    BoardSpec {
+        model: "xiao_epaper_mini",
+        envs: &["TRMNL_4inch26_DIY_Kit"],
+        name: "TRMNL 4.26\" DIY Kit",
+        chip: Chip::Esp32s3,
+        pins: Pins { button: 2, ..XIAO_EPAPER_PINS },
+        battery: Battery::Adc { pin: 1, enable: Some(6) },
+        panel: Panel::Ssd1677Ep426,
+        panel_power: None,
+    },
+    BoardSpec {
+        model: "waveshare_397",
+        envs: &["WAVESHARE_397"],
+        name: "Waveshare ESP32-S3 3.97\"",
+        chip: Chip::Esp32s3,
+        pins: Pins { sck: 11, mosi: 12, cs: 10, rst: 46, dc: 9, busy: 3, button: 0 },
+        battery: Battery::Axp2101,
+        panel: Panel::Ssd1677Ep397,
+        panel_power: None,
+    },
+    BoardSpec {
+        model: "seeed_sticky",
+        envs: &["seeed_sticky"],
+        name: "Seeed Sticky",
+        chip: Chip::Esp32s3,
+        pins: Pins { sck: 13, mosi: 14, cs: 15, rst: 17, dc: 16, busy: 18, button: 4 },
+        battery: Battery::Bq27220,
+        panel: Panel::Ssd1677Ep397Flipped,
+        panel_power: Some(47),
+    },
+    BoardSpec {
+        model: "crowpanel42",
+        envs: &["CrowPanel42"],
+        name: "CrowPanel 4.2\"",
+        chip: Chip::Esp32s3,
+        // Wired as bb_epaper's begin(EPD_CROWPANEL42) has it (device_list[] pins are 0).
+        pins: Pins { sck: 12, mosi: 11, cs: 45, rst: 47, dc: 46, busy: 48, button: 2 },
+        battery: Battery::None,
+        panel: Panel::Ssd1683Ep42b,
+        panel_power: Some(7),
     },
 ];
 
@@ -213,15 +293,11 @@ impl SpiEpdBoard {
             Battery::Axp2101 => _ = i2c.add(Box::new(Axp2101::new())),
             _ => {}
         }
-        SpiEpdBoard {
-            spec,
-            panel: spec.panel.controller(panel_rev),
-            i2c,
-            button_down: false,
-            battery_mv: 4100,
-            out: 0,
-            oe: 0,
+        let mut panel = spec.panel.controller(panel_rev);
+        if spec.panel_power.is_some() {
+            panel.set_power(0, false); // until the firmware switches it on
         }
+        SpiEpdBoard { spec, panel, i2c, button_down: false, battery_mv: 4100, out: 0, oe: 0 }
     }
 
     fn level(&self, pin: u8) -> bool {
@@ -255,6 +331,9 @@ impl Board for SpiEpdBoard {
         let mosi_driven = oe >> p.mosi & 1 != 0;
         let (cs, dc, sck, rst) = (lvl(p.cs), lvl(p.dc), oe >> p.sck & 1 != 0 && self.level(p.sck), lvl(p.rst));
         let mosi = mosi_driven && self.level(p.mosi);
+        if let Some(pin) = self.spec.panel_power {
+            self.panel.set_power(now, oe >> pin & 1 != 0 && out >> pin & 1 != 0);
+        }
         self.panel.set_pins(now, cs, dc, sck, mosi, rst);
     }
 
@@ -362,8 +441,10 @@ mod tests {
 
     #[test]
     fn every_model_and_env_is_listed_once() {
-        let mut names: Vec<&str> =
-            SPECS.iter().flat_map(|s| std::iter::once(s.model).chain(s.envs.iter().copied())).collect();
+        let mut names: Vec<&str> = SPECS
+            .iter()
+            .flat_map(|s| std::iter::once(s.model).chain(s.envs.iter().copied().filter(|&e| e != s.model)))
+            .collect();
         let n = names.len();
         names.sort();
         names.dedup();
