@@ -7,53 +7,101 @@
 //! | BWRY (800×480, black/white/yellow/red) | 2-bit palette PNG (the OG-family PNG decoder can't take truecolor rows that wide) |
 //! | X (1872×1404, 16 grays) | 4-bit grayscale PNG |
 //! | Spectra 6 (800×480, black/white/yellow/red/blue/green; reTerminal E1002) | 4-bit palette PNG |
+//! | other black and white sizes (BYOD boards) | 1-bit grayscale PNG |
+//! | other 16-gray panels (BYOD parallel panels) | 4-bit grayscale PNG |
+//! | black/white/red | 2-bit palette PNG |
 
 use image::{Rgb, RgbImage, imageops::FilterType};
 
-/// The kind of panel the images are for.
+/// What a panel can show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Panel {
-    /// TRMNL OG: 800×480, black and white.
-    Og,
-    /// TRMNL BWRY: 800×480, black, white, yellow and red.
+pub enum Inks {
+    /// Black and white.
+    Mono,
+    /// 16 grays (parallel panels driven by FastEPD).
+    Gray16,
+    /// Black, white and red.
+    Bwr,
+    /// Black, white, yellow and red.
     Bwry,
-    /// TRMNL X: 1872×1404, 16 grays.
-    X,
-    /// E Ink Spectra 6 (Seeed reTerminal E1002): 800×480, black, white, yellow, red, blue
-    /// and green.
+    /// E Ink Spectra 6: black, white, yellow, red, blue and green.
     Spectra6,
 }
 
-impl Panel {
-    pub fn size(self) -> (u32, u32) {
+impl Inks {
+    pub fn name(self) -> &'static str {
         match self {
-            Panel::Og | Panel::Bwry | Panel::Spectra6 => (800, 480),
-            Panel::X => (1872, 1404),
+            Inks::Mono => "mono",
+            Inks::Gray16 => "gray16",
+            Inks::Bwr => "bwr",
+            Inks::Bwry => "bwry",
+            Inks::Spectra6 => "spectra6",
         }
     }
 
-    pub fn name(self) -> &'static str {
+    fn is_color(self) -> bool {
+        matches!(self, Inks::Bwr | Inks::Bwry | Inks::Spectra6)
+    }
+}
+
+/// The panel the images are for: its inks and size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Panel {
+    pub inks: Inks,
+    pub width: u32,
+    pub height: u32,
+}
+
+// The TRMNL panels keep the names they had as enum variants.
+#[allow(non_upper_case_globals)]
+impl Panel {
+    /// TRMNL OG: 800×480, black and white.
+    pub const Og: Panel = Panel::new(Inks::Mono, 800, 480);
+    /// TRMNL BWRY: 800×480, black, white, yellow and red.
+    pub const Bwry: Panel = Panel::new(Inks::Bwry, 800, 480);
+    /// TRMNL X: 1872×1404, 16 grays.
+    pub const X: Panel = Panel::new(Inks::Gray16, 1872, 1404);
+    /// E Ink Spectra 6 (Seeed reTerminal E1002): 800×480.
+    pub const Spectra6: Panel = Panel::new(Inks::Spectra6, 800, 480);
+
+    pub const fn new(inks: Inks, width: u32, height: u32) -> Self {
+        Panel { inks, width, height }
+    }
+
+    pub fn size(self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Short name: og / bwry / x / spectra6 for the TRMNL panels, else inks and size
+    /// (e.g. mono-400x300).
+    pub fn name(self) -> String {
         match self {
-            Panel::Og => "og",
-            Panel::Bwry => "bwry",
-            Panel::X => "x",
-            Panel::Spectra6 => "spectra6",
+            Panel::Og => "og".into(),
+            Panel::Bwry => "bwry".into(),
+            Panel::X => "x".into(),
+            Panel::Spectra6 => "spectra6".into(),
+            _ => format!("{}-{}x{}", self.inks.name(), self.width, self.height),
         }
     }
 
     /// What a converted image is served as, for display.
     pub fn format(self) -> &'static str {
-        match self {
-            Panel::Og => "1-bit BMP",
-            Panel::Bwry => "2-bit 4-color PNG",
-            Panel::X => "4-bit gray PNG",
-            Panel::Spectra6 => "4-bit 6-color PNG",
+        match self.inks {
+            Inks::Mono if self == Panel::Og => "1-bit BMP",
+            Inks::Mono => "1-bit PNG",
+            Inks::Gray16 => "4-bit gray PNG",
+            Inks::Bwr => "2-bit 3-color PNG",
+            Inks::Bwry => "2-bit 4-color PNG",
+            Inks::Spectra6 => "4-bit 6-color PNG",
         }
     }
 }
 
 /// The TRMNL BWRY inks, in palette order.
 pub const BWRY_PALETTE: [[u8; 3]; 4] = [[0, 0, 0], [255, 255, 255], [255, 255, 0], [255, 0, 0]];
+
+/// The black/white/red inks, in palette order.
+pub const BWR_PALETTE: [[u8; 3]; 3] = [[0, 0, 0], [255, 255, 255], [255, 0, 0]];
 
 /// The Spectra 6 inks, in the firmware's color order (bb_epaper's color indices).
 pub const SPECTRA6_PALETTE: [[u8; 3]; 6] =
@@ -159,9 +207,10 @@ pub fn passthrough(bytes: &[u8], panel: Panel) -> Result<Converted, String> {
     };
     let img = image::load_from_memory(bytes).map_err(|e| format!("can't read image: {e}"))?;
     let (width, height) = (img.width(), img.height());
-    let preview = match panel {
-        Panel::Bwry | Panel::Spectra6 => Preview { width, height, channels: 3, pixels: img.to_rgb8().into_raw() },
-        _ => Preview { width, height, channels: 1, pixels: img.to_luma8().into_raw() },
+    let preview = if panel.inks.is_color() {
+        Preview { width, height, channels: 3, pixels: img.to_rgb8().into_raw() }
+    } else {
+        Preview { width, height, channels: 1, pixels: img.to_luma8().into_raw() }
     };
     Ok(Converted { data: bytes.to_vec(), ext, preview })
 }
@@ -184,22 +233,29 @@ fn flatten(img: image::DynamicImage) -> RgbImage {
 pub fn convert_image(img: &RgbImage, panel: Panel, opts: ConvertOptions) -> Converted {
     let (w, h) = panel.size();
     let fitted = fit(img, w, h, opts.fit);
-    match panel {
-        Panel::Og => {
+    match panel.inks {
+        Inks::Mono => {
             let gray = dither_gray(&fitted, 2, opts.dither);
             let pixels: Vec<u8> = gray.iter().map(|&v| if v == 0 { 0 } else { 255 }).collect();
-            let data = bmp_1bit(w, h, |x, y| gray[(y * w + x) as usize] == 0);
-            Converted { data, ext: "bmp", preview: Preview { width: w, height: h, channels: 1, pixels } }
+            // The TRMNL server's BMP for the 7.5" panel; 1-bit PNGs for other sizes (the
+            // firmware's BMP path expects 800x480).
+            let (data, ext) = if panel == Panel::Og {
+                (bmp_1bit(w, h, |x, y| gray[(y * w + x) as usize] == 0), "bmp")
+            } else {
+                (png_gray(w, h, 1, &gray), "png")
+            };
+            Converted { data, ext, preview: Preview { width: w, height: h, channels: 1, pixels } }
         }
-        Panel::X => {
+        Inks::Gray16 => {
             let levels = dither_gray(&fitted, 16, opts.dither);
             let data = png_gray(w, h, 4, &levels);
             let pixels = levels.iter().map(|&v| v * 17).collect();
             Converted { data, ext: "png", preview: Preview { width: w, height: h, channels: 1, pixels } }
         }
-        Panel::Bwry | Panel::Spectra6 => {
-            let (palette, quantize) = match panel {
-                Panel::Bwry => (&BWRY_PALETTE[..], bwry_quantize as fn(u8, u8, u8) -> u8),
+        Inks::Bwr | Inks::Bwry | Inks::Spectra6 => {
+            let (palette, quantize) = match panel.inks {
+                Inks::Bwr => (&BWR_PALETTE[..], bwr_quantize as fn(u8, u8, u8) -> u8),
+                Inks::Bwry => (&BWRY_PALETTE[..], bwry_quantize as fn(u8, u8, u8) -> u8),
                 _ => (&SPECTRA6_PALETTE[..], spectra6_quantize as fn(u8, u8, u8) -> u8),
             };
             let idx = dither_palette(&fitted, palette, quantize, opts.dither);
@@ -314,6 +370,15 @@ pub fn bwry_quantize(r: u8, g: u8, b: u8) -> u8 {
         1
     } else {
         0
+    }
+}
+
+/// Black/white/red: the BWRY reduction with yellow as white, as a [`BWR_PALETTE`] index.
+pub fn bwr_quantize(r: u8, g: u8, b: u8) -> u8 {
+    match bwry_quantize(r, g, b) {
+        0 => 0,
+        3 => 2,
+        _ => 1,
     }
 }
 
@@ -551,5 +616,20 @@ mod tests {
         assert_eq!((c.ext, c.data == bmp), ("bmp", true));
         assert_eq!((c.preview.pixels[0], c.preview.pixels[799]), (0, 255));
         assert!(passthrough(b"GIF89a", Panel::Og).is_err());
+    }
+
+    #[test]
+    fn other_panel_sizes_get_pngs_at_their_size() {
+        let img = RgbImage::from_fn(64, 48, |x, _| if x < 32 { Rgb([0, 0, 0]) } else { Rgb([255, 0, 0]) });
+        let mono = convert_image(&img, Panel::new(Inks::Mono, 400, 300), ConvertOptions::default());
+        assert_eq!((mono.ext, mono.preview.width, mono.preview.height), ("png", 400, 300));
+        let decoded = image::load_from_memory(&mono.data).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (400, 300));
+        let bwr =
+            convert_image(&img, Panel::new(Inks::Bwr, 648, 480), ConvertOptions { dither: false, fit: Fit::Stretch });
+        assert_eq!(bwr.preview.rgb(10, 10), [0, 0, 0]);
+        assert_eq!(bwr.preview.rgb(600, 10), [255, 0, 0]);
+        assert_eq!(Panel::new(Inks::Bwr, 648, 480).name(), "bwr-648x480");
+        assert_eq!(Panel::Og.name(), "og");
     }
 }

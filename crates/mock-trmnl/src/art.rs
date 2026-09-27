@@ -151,7 +151,10 @@ mod tests {
 
     #[test]
     fn screens_fit_their_panels() {
-        for panel in [Panel::Og, Panel::Bwry, Panel::X, Panel::Spectra6] {
+        use crate::convert::Inks;
+        let byod =
+            [Panel::new(Inks::Mono, 400, 300), Panel::new(Inks::Bwr, 800, 480), Panel::new(Inks::Gray16, 960, 540)];
+        for panel in [Panel::Og, Panel::Bwry, Panel::X, Panel::Spectra6].into_iter().chain(byod) {
             let img = default_screen(panel);
             assert_eq!(img.dimensions(), panel.size());
             // Some ink, mostly paper.
