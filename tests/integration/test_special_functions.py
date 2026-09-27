@@ -139,7 +139,10 @@ class SpecialFunctions(Case):
         # downloadAndShow() takes the "image already cached" path with the answer's filename.
         # The OG doesn't cache BMP images under their filename (only PNG and JPEG), so with a
         # BMP it is always "empty or unreadable": the device submits an error log and draws an error message
-        # over the image it just showed.
+        # over the image it just showed. Where the image is a PNG, send_to_me doesn't get that
+        # far: it looks for /current.bmp or /current.png (bl.cpp:2073), but PNGs are only
+        # saved under their filename (bl.cpp:1616-1618 writes nothing but /current.bmp), so
+        # it finds "No current image!" and shows an error instead.
         two_path, two = device_image(dev().mock, "two", device_number("2"))
         with dev().boot() as s:
             self.assign(s, "send_to_me", image="two")
