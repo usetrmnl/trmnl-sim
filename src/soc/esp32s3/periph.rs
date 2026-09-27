@@ -158,6 +158,9 @@ pub struct Periph {
     pub gpio_status: u64,
     /// Bytes the firmware wrote to the USB serial/JTAG console.
     pub console_out: Vec<u8>,
+    /// The firmware has written to the USB serial/JTAG console since the last reset: its
+    /// UART0 output (IDF 5's secondary console mirrors everything to both) is left out.
+    usb_console_used: bool,
     usb_raw: u32,
     usb_last_sof: u64,
     pub lcd_raw: u32,
@@ -193,6 +196,7 @@ impl Periph {
             gpio_in: 0,
             gpio_status: 0,
             console_out: Vec::new(),
+            usb_console_used: false,
             usb_raw: 0,
             usb_last_sof: 0,
             lcd_raw: 0,
@@ -248,6 +252,7 @@ impl Periph {
         self.gpio_oe = 0;
         self.gpio_status = 0;
         self.usb_raw = 0;
+        self.usb_console_used = false;
         self.lcd_raw = 0;
         self.reset_request = None;
         // Core 1 comes out of reset held in reset, clock-gated.
@@ -512,7 +517,10 @@ impl S3Bus {
             _ if a == I2C0 + 0x28 => self.irq_dirty = true,
 
             // USB serial/JTAG console
-            _ if a == USB_JTAG => self.p.console_out.push(v as u8),
+            _ if a == USB_JTAG => {
+                self.p.console_out.push(v as u8);
+                self.p.usb_console_used = true;
+            }
             _ if a == USB_JTAG + 0x14 => {
                 self.p.usb_raw &= !v;
                 self.irq_dirty = true;
@@ -661,7 +669,7 @@ impl S3Bus {
         match off {
             0x00 => {
                 self.board.uart_tx(now, u as u8, &[v as u8]);
-                if self.board.uart_is_console(u as u8) {
+                if self.board.uart_is_console(u as u8) && !self.p.usb_console_used {
                     // e.g. Serial on builds without USB CDC on boot (ARDUINO_USB_CDC_ON_BOOT=0)
                     self.p.console_out.push(v as u8);
                 }

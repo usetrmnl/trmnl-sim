@@ -8,11 +8,25 @@ from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
+KNOWN_FAILURES: dict[str, dict[str, str]] = {
+    "TRMNL_X_PAPERS3": {
+        "FreshDevice.test_setup_screen": PARALLEL_SMALL_PANEL,
+        "FreshDevice.test_setup_screen_names_the_access_point": PARALLEL_SMALL_PANEL,
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps": PARALLEL_SMALL_PANEL,
+        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
+        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
+    },
+}
+
 # Firmware layout bug on panels smaller than 800x480: display_show_msg() puts the screens'
 # texts at the OG's fixed coordinates (the version line at (40, 48) next to the QR code at
 # width - 106, the portal texts at y 386 and 340) and centres lines wider than the panel.
 SMALL_PANEL = ("display_show_msg() lays the screen out for 800x480 (display.cpp:2796-2813, 2559, 2225-2243): "
                "texts off the bottom, cut off at the sides, the version line under the QR code")
+# ...and on the parallel (FastEPD) boards smaller than the TRMNL X: the X's Inter_18 font
+# (display.cpp:2759-2760) and 2x logo, with the texts at X offsets from the bottom.
+PARALLEL_SMALL_PANEL = ("display_show_msg() uses the TRMNL X's Inter_18 font and big logo on every parallel panel "
+                        "(display.cpp:2759-2760, 2805, 2561, 2232): at 960x540 lines run off the sides and over the logo")
 
 KNOWN_FAILURES: dict[str, dict[str, str]] = {
     "CrowPanel42": {

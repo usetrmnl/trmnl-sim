@@ -482,6 +482,7 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
     // ...unless it has real behaviour here.
     let real: &[(&'static str, super::HookFn)] = &[
         ("esp_wifi_init", wifi_init),
+        ("esp_wifi_deinit", wifi_deinit),
         ("esp_wifi_set_mode", set_mode),
         ("esp_wifi_get_mode", get_mode),
         ("esp_wifi_start", start),
@@ -544,6 +545,16 @@ fn wifi_init(c: &mut HleCtx) -> Flow {
             Flow::Return(Some(ESP_OK))
         }),
     }
+}
+
+/// Like the real driver (wifi_init.c), deinit unregisters the interfaces' receive callbacks:
+/// the netifs they belong to go away, and a frame for the next soft-AP must not reach the
+/// old one's glue before the new netif registers (a NULL esp_netif_receive on IDF 5).
+fn wifi_deinit(c: &mut HleCtx) -> Flow {
+    let w = &mut c.state.wifi;
+    w.rxcb = [0; 2];
+    w.rx.clear();
+    Flow::Return(Some(ESP_OK))
 }
 
 fn set_mode(c: &mut HleCtx) -> Flow {
