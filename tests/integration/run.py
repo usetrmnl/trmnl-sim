@@ -6,6 +6,15 @@
     python3 run.py --no-cache       # build the devices the tests start from afresh
     python3 run.py xteink_x4        # every test of a PlatformIO environment (or --env NAME)
     python3 run.py --list-envs      # the environments and how many tests each has
+    python3 run.py --comprehensive  # also the full general suite on a device per family
+    python3 run.py --exhaustive     # the full general suite on every device
+    python3 run.py --dry-run ...    # print what would run
+
+With no selectors, every device's own tests run, the general tests (ENV = ANY) in full on the
+TRMNL OG, and devices.SMOKE (one general test per area) on every other device.
+--comprehensive runs the full general suite on devices.REPRESENTATIVES (one per family of
+devices sharing chip, panel controller and inks) instead of the smoke tests;
+--exhaustive, on every device.
 
 Every test class says which PlatformIO environment's build it runs: its `ENV` attribute,
 else its module's `ENV`. A selector that isn't a test module (test_*) is an environment
@@ -321,18 +330,20 @@ def env_units(envs: list[str]) -> list[tuple[str, str]]:
 def list_envs() -> None:
     from support import build_for_env
 
-    from devices import ANY, DEVICES
+    from devices import ANY, DEVICES, REPRESENTATIVES, SMOKE
 
     by_env = classes_by_env()
     general = sum(TEST_COUNTS.get(c, 0) for c in by_env.get(ANY, []))
-    print(f"{general} general tests run on every device unless noted\n")
-    print(f"{'environment':32} {'own':>5} {'total':>5}  build")
+    print(f"{general} general tests; bin/spec runs them in full on the OG and {len(SMOKE)} smoke tests on the other "
+          f"devices, --comprehensive in full on the devices marked *, --exhaustive in full everywhere\n")
+    print(f" {'environment':31} {'own':>5} {'total':>5}  build")
     for env in sorted(DEVICES, key=str.lower):
         built = "yes" if (build_for_env(env) / "firmware.elf").exists() else "missing"
         own = sum(TEST_COUNTS.get(c, 0) for c in by_env.get(env, []))
         why = DEVICES[env].general
         total = own if why else own + general
-        print(f"{env:32} {own:>5} {total:>5}  {built}" + (f"  (no general tests: {why})" if why else ""))
+        mark = "*" if env in REPRESENTATIVES else " "
+        print(f"{mark}{env:31} {own:>5} {total:>5}  {built}" + (f"  (no general tests: {why})" if why else ""))
 
 
 def split_by_class(unit: str) -> list[str]:
@@ -359,7 +370,46 @@ def split_by_class(unit: str) -> list[str]:
 
 
 def unit_name(unit) -> str:
-    return f"{unit[0]} [{unit[1]}]" if isinstance(unit, tuple) else unit
+    if not isinstance(unit, tuple):
+        return unit
+    sel, env = unit
+    if isinstance(sel, tuple):
+        sel = f"{sel[0].split('.')[0]} smoke"
+    return f"{sel} [{env}]"
+
+
+def plan(tier: str) -> list:
+    """Run units for the whole suite at `tier` (standard, comprehensive or exhaustive)."""
+    from devices import ANY, DEVICES, REPRESENTATIVES, SMOKE
+
+    by_env = classes_by_env()
+    missing = [t for t in SMOKE if not _test_exists(t)]
+    if missing:
+        sys.exit(f"devices.SMOKE names tests that don't exist: {', '.join(missing)}")
+    modules = sorted(test_modules(), key=lambda m: (m not in SLOW_FIRST, SLOW_FIRST.index(m) if m in SLOW_FIRST else 0, m))
+    units: list = [u for m in modules for u in split_by_class(m)]  # general ones on the OG
+    general = set(by_env.get(ANY, []))
+    for env, d in DEVICES.items():
+        if env == "trmnl" or d.general:
+            continue
+        if tier == "exhaustive" or (tier == "comprehensive" and env in REPRESENTATIVES):
+            units += [(u, env) for u in units_of(general, by_env)]
+        else:
+            per_module: dict[str, list[str]] = {}
+            for t in SMOKE:
+                per_module.setdefault(t.split(".")[0], []).append(t)
+            units += [(tuple(ts), env) for ts in per_module.values()]
+    return units
+
+
+def _test_exists(test_id: str) -> bool:
+    import importlib
+
+    module, cls, name = test_id.split(".")
+    try:
+        return hasattr(getattr(importlib.import_module(module), cls), name)
+    except (ImportError, AttributeError):
+        return False
 
 
 def run_parallel(jobs: int, flags: list[str], units: list) -> bool:
@@ -377,6 +427,7 @@ def run_parallel(jobs: int, flags: list[str], units: list) -> bool:
             while pending and len(running) < jobs:
                 unit = pending.pop(0)
                 selector, device = unit if isinstance(unit, tuple) else (unit, None)
+                selectors = list(selector) if isinstance(selector, tuple) else [selector]
                 stem = unit_name(unit).replace(" ", "")
                 result, log = tmp / f"{stem}.json", tmp / f"{stem}.log"
                 fh = open(log, "w+")
@@ -384,7 +435,7 @@ def run_parallel(jobs: int, flags: list[str], units: list) -> bool:
                 if device:
                     wenv["TRMNL_SIM_DEVICE"] = device
                 proc = subprocess.Popen(
-                    [sys.executable, __file__, "-j", "1", *flags, selector],
+                    [sys.executable, __file__, "-j", "1", *flags, *selectors],
                     cwd=HERE, env=wenv,
                     stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
                 )
@@ -431,12 +482,30 @@ def run_parallel(jobs: int, flags: list[str], units: list) -> bool:
 
 if __name__ == "__main__":
     jobs, flags, selectors = parse_args(sys.argv[1:])
+    tier = "exhaustive" if "--exhaustive" in flags else "comprehensive" if "--comprehensive" in flags else "standard"
+    dry_run = "--dry-run" in flags
+    flags = [f for f in flags if f not in ("--exhaustive", "--comprehensive", "--dry-run")]
+    if not selectors and not os.environ.get("TRMNL_SPEC_RESULT") and "--list-envs" not in flags:
+        units = plan(tier)
+        if dry_run:
+            for u in units:
+                print(unit_name(u) + (f": {' '.join(u[0])}" if isinstance(u, tuple) and isinstance(u[0], tuple) else ""))
+            print(f"{len(units)} test groups ({tier})")
+            sys.exit(0)
+        ok = run_parallel(jobs, flags, units)
+        if os.environ.get("TRMNL_SIM_COVERAGE"):
+            report_coverage(os.environ["TRMNL_SIM_COVERAGE"])
+        sys.exit(not ok)
     if "--list-envs" in flags:
         list_envs()
         sys.exit(0)
     envs = [s for s in selectors if is_env(s)]
     if envs:
         units = [u for s in selectors if not is_env(s) for u in split_by_class(s)] + env_units(envs)
+        if dry_run:
+            for u in units:
+                print(unit_name(u))
+            sys.exit(0)
         if jobs == 1:
             # one environment at a time, each in-process run with its device under test
             ok = True

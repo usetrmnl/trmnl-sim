@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Run the integration tests: real firmware builds in the simulator against a mock server.
 #
-#   bin/spec                      # all of them, test modules in parallel (about 1.5 minutes)
+#   bin/spec                      # every device: its own tests, the general tests in full on the
+#                                 # OG and a smoke test per area (devices.SMOKE) on the others
+#   bin/spec --comprehensive      # the general tests in full on one device per family too
+#   bin/spec --exhaustive         # the general tests in full on every device (slow)
+#   bin/spec --dry-run [...]      # print what would run
 #   bin/spec -j 1                 # one module at a time (-j N: at most N at once)
 #   bin/spec --no-cache           # redo the factory flow and onboarding (as CI does)
 #   bin/spec test_trmnl_x         # a module, class or test (unittest selectors)

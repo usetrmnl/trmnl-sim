@@ -383,6 +383,17 @@ scripts/integration-tests.sh test_refresh_cycle.RefreshCycle.test_button_press_w
 scripts/integration-tests.sh test_trmnl_x     # only the TRMNL X tests
 ```
 
+How much runs:
+
+| Command | Runs |
+|---|---|
+| `bin/spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (`SMOKE` in [devices.py](tests/integration/devices.py)): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
+| `bin/spec --comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES`: devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `bin/spec --list-envs` marks them with `*`) |
+| `bin/spec --exhaustive` | the general tests in full on every device |
+| `bin/spec <env>` | everything for one device: its own tests and all the general tests |
+
+`--dry-run` prints the test groups a command would run.
+
 To test one device, name its PlatformIO environment (`bin/spec` is the same script):
 
 ```sh

@@ -97,3 +97,49 @@ def by_build_name(name: str) -> Device | None:
 def under_test() -> Device:
     """The device the general tests run on: TRMNL_SIM_DEVICE, else the TRMNL OG."""
     return device(os.environ.get("TRMNL_SIM_DEVICE") or "trmnl")
+
+
+# ---- how much of the general suite runs where (run.py tiers) ----------------------------------
+#
+# Devices share firmware code paths by chip, panel controller and inks. `bin/spec` runs
+# every device's own tests, the full general suite on the OG, and SMOKE (one test per area)
+# on every other device; `--comprehensive` runs the full general suite on one representative
+# per family as well; `--exhaustive`, on every device.
+
+FAMILIES: dict[str, list[str]] = {
+    # family: its devices, the representative first
+    "ESP32-C3, UC81xx, black and white": ["trmnl", "seeed_xiao_esp32c3", "xteink_x3", "trmnl_steam"],
+    "ESP32-C3, UC81xx, 4-color": ["trmnl_4clr"],
+    "ESP32-C3, SSD16xx": ["xteink_x4"],
+    "ESP32-S3, UC81xx, black and white": ["seeed_reTerminal_E1001", "seeed_xiao_esp32s3", "TRMNL_7inch5_OG_DIY_Kit",
+                                          "TRMNL_7inch5_OG_DIY_Kit_3CLR"],
+    "ESP32-S3, UC81xx, Spectra 6": ["seeed_reTerminal_E1002", "TRMNL_7inch5_OG_DIY_Kit_6CLR", "seeed_reTerminal_E1004",
+                                    "m5_paper_color"],
+    "ESP32-S3, SSD16xx": ["CrowPanel42", "TRMNL_4inch26_DIY_Kit", "WAVESHARE_397", "seeed_sticky", "m5_paper_mono"],
+    "ESP32-S3, parallel, TRMNL X": ["TRMNL_X"],
+    "ESP32-S3, parallel, BYOD": ["TRMNL_X_PAPERS3", "TRMNL_X_LILYGO_T5PRO"],
+    "ESP32-C5": ["trmnl_gen2", "trmnl_gen2_4clr", "TRMNL_X_SENSORIAC5"],
+}
+
+REPRESENTATIVES = [devices[0] for devices in FAMILIES.values()]
+
+# One general test per area, run on every device (test ids: module.Class.test).
+SMOKE = [
+    "test_setup_mode.FreshDevice.test_setup_screen_names_the_access_point",
+    "test_setup_mode.Onboarding.test_onboarding_registers_with_server",
+    "test_setup_mode.Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
+    "test_portal.ScanList.test_access_points_are_merged_by_ssid",
+    "test_refresh_cycle.RefreshCycle.test_reports_device_identity",
+    "test_refresh_cycle.RefreshCycle.test_reports_battery_voltage",
+    "test_refresh_cycle.RefreshCycle.test_image_is_rendered_exactly",
+    "test_refresh_cycle.RefreshCycle.test_timer_wake_fetches_next_image",
+    "test_refresh_cycle.RefreshCycle.test_button_press_wakes_and_refreshes",
+    "test_refresh_cycle.RefreshCycle.test_credentials_survive_power_cycle",
+    "test_refresh_cycle.FirmwareUpdate.test_ota_update_installs_and_boots_other_slot",
+    "test_images.Png.test_2bit_png_uses_4_gray_levels",
+    "test_https.OtherServer.test_onboarding_and_refreshes_over_https",
+    "test_faults.ServerErrors.test_http_500_from_api_display_is_retried_then_sleeps",
+    "test_errors.ErrorScreens.test_api_unreachable",
+    "test_savepoints.SavePoints.test_timer_wake_refreshes_without_onboarding",
+    "test_special_functions.SpecialFunctions.test_identify_shows_the_identify_image",
+]
