@@ -81,7 +81,8 @@ class PortalTimeout(unittest.TestCase):
         with sim(erase=True, extra_args=("--offline",)) as s:
             s.wait(portal=True, timeout_s=90)
             s.set_portal_client(False)  # nobody joins, so turbo can run to the timeout
-            st = s.wait(state="deep_sleep", timeout_s=40)["status"]
+            # (a slow panel is still showing the message when the chip sleeps)
+            st = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
             self.assertGreaterEqual(st["sim_time_s"], 15 * 60)
             # "Wifi Captive Portal timed out" / "Press button to try again"
             assert_golden(s, "portal_timed_out.png", region=REGIONS["timed_out"])
@@ -115,7 +116,7 @@ class Onboarding(unittest.TestCase):
             s.portal_connect(ssid, password)
             s.wait_for_console(f'connecting to "{ssid}"', timeout_s=60)
             s.wait(portal=False, timeout_s=60)  # the setup AP goes away while joining
-            s.wait(state="deep_sleep", timeout_s=180)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=180)
             # "Can't establish WiFi connection. Will keep trying..." (the missing
             # apostrophe is a known firmware font bug; update the golden once fixed)
             assert_golden(s, "wifi_failed_message.png", region=REGIONS["wifi_failed"])

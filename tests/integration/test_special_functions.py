@@ -4,7 +4,7 @@ double click (or a 1-5 s press) of the button runs it on the next wake. Also the
 
 import unittest
 
-from support import ProvisionedDevice, close_fixtures, device_image, device_number, fixture, needs
+from support import DEVICES, ProvisionedDevice, close_fixtures, device_image, device_number, fixture, needs
 
 from devices import ANY
 
@@ -23,9 +23,13 @@ CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].On
 # reading the button, not from the wake. If the first click is still held then (the firmware
 # took longer to boot than usual) but released within 50 ms, it is NoAction and the second
 # click is never waited for.
-SLOW_BOOT_CLICK = ("button.cpp:84-92: a first click still held when classify_button_presses() starts (50 ms after "
-                   "boot) but released within 50 ms counts as NoAction; the double click is lost")
+SLOW_BOOT_CLICK = ("button.cpp:84-92: a first click still held when classify_button_presses() starts reading (here "
+                   "~50 ms after the wake) but released within 50 ms counts as NoAction; the double click is lost")
 
+# The sleep special function keeps the screen only where it isn't a BMP (see
+# test_sleep_keeps_the_screen): BMPs aren't cached under their filename.
+BMP_NOT_CACHED = ("sleep: status=false/HTTPS_SUCCESS takes the cached-image path (bl.cpp:1478), but BMPs are only "
+                  "saved as /current.bmp: \"Cached image is empty or unreadable\", an error log and message")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
@@ -39,7 +43,13 @@ KNOWN_FAILURES = {
         "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": CROWPANEL_PNG,
         "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
     },
+    "seeed_reTerminal_E1002": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
 }
+for _d in DEVICES.values():
+    if _d.default_bmp:
+        KNOWN_FAILURES.setdefault(_d.env, {})["SpecialFunctions.test_sleep_keeps_the_screen"] = BMP_NOT_CACHED
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -93,10 +103,10 @@ class SpecialFunctions(Case):
             st = s.wait(state="deep_sleep", timeout_s=90)["status"]
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 1800, delta=30)
 
-    @unittest.expectedFailure
     def test_sleep_keeps_the_screen(self):
-        # Like send_to_me (see there): status=false/HTTPS_SUCCESS makes the OG look for the
-        # answer's image in a cache it doesn't have, then report and show an error.
+        # Where the server's default image is a BMP (see KNOWN_FAILURES), like send_to_me (see
+        # there): status=false/HTTPS_SUCCESS makes the OG look for the answer's image in a
+        # cache it doesn't have, then report and show an error.
         with dev().boot() as s:
             self.assign(s, "sleep")
             screen = s.screenshot()
