@@ -8,6 +8,7 @@ use super::bus::{MMU_ENTRIES, MMU_TABLE, PERIPH_BASE, PERIPH_SIZE, S3Bus};
 use crate::periph::crypto_math::{aes_block, aes_blocks, rsa_op};
 use crate::periph::i2c::I2c;
 use crate::periph::sha::Sha;
+use crate::soc::Console;
 use crate::periph::systimer::Systimer;
 
 /// Interrupt sources (soc/interrupts.h for the S3), = map register offset / 4.
@@ -156,8 +157,10 @@ pub struct Periph {
     pub gpio_oe: u64,
     pub gpio_in: u64,
     pub gpio_status: u64,
-    /// Bytes the firmware wrote to the USB serial/JTAG console.
+    /// Bytes the firmware wrote to the console: USB serial/JTAG, plus UART0 on boards where
+    /// it is the console (merged, see [`Console`]).
     pub console_out: Vec<u8>,
+    console: Console,
     usb_raw: u32,
     usb_last_sof: u64,
     pub lcd_raw: u32,
@@ -193,6 +196,7 @@ impl Periph {
             gpio_in: 0,
             gpio_status: 0,
             console_out: Vec::new(),
+            console: Console::default(),
             usb_raw: 0,
             usb_last_sof: 0,
             lcd_raw: 0,
@@ -509,7 +513,13 @@ impl S3Bus {
             _ if a == I2C0 + 0x28 => self.irq_dirty = true,
 
             // USB serial/JTAG console
-            _ if a == USB_JTAG => self.p.console_out.push(v as u8),
+            _ if a == USB_JTAG => {
+                if self.board.uart_is_console(0) {
+                    self.p.console.push(1, v as u8, &mut self.p.console_out);
+                } else {
+                    self.p.console_out.push(v as u8);
+                }
+            }
             _ if a == USB_JTAG + 0x14 => {
                 self.p.usb_raw &= !v;
                 self.irq_dirty = true;
@@ -657,6 +667,9 @@ impl S3Bus {
     fn uart_write(&mut self, u: usize, off: u32, v: u32, now: u64) {
         match off {
             0x00 => {
+                if self.board.uart_is_console(u as u8) {
+                    self.p.console.push(0, v as u8, &mut self.p.console_out);
+                }
                 self.board.uart_tx(now, u as u8, &[v as u8]);
                 self.p.uart[u].raw |= 1 << 14; // TX_DONE
                 self.irq_dirty = true;

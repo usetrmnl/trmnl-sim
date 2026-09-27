@@ -111,3 +111,34 @@ pub struct NetStatus {
     /// Host URL forwarding to the device's captive portal while it runs a soft-AP.
     pub portal_url: Option<String>,
 }
+
+/// Merges the two console channels. IDF logs to UART0 (primary console) and USB serial/JTAG
+/// (secondary) alike, while Arduino's `Serial` and the ROM use one of them: a line that
+/// arrives on both channels is shown once.
+#[derive(Default)]
+pub struct Console {
+    partial: [Vec<u8>; 2],
+    /// Lines shown from each channel that the other hasn't repeated (yet).
+    unmatched: [std::collections::VecDeque<Vec<u8>>; 2],
+}
+
+impl Console {
+    pub fn push(&mut self, ch: usize, b: u8, out: &mut Vec<u8>) {
+        self.partial[ch].push(b);
+        if b != b'\n' && self.partial[ch].len() < 512 {
+            return;
+        }
+        let line = std::mem::take(&mut self.partial[ch]);
+        let other = &mut self.unmatched[1 - ch];
+        if let Some(i) = other.iter().position(|l| *l == line) {
+            other.remove(i);
+            return;
+        }
+        out.extend_from_slice(&line);
+        let mine = &mut self.unmatched[ch];
+        mine.push_back(line);
+        if mine.len() > 16 {
+            mine.pop_front();
+        }
+    }
+}
