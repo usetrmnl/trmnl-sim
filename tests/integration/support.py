@@ -116,6 +116,8 @@ GOLDEN_REGIONS: dict[str, dict[str, tuple[int, int, int, int]]] = {
         "setup_ssid_line.png": (400, 1236, 1072, 48),
         # "Can't establish WiFi connection. Will keep trying." (the X's font has the apostrophe)
         "wifi_failed_message.png": (480, 1160, 912, 48),
+        # "WiFi connected, unable connect to API." and how to retry (tap the touch bar)
+        "api_unable_to_connect.png": (580, 306, 712, 136),
     },
 }
 
