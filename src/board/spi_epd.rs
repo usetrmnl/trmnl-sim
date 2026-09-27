@@ -13,7 +13,7 @@ use crate::devices::i2c::bq27220::Bq27220;
 use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
 use crate::devices::i2c::m5_py32::M5Py32;
 use crate::devices::i2c::m5ioe1::M5Ioe1;
-use crate::devices::ssd1677::Ssd1677;
+use crate::devices::ssd16xx::{Glass, Ssd16xx};
 use crate::devices::uc8179::{ColorPanel, Uc8179, X3_RESPONSE};
 use crate::savepoint::{StateReader, StateWriter};
 
@@ -80,6 +80,14 @@ pub enum Panel {
     /// (EP426_800x480, 4-gray EP426_800x480_4GRAY) whose LDO and RST hang off GPIO3 and GPIO5
     /// of the board's M5IOE1 expander (I2C 0x4f).
     M5PaperMono,
+    /// SSD1677, 4.26" 800x480 black and white (EP426_800x480, 4-gray capable).
+    Ssd1677Ep426,
+    /// SSD1677, 3.97" 800x480 black and white (EP397_800x480, 4-gray capable).
+    Ssd1677Ep397,
+    /// The 3.97" panel mounted rotated 180 degrees (see [`Glass::Ep397Flipped`]).
+    Ssd1677Ep397Flipped,
+    /// SSD1683, 4.2" 400x300 black and white (EP42B_400x300, 4-gray capable).
+    Ssd1683Ep42b,
 }
 
 /// What switches the panel's supply. Unpowered, the controller ignores its inputs and
@@ -105,7 +113,11 @@ impl Panel {
             Panel::Uc81xx583 => Box::new(Uc8179::with_size(rev, 648, 480)),
             Panel::Uc81xx368 => Box::new(Uc8179::with_size(rev, 792, 528).with_response(X3_RESPONSE)),
             Panel::M5PaperColor => Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 400, 600)),
-            Panel::M5PaperMono => Box::new(Ssd1677::new()),
+            Panel::M5PaperMono => Box::new(Ssd16xx::new(Glass::Ep426)),
+            Panel::Ssd1677Ep426 => Box::new(Ssd16xx::new(Glass::Ep426)),
+            Panel::Ssd1677Ep397 => Box::new(Ssd16xx::new(Glass::Ep397)),
+            Panel::Ssd1677Ep397Flipped => Box::new(Ssd16xx::new(Glass::Ep397Flipped)),
+            Panel::Ssd1683Ep42b => Box::new(Ssd16xx::new(Glass::Ep42b)),
             Panel::SeeedE1004 => Box::new(DualSpiEpd::new(
                 Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 600, 1600)),
                 Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 600, 1600)),
@@ -127,6 +139,9 @@ impl Panel {
             Panel::M5PaperColor => EpdPower::M5Py32Gpio0,
             Panel::SeeedE1004 => EpdPower::Gpio(12),
             Panel::M5PaperMono => EpdPower::M5Ioe1Gpio3,
+            // board supply switches: Seeed Sticky GPIO47, CrowPanel GPIO7
+            Panel::Ssd1677Ep397Flipped => EpdPower::Gpio(47),
+            Panel::Ssd1683Ep42b => EpdPower::Gpio(7),
             _ => EpdPower::Always,
         }
     }
@@ -134,7 +149,10 @@ impl Panel {
     /// What the built-in mock server serves this panel.
     pub fn mock_panel(self) -> mock_trmnl::Panel {
         match self {
-            Panel::Uc8179 => mock_trmnl::Panel::Og,
+            Panel::Uc8179 | Panel::Ssd1677Ep426 | Panel::Ssd1677Ep397 | Panel::Ssd1677Ep397Flipped => {
+                mock_trmnl::Panel::Og
+            }
+            Panel::Ssd1683Ep42b => mock_trmnl::Panel::new(mock_trmnl::Inks::Mono, 400, 300),
             Panel::Uc8179Bwry => mock_trmnl::Panel::Bwry,
             Panel::Uc8179Spectra6 => mock_trmnl::Panel::Spectra6,
             // The firmware shows images in black and white only on this panel.
@@ -251,6 +269,54 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Spectra6,
     },
     BoardSpec {
+        model: "xteink_x4",
+        envs: &["xteink_x4", "xteink_x4_pwr_btn"],
+        name: "Xteink X4",
+        chip: Chip::Esp32c3,
+        pins: Pins { sck: 8, mosi: 10, cs: 21, rst: 5, dc: 4, busy: 6, button: 3 },
+        // The LiPo's divider is on GPIO0 (config.h PIN_BATTERY), but device_list[] has
+        // batt_pin 0xff: the firmware never reads it and reports 0 V.
+        battery: Battery::Adc { pin: 0, enable: None },
+        panel: Panel::Ssd1677Ep426,
+    },
+    BoardSpec {
+        model: "xiao_epaper_mini",
+        envs: &["TRMNL_4inch26_DIY_Kit"],
+        name: "TRMNL 4.26\" DIY Kit",
+        chip: Chip::Esp32s3,
+        pins: Pins { button: 2, ..XIAO_EPAPER_PINS },
+        battery: Battery::Adc { pin: 1, enable: Some(6) },
+        panel: Panel::Ssd1677Ep426,
+    },
+    BoardSpec {
+        model: "waveshare_397",
+        envs: &["WAVESHARE_397"],
+        name: "Waveshare ESP32-S3 3.97\"",
+        chip: Chip::Esp32s3,
+        pins: Pins { sck: 11, mosi: 12, cs: 10, rst: 46, dc: 9, busy: 3, button: 0 },
+        battery: Battery::Axp2101,
+        panel: Panel::Ssd1677Ep397,
+    },
+    BoardSpec {
+        model: "seeed_sticky",
+        envs: &["seeed_sticky"],
+        name: "Seeed Sticky",
+        chip: Chip::Esp32s3,
+        pins: Pins { sck: 13, mosi: 14, cs: 15, rst: 17, dc: 16, busy: 18, button: 4 },
+        battery: Battery::Bq27220,
+        panel: Panel::Ssd1677Ep397Flipped,
+    },
+    BoardSpec {
+        model: "crowpanel42",
+        envs: &["CrowPanel42"],
+        name: "CrowPanel 4.2\"",
+        chip: Chip::Esp32s3,
+        // Wired as bb_epaper's begin(EPD_CROWPANEL42) has it (device_list[] pins are 0).
+        pins: Pins { sck: 12, mosi: 11, cs: 45, rst: 47, dc: 46, busy: 48, button: 2 },
+        battery: Battery::None,
+        panel: Panel::Ssd1683Ep42b,
+    },
+    BoardSpec {
         model: "trmnl_steam",
         envs: &["trmnl_steam"],
         name: "TRMNL Steam",
@@ -356,6 +422,9 @@ impl SpiEpdBoard {
             epd_powered: false,
         };
         b.epd_powered = b.epd_supply();
+        if !b.epd_powered {
+            b.panel.set_power(0, false); // until the firmware switches it on
+        }
         b
     }
 
@@ -400,6 +469,9 @@ impl SpiEpdBoard {
     /// Follow the panel's supply; power coming on resets the controller (a RST pulse).
     fn update_epd_power(&mut self, now: u64) {
         let on = self.epd_supply();
+        if on != self.epd_powered {
+            self.panel.set_power(now, on);
+        }
         if on && !self.epd_powered {
             self.panel.set_pins(now, true, true, false, false, false);
         }

@@ -24,6 +24,8 @@ pub trait SpiEpd: Send {
     fn busy_level(&self) -> bool {
         false
     }
+    /// The board switched the panel's supply (boards with a panel power switch).
+    fn set_power(&mut self, _now: u64, _on: bool) {}
     /// Next time the controller wants `update` (refresh animation, BUSY release).
     fn next_event(&self, now: u64) -> Option<u64>;
     /// Advance the refresh animation to `now`.
