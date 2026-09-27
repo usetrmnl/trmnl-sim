@@ -14,6 +14,20 @@ from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
+# Firmware bug on the gen-2 boards (ESP32-C5): ClockGen2::waitForSync() (clock_gen2.cpp:9-11)
+# waits for NTP with no timeout. With a static IP on a subnet that doesn't reach the
+# network (as here: 192.168.4.50 behind the simulated AP), it never gets the time and never
+# sleeps.
+C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the clock, with no timeout; "
+                  "unreachable NTP (this static IP's subnet) keeps the device awake forever")
+KNOWN_FAILURES = {
+    env: {
+        "JoinOptions.test_static_ip": C5_NTP_FOREVER,
+        "JoinOptions.test_static_ip_with_defaults": C5_NTP_FOREVER,
+    }
+    for env in ("trmnl_gen2", "trmnl_gen2_4clr")
+}
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 dev = fixture(ProvisionedDevice)

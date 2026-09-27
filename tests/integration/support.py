@@ -97,7 +97,7 @@ def device_number(text: str, device: Device | None = None):
     return lambda x, y: number(x + dx, y + dy)
 
 
-def golden(name: str, device: Device | None = None) -> Path:
+def device_golden(name: str, device: Device | None = None) -> Path:
     """The golden screenshot `name` for `device` (the one under test): its own in
     golden/<env>/ if it has that directory, else the OG's in golden/ for other 800x480
     panels (same layout), else golden/<env>/name (missing: see assert_golden)."""
@@ -109,11 +109,11 @@ def golden(name: str, device: Device | None = None) -> Path:
 
 
 def assert_golden(s: Simulator, name: str, region=None, device: Device | None = None, **kw) -> None:
-    """Simulator.assert_screen against golden(name), except that a missing golden fails
+    """Simulator.assert_screen against device_golden(name), except that a missing golden fails
     instead of being written, unless TRMNL_SIM_UPDATE_GOLDEN=1: a new device's goldens are
     made on purpose, and looked at before they are committed."""
     d = device or DEVICE
-    path = golden(name, d)
+    path = device_golden(name, d)
     # only the device's own goldens are rewritten (another device's run leaves the OG's alone)
     if os.environ.get("TRMNL_SIM_UPDATE_GOLDEN") == "1" and (d.env == "trmnl" or path.parent.name == d.env):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -295,4 +295,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "device_number", "golden", "assert_golden", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "device_number", "device_golden", "assert_golden", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
