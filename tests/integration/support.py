@@ -262,6 +262,9 @@ KNOWN_MEMORY_BUGS = (
     # (and leaving that byte, not a NUL, after the text). Seen when the server sends a
     # Content-Length (the built-in mock server does).
     "_ZNK16HttpRetryRequest12bodyAsStringEv",
+    # display_show_msg_qa copies a panel-sized 1-bit frame from 62 bytes into startQA()'s
+    # 48000-byte buffer (factory QA only): 62 bytes past its end on 800x480 panels.
+    "_Z19display_show_msg_qaPhPKfS1_b",
 )
 
 
