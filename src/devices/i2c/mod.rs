@@ -168,20 +168,36 @@ impl I2cBus {
 
     /// Every device's save point state, in attachment order.
     pub fn save_state(&self, w: &mut StateWriter) {
-        w.u32(self.devices.len() as u32);
-        for d in &self.devices {
+        self.save_state_where(w, |_| true);
+    }
+
+    pub fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
+        self.restore_state_where(r, |_| true)
+    }
+
+    /// The save point state of the devices `keep` selects (the others, e.g. optional
+    /// add-ons, may differ between saving and restoring).
+    pub fn save_state_where(&self, w: &mut StateWriter, keep: impl Fn(&dyn I2cDevice) -> bool) {
+        let kept: Vec<&Box<dyn I2cDevice>> = self.devices.iter().filter(|d| keep(d.as_ref())).collect();
+        w.u32(kept.len() as u32);
+        for d in kept {
             w.u8(d.address());
             w.section(|w| d.save_state(w));
         }
     }
 
-    pub fn restore_state(&mut self, r: &mut StateReader) -> anyhow::Result<()> {
-        if r.u32()? as usize != self.devices.len() {
+    pub fn restore_state_where(
+        &mut self,
+        r: &mut StateReader,
+        keep: impl Fn(&dyn I2cDevice) -> bool,
+    ) -> anyhow::Result<()> {
+        let n = self.devices.iter().filter(|d| keep(d.as_ref())).count();
+        if r.u32()? as usize != n {
             anyhow::bail!("save point has a different set of I2C devices");
         }
         self.target = None;
         self.participants.clear();
-        for d in &mut self.devices {
+        for d in self.devices.iter_mut().filter(|d| keep(d.as_ref())) {
             if r.u8()? != d.address() {
                 anyhow::bail!("save point has a different set of I2C devices");
             }

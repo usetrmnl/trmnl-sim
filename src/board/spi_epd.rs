@@ -479,6 +479,13 @@ impl SpiEpdBoard {
     }
 }
 
+/// Chips on the board itself (gauges, PMICs, expanders), as opposed to `--sensor` add-ons,
+/// which save points leave out so a device can be restored with other sensors.
+fn is_board_chip(d: &dyn crate::devices::i2c::I2cDevice) -> bool {
+    let d = d as &dyn std::any::Any;
+    !d.is::<Scd41>() && !d.is::<Aht20>()
+}
+
 impl Board for SpiEpdBoard {
     fn i2c_start(&mut self, now: u64, bus: u8, addr: u8, read: bool) -> bool {
         bus == 0 && self.i2c.start(now, addr, read)
@@ -594,7 +601,7 @@ impl Board for SpiEpdBoard {
         w.u64(self.oe);
         w.section(|w| self.panel.save_state(w, powered));
         if powered {
-            w.section(|w| self.i2c.save_state(w));
+            w.section(|w| self.i2c.save_state_where(w, is_board_chip));
         }
     }
 
@@ -606,7 +613,7 @@ impl Board for SpiEpdBoard {
         self.set_battery_mv(self.battery_mv);
         r.section(|r| self.panel.restore_state(r, powered))?;
         if powered {
-            r.section(|r| self.i2c.restore_state(r))?;
+            r.section(|r| self.i2c.restore_state_where(r, is_board_chip))?;
         }
         self.epd_powered = self.epd_supply();
         Ok(())
