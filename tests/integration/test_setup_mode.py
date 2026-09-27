@@ -18,6 +18,11 @@ SMALL_PANEL = ("display_show_msg() lays the screen out for 800x480 (display.cpp:
 # (display.cpp:2759-2760) and 2x logo, with the texts at X offsets from the bottom.
 PARALLEL_SMALL_PANEL = ("display_show_msg() uses the TRMNL X's Inter_18 font and big logo on every parallel panel "
                         "(display.cpp:2759-2760, 2805, 2561, 2232): at 960x540 lines run off the sides and over the logo")
+# Firmware bug on the ESP32-C5: WifiCaptive::getAPSSID() names the setup network after bytes 3-5
+# of ESP.getEfuseMac(), but on chips with 802.15.4 esp_efuse_mac_get_default() returns the
+# 8-byte EUI-64 OUI:FF:FE:NIC, so those bytes are FF FE and the NIC's first byte.
+C5_AP_NAME = ("WifiCaptive.cpp:27-30 takes the AP name from bytes 3-5 of the C5's EUI-64 factory MAC (FF FE + one "
+              "NIC byte): every gen-2 device's setup network is TRMNL-FFFExx instead of the MAC's last three bytes")
 
 KNOWN_FAILURES: dict[str, dict[str, str]] = {
     "CrowPanel42": {
@@ -33,6 +38,14 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": PARALLEL_SMALL_PANEL,
         "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
         "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
+    },
+    "trmnl_gen2": {
+        "FreshDevice.test_setup_screen": C5_AP_NAME,
+        "FreshDevice.test_setup_screen_names_the_access_point": C5_AP_NAME,
+    },
+    "trmnl_gen2_4clr": {
+        "FreshDevice.test_setup_screen": C5_AP_NAME,
+        "FreshDevice.test_setup_screen_names_the_access_point": C5_AP_NAME,
     },
 }
 

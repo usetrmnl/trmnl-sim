@@ -17,6 +17,8 @@ use crate::firmware::Symbols;
 
 const ESP_OK: u32 = 0;
 const ESP_ERR_WIFI_NOT_CONNECT: u32 = 0x3000 + 15;
+const ESP_ERR_WIFI_NOT_STARTED: u32 = 0x3000 + 2;
+const ESP_ERR_WIFI_MODE: u32 = 0x3000 + 5;
 const ESP_ERR_INVALID_ARG: u32 = 0x102;
 
 /// Entry point of the HLE-driven guest task.
@@ -642,7 +644,9 @@ fn stop(c: &mut HleCtx) -> Flow {
             w.ap_client_joined = false;
         }
         w.connecting = false;
-        w.events.retain(|e| e.id != EV_STA_CONNECTED && e.id != EV_AP_STACONNECTED);
+        // A connection attempt still under way ends here: its outcome (connected, or a
+        // failure's DISCONNECTED) never comes, or it would reach the netif freed after this.
+        w.events.retain(|e| !matches!(e.id, EV_STA_CONNECTED | EV_STA_DISCONNECTED | EV_AP_STACONNECTED));
     }
     let posted = !events.is_empty();
     post_then(c, events.into(), move |c| {
@@ -718,6 +722,14 @@ fn get_config(c: &mut HleCtx) -> Flow {
 fn connect(c: &mut HleCtx) -> Flow {
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
+    // Like the real driver: no station to connect with (e.g. WiFi.reconnect() after
+    // WiFi.disconnect(true) stopped and deinitialised it; its netif is gone too).
+    if !w.started {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_STARTED));
+    }
+    if w.mode & 1 == 0 {
+        return Flow::Return(Some(ESP_ERR_WIFI_MODE));
+    }
     if w.connected.is_none() && !w.connecting {
         let ssid = w.sta_ssid();
         c.env.console(&format!("wifi: connecting to \"{ssid}\""));
