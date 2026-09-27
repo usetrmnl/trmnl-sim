@@ -153,6 +153,15 @@ class SeeedSticky(SsdBoard, unittest.TestCase):
     NAME = "Seeed Sticky"
     MODEL = "seeed_sticky"
 
+    @unittest.expectedFailure
+    def test_shows_a_4_gray_image(self):
+        # Firmware (bb_epaper 2.1.11, the Sticky's pinned version) bug: EP397_800x480_4GRAY
+        # now writes a custom 4-gray LUT (0x32) in its init sequence, but bbepRefresh()
+        # still starts 4-gray refreshes with 0x22 0xD7, whose "load LUT" bit reloads the
+        # built-in LUT over it (the 4.26" and 4.2" panels use 0xC7 / 0xCF, which don't).
+        # The built-in waveform shows the two gray planes as black and white.
+        super().test_shows_a_4_gray_image()
+
     def test_reports_the_battery_from_the_gauge(self):
         with self.dev.boot_asleep() as s:
             s.set_battery(3650)
