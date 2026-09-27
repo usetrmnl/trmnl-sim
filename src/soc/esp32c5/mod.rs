@@ -166,7 +166,7 @@ impl Esp32c5 {
             boots: 0,
             trap_depth: 0,
             irq_counts: [0; 48],
-            hle: HleState::new(periph::Periph::new().mac),
+            hle: dual_band(HleState::new(periph::Periph::new().mac)),
             light_sleep: None,
             coverage: None,
         };
@@ -178,7 +178,7 @@ impl Esp32c5 {
     pub fn set_mac(&mut self, mac: [u8; 6]) {
         self.bus.p.mac = mac;
         let (cfg, portal) = (self.hle.wifi.net_config.clone(), self.hle.wifi.portal_forward);
-        self.hle = HleState::new(mac);
+        self.hle = dual_band(HleState::new(mac));
         self.hle.wifi.set_net_config(cfg);
         self.hle.wifi.portal_forward = portal;
         self.reset(ResetKind::PowerOn);
@@ -247,7 +247,8 @@ impl Esp32c5 {
             return;
         };
         let (off, sha, version) = (app.offset, app.elf_sha256, app.version.clone());
-        self.hle.wifi.set_abi(hle::wifi::WifiAbi::for_idf(&app.idf_version));
+        // Only IDF 5.x supports the C5.
+        self.hle.wifi.set_abi(hle::wifi::WifiAbi::IDF_5_5_DUAL_BAND);
         let Some(i) = self.apps.iter().position(|a| a.0 == sha) else {
             self.pending_halt = Some(format!(
                 "the app at {off:#x} (version {version}, ELF sha256 {}) has no matching ELF; \
@@ -813,4 +814,10 @@ fn new_cpu() -> Rv32 {
     let mut c = Rv32::new();
     c.csr.clic = true;
     c
+}
+
+/// The C5's radio does 2.4 and 5 GHz.
+fn dual_band(mut h: HleState) -> HleState {
+    h.wifi.set_dual_band();
+    h
 }

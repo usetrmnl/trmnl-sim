@@ -54,6 +54,10 @@ impl WifiAbi {
         WifiAbi { config_size: 140, ap_record_size: 80, connected_event_size: 44, sta_list_entries: 10 };
     pub const IDF_5_5: WifiAbi =
         WifiAbi { config_size: 184, ap_record_size: 92, connected_event_size: 48, sta_list_entries: 15 };
+    /// IDF 5.5 on the dual-band ESP32-C5: wifi_country_t gains `wifi_5g_channel_mask`
+    /// (wifi_ap_record_t is 96 bytes) and ESP_WIFI_MAX_CONN_NUM is 10.
+    pub const IDF_5_5_DUAL_BAND: WifiAbi =
+        WifiAbi { config_size: 184, ap_record_size: 96, connected_event_size: 48, sta_list_entries: 10 };
 
     /// Pick the layout for an app's ESP-IDF version string (e.g. "v4.4.7", "5.5.2").
     pub fn for_idf(version: &str) -> WifiAbi {
@@ -86,6 +90,8 @@ struct PendingEvent {
 pub struct WifiState {
     pub available: bool,
     pub networks: Vec<SimAp>,
+    /// The radio also does 5 GHz (ESP32-C5); otherwise APs on channels 36+ are invisible.
+    pub dual_band: bool,
     pub base_mac: [u8; 6],
     pub portal_forward: SocketAddr,
     pub net_config: NetConfig,
@@ -135,6 +141,7 @@ impl WifiState {
                     internet: true,
                 },
             ],
+            dual_band: false,
             base_mac,
             portal_forward: "127.0.0.1:8080".parse().unwrap(),
             net_config: NetConfig::default(),
@@ -162,8 +169,9 @@ impl WifiState {
     /// The chip reset: the driver state is gone (the "air" is not).
     pub fn reset(&mut self) {
         let keep = (self.available, self.networks.clone(), self.base_mac, self.portal_forward, self.net_config.clone());
-        let (abi, faults, away) = (self.abi, self.net_faults.clone(), self.portal_client_away);
+        let (abi, faults, away, dual) = (self.abi, self.net_faults.clone(), self.portal_client_away, self.dual_band);
         *self = WifiState::new(keep.2);
+        self.dual_band = dual;
         self.set_abi(abi);
         self.portal_client_away = away;
         self.available = keep.0;
@@ -171,6 +179,27 @@ impl WifiState {
         self.portal_forward = keep.3;
         self.net_faults = faults;
         self.set_net_config(keep.4);
+    }
+
+    /// A dual-band radio (ESP32-C5): 5 GHz access points become visible, and the default
+    /// environment gains **TRMNL-Sim-5G** (channel 36, any password).
+    pub fn set_dual_band(&mut self) {
+        self.dual_band = true;
+        if !self.networks.iter().any(|a| a.channel >= 36) {
+            self.networks.push(SimAp {
+                ssid: "TRMNL-Sim-5G".into(),
+                password: None,
+                rssi: -48,
+                channel: 36,
+                authmode: 3,
+                internet: true,
+            });
+        }
+    }
+
+    /// Whether the radio can see `ap` (5 GHz needs a dual-band chip).
+    fn visible(&self, ap: &SimAp) -> bool {
+        self.dual_band || ap.channel < 36
     }
 
     pub fn set_abi(&mut self, abi: WifiAbi) {
@@ -287,7 +316,9 @@ impl WifiState {
         r[48..52].copy_from_slice(&ap.authmode.to_le_bytes());
         r[52..56].copy_from_slice(&4u32.to_le_bytes()); // CCMP
         r[56..60].copy_from_slice(&4u32.to_le_bytes());
-        r[64..68].copy_from_slice(&0b111u32.to_le_bytes()); // 11b/g/n
+        // 11b/g/n on 2.4 GHz; 11a/n/ac/ax on 5 GHz
+        let phy: u32 = if ap.channel >= 36 { 1 << 2 | 1 << 4 | 1 << 5 | 1 << 6 } else { 0b111 };
+        r[64..68].copy_from_slice(&phy.to_le_bytes());
         r[68..70].copy_from_slice(b"01");
         r[71] = 1;
         r[72] = 13;
@@ -298,7 +329,11 @@ impl WifiState {
     fn start_connect(&mut self, now: u64) {
         let ssid = self.sta_ssid();
         let pw = self.sta_password();
-        let found = if self.available { self.networks.iter().position(|a| a.ssid == ssid) } else { None };
+        let found = if self.available {
+            self.networks.iter().position(|a| a.ssid == ssid && self.visible(a))
+        } else {
+            None
+        };
         self.connecting = true;
         match found {
             Some(i) => {
@@ -699,7 +734,7 @@ fn disconnect(c: &mut HleCtx) -> Flow {
 fn scan_start(c: &mut HleCtx) -> Flow {
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
-    w.scan_results = if w.available { w.networks.clone() } else { vec![] };
+    w.scan_results = if w.available { w.networks.iter().filter(|a| w.visible(a)).cloned().collect() } else { vec![] };
     let mut d = vec![0u8; 8];
     d[4] = w.scan_results.len() as u8;
     w.post(now + 1200 * MS, EV_SCAN_DONE, d);
