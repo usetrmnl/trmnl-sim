@@ -38,7 +38,7 @@ class Case(unittest.TestCase):
         m.clear_faults()
         m.display = {"image": "default", "refresh_rate": 300}
 
-    def show(self, name: str, data: bytes, content_type: str):
+    def show(self, name: str, data: bytes, content_type: str, timeout_s: float = 15):
         m = dev().mock
         url = m.set_file(f"/img/{name}", content_type, data)
         m.display = {"image_url": url, "filename": f"plugin-{abs(hash(name)) % 999999:06d}-1000", "refresh_rate": 300}
@@ -47,7 +47,7 @@ class Case(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=15)
             s.wake()
             m.wait_for_request(f"/img/{name}", timeout_s=15)
-            st = s.wait(state="deep_sleep", timeout_s=15, settle_ms=300)["status"]
+            st = s.wait(state="deep_sleep", timeout_s=timeout_s, settle_ms=300)["status"]
             self.assertNotEqual(st["state"], "halted")
         except BaseException:
             s.close()
@@ -98,7 +98,7 @@ class XModemLimits(Case):
         # (It is downloaded, and refused, 5 times: a too-big file is retried like any error.)
         # (The error log isn't submitted: on 5 GHz only the modem is connected, and stored
         # logs go out over the S3's own WiFi.)
-        with self.show("huge.png", bytes(800_000), "image/png") as s:
+        with self.show("huge.png", bytes(800_000), "image/png", timeout_s=120) as s:
             console = "\n".join(s.console(0))
         self.assertNotIn("Guru Meditation", console)
         self.assertIn("HTTPS_IMAGE_FILE_TOO_BIG - file size too big: more than 750000 bytes", console)

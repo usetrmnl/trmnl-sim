@@ -265,11 +265,11 @@ class Refused(Case):
             self.device().mock.wait_for_request(path, timeout_s=90)
             st = settle(s)
             self.assertEqual((st["boot_count"], st["state"]), (1, "deep_sleep"))
-        # Content-Length 0 takes the "no Content-Length" path (contentLength <= 0), where
-        # writeToStream() finds the connection closed: logged as a download cut short, not
-        # as the "No data received" finishBody() checks for.
+        # Content-Length 0 takes the "no Content-Length" path (contentLength <= 0): if the
+        # server's close has already arrived, writeToStream() reports the download as cut
+        # short; otherwise it reads nothing and finishBody() says "No data received".
         log = self.device().mock.wait_for_request("/api/log", timeout_s=10)
-        self.assertIn("connection closed mid-download", log.body.decode())
+        self.assertRegex(log.body.decode(), r"No data received|connection closed mid-download")
 
     def test_missing_image(self):
         self.device().mock.display = {"image_url": self.device().mock.device_url + "/img/missing.png",
