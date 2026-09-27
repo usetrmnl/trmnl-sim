@@ -7,6 +7,8 @@
 use super::Board;
 use crate::devices::epd::SpiEpd;
 use crate::devices::i2c::I2cBus;
+use crate::devices::i2c::axp2101::Axp2101;
+use crate::devices::i2c::bq27220::Bq27220;
 use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
 use crate::devices::uc8179::{ColorPanel, Uc8179};
 use crate::savepoint::{StateReader, StateWriter};
@@ -206,6 +208,11 @@ impl SpiEpdBoard {
                 Sensor::Aht20 => i2c.add(Box::new(Aht20::new(Climate::default()))),
             };
         }
+        match spec.battery {
+            Battery::Bq27220 => _ = i2c.add(Box::new(Bq27220::new())),
+            Battery::Axp2101 => _ = i2c.add(Box::new(Axp2101::new())),
+            _ => {}
+        }
         SpiEpdBoard {
             spec,
             panel: spec.panel.controller(panel_rev),
@@ -318,6 +325,14 @@ impl Board for SpiEpdBoard {
 
     fn set_battery_mv(&mut self, mv: u32) {
         self.battery_mv = mv;
+        // A rough LiPo curve for the gauges' state of charge: 3.3 V empty .. 4.2 V full.
+        let soc = ((mv.clamp(3300, 4200) - 3300) * 100 / 900) as u8;
+        if let Some(g) = self.i2c.device_mut::<Bq27220>() {
+            g.set_battery(mv as u16, false, soc);
+        }
+        if let Some(g) = self.i2c.device_mut::<Axp2101>() {
+            g.set_battery(mv as u16, false, soc);
+        }
     }
 
     fn display_status(&self, now: u64) -> (bool, u64) {
@@ -335,6 +350,8 @@ impl Board for SpiEpdBoard {
         self.battery_mv = r.u32()?;
         self.out = r.u64()?;
         self.oe = r.u64()?;
+        // Gauge readings follow the battery (sensors keep their own, unsaved, state).
+        self.set_battery_mv(self.battery_mv);
         r.section(|r| self.panel.restore_state(r, powered))
     }
 }

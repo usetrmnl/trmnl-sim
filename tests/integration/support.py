@@ -18,6 +18,22 @@ import setup_cache  # noqa: E402
 BUILD = Path(os.environ.get("TRMNL_FIRMWARE_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl"))
 BWRY_BUILD = Path(os.environ.get("TRMNL_BWRY_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl_4clr"))
 E1002_BUILD = Path(os.environ.get("TRMNL_E1002_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/seeed_reTerminal_E1002"))
+# PlatformIO build directories of the firmware checkout, one per environment
+# (TRMNL_FIRMWARE_BUILDS=<checkout>/.pio/build for another checkout).
+BUILDS = Path(os.environ.get("TRMNL_FIRMWARE_BUILDS", ROOT.parent / "trmnl-firmware/.pio/build"))
+
+
+def build_of(env: str) -> Path:
+    """The build of PlatformIO environment `env` (it may not exist: see `require_build`)."""
+    return BUILDS / env
+
+
+def require_build(build: Path):
+    """Skip the calling module (from setUpModule) when `build` hasn't been built."""
+    import unittest
+
+    if not (build / "firmware.elf").exists():
+        raise unittest.SkipTest(f"no {build.name} build at {build} (pio run -e {build.name})")
 GOLDEN = HERE / "golden"
 TEST_MAC = "7C:DF:A1:00:00:01"
 NETWORK = os.environ.get("TRMNL_SIM_NETWORK") == "1"
@@ -159,4 +175,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "BUILDS", "build_of", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
