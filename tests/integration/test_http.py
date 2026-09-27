@@ -3,7 +3,7 @@ error log (/api/log) when submitting fails."""
 
 import unittest
 
-from support import MockTrmnl, ProvisionedDevice, big_number, close_fixtures, device_image, fixture, sim
+from support import MockTrmnl, ProvisionedDevice, big_number, close_fixtures, device_image, fixture, image_size, sim
 
 from devices import ANY
 
@@ -76,9 +76,8 @@ class NoContentLength(Case):
     def test_chunked_image_cut_short_is_not_shown(self):
         m = dev().mock
         path, _ = device_image(m, "nine", big_number("9"))
-        size = len(m.images[path[len("/images/"):].removesuffix(".bmp")])
         m.display = {"image": "nine", "refresh_rate": 300}
-        m.set_fault(path, chunked=True, truncate=min(10000, size // 2))
+        m.set_fault(path, chunked=True, truncate=min(10000, image_size(m, path) // 2))
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=15)
             screen = s.screenshot()

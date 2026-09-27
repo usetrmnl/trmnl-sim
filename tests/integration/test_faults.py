@@ -4,7 +4,7 @@ writes, and a stuck panel. The device must cope: sleep, retry later, and keep bo
 
 import unittest
 
-from support import BUILD, ProvisionedDevice, big_number, close_fixtures, fixture
+from support import BUILD, DEVICE, ProvisionedDevice, big_number, close_fixtures, device_image, fixture, image_size
 
 from devices import ANY
 
@@ -36,7 +36,8 @@ class FaultCase(unittest.TestCase):
         dev().mock.requests.clear()
         dev().mock.display_queue.clear()
         dev().mock.clear_faults()
-        self.expected = dev().mock.set_image("one", big_number("1"))
+        self.path, self.expected = device_image(dev().mock, "one", big_number("1"))
+        self.size = image_size(dev().mock, self.path)
         dev().mock.display = {"image": "one", "refresh_rate": 300}
 
     def assert_shows_image_next_time(self, s, mock=None):
@@ -46,7 +47,7 @@ class FaultCase(unittest.TestCase):
         s.set_faults(net=None)
         n = len(mock.requests)
         s.wake()
-        mock.wait_for_request("/images/one.bmp", after=n, timeout_s=90)
+        mock.wait_for_request(self.path, after=n, timeout_s=90)
         s.wait(state="deep_sleep", timeout_s=90, settle_ms=300)
         self.assertTrue(s.compare_screen(self.expected, tolerance=64)["match"])
 
@@ -67,13 +68,13 @@ class ServerErrors(FaultCase):
         with dev().boot() as s:
             s.wait(console=r"JSON deserialization error", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
-            self.assertEqual(dev().mock.count("/images/one.bmp"), 0)
+            self.assertEqual(dev().mock.count(self.path), 0)
             self.assert_shows_image_next_time(s)
 
 
 class BrokenDownloads(FaultCase):
     def test_truncated_image_is_not_shown(self):
-        dev().mock.set_fault("/images/*", truncate=10_000)
+        dev().mock.set_fault("/images/*", truncate=min(10_000, self.size // 2))
         with dev().boot() as s:
             s.wait(console=r"incomplete download", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
@@ -81,15 +82,15 @@ class BrokenDownloads(FaultCase):
             self.assert_shows_image_next_time(s)
 
     def test_connection_reset_mid_download(self):
-        with dev().boot(faults={"net": {"tcp_cut": {"after_bytes": 20_000}}}) as s:
-            dev().mock.wait_for_request("/images/one.bmp", timeout_s=120)
+        with dev().boot(faults={"net": {"tcp_cut": {"after_bytes": min(20_000, self.size // 2)}}}) as s:
+            dev().mock.wait_for_request(self.path, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
             self.assertFalse(s.compare_screen(self.expected, tolerance=64)["match"])
             self.assert_shows_image_next_time(s)
 
     def test_stalled_download_times_out(self):
-        with dev().boot(faults={"net": {"tcp_cut": {"after_bytes": 20_000, "stall": True}}}) as s:
-            dev().mock.wait_for_request("/images/one.bmp", timeout_s=120)
+        with dev().boot(faults={"net": {"tcp_cut": {"after_bytes": min(20_000, self.size // 2), "stall": True}}}) as s:
+            dev().mock.wait_for_request(self.path, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=180)
             self.assertFalse(s.compare_screen(self.expected, tolerance=64)["match"])
 
@@ -117,7 +118,7 @@ class BadNetworks(FaultCase):
         named().mock.requests.clear()
         named().mock.display_queue.clear()
         named().mock.clear_faults()
-        named().mock.set_image("one", big_number("1"))
+        device_image(named().mock, "one", big_number("1"))
         named().mock.display = {"image": "one", "refresh_rate": 300}
         for fault in ("servfail", "timeout"):
             with self.subTest(fault), named().boot(faults={"net": {"dns": fault}}) as s:
@@ -141,7 +142,7 @@ class PowerLoss(FaultCase):
                     s.wait(console=r"\[sim\] power lost: program", timeout_s=120)
                     dev().mock.clear_faults()
                     n = len(dev().mock.requests)
-                    dev().mock.wait_for_request("/images/one.bmp", after=n, timeout_s=120)
+                    dev().mock.wait_for_request(self.path, after=n, timeout_s=120)
                     st = s.wait(state="deep_sleep", timeout_s=120, settle_ms=300)["status"]
                     self.assertEqual(st["power_losses"], 1)
                     self.assertTrue(s.compare_screen(self.expected, tolerance=64)["match"])
@@ -162,7 +163,7 @@ class PowerLoss(FaultCase):
                                              "cut": "torn"}}) as s:
             dev().mock.wait_for_request("/firmware.bin", timeout_s=120)
             c = s.wait_for_console(r"\[sim\] power lost: program #200", timeout_s=120)
-            s.wait(console=r"Loaded app from partition at offset 0x10000", timeout_s=60)
+            s.wait(console=rf"Loaded app from partition at offset {DEVICE.app_slot:#x}", timeout_s=60)
             s.wait(state="deep_sleep", timeout_s=120)
             self.assertIn("app1", c)
 
@@ -170,7 +171,7 @@ class PowerLoss(FaultCase):
 class Peripherals(FaultCase):
     def test_panel_busy_stuck_does_not_hang_the_device(self):
         with dev().boot(faults={"panel_busy_stuck": True}) as s:
-            dev().mock.wait_for_request("/images/one.bmp", timeout_s=120)
+            dev().mock.wait_for_request(self.path, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=180)
 
 

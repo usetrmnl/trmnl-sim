@@ -91,6 +91,12 @@ def device_image(mock: MockTrmnl, name: str, black, device: Device | None = None
     return f"/images/{name}.png", expected_gray(level, w, h, bits=1)
 
 
+def image_size(mock: MockTrmnl, path: str) -> int:
+    """The size of the image `mock` serves at `path` (from device_image): e.g. to cut its
+    download short halfway, whatever the panel."""
+    return len(mock.images[path[len("/images/"):].removesuffix(".bmp")])
+
+
 def require_build(build: Path):
     """Skip the calling module (from setUpModule) when `build` hasn't been built."""
     import unittest
@@ -302,4 +308,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "skip_if", "device_image", "BUILDS", "build_of", "build_for_env", "device_of", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "GOLDEN_REGIONS", "golden", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "skip_if", "device_image", "image_size", "BUILDS", "build_of", "build_for_env", "device_of", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "GOLDEN_REGIONS", "golden", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
