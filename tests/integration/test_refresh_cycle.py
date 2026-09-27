@@ -2,7 +2,7 @@
 
 import unittest
 
-from support import BUILD, ProvisionedDevice, big_number
+from support import BUILD, DEVICE, ProvisionedDevice, device_image, device_number, needs
 
 from devices import ANY
 
@@ -27,11 +27,11 @@ class RefreshCycle(unittest.TestCase):
         dev.mock.display = {"image": "default", "refresh_rate": 300}
 
     def test_image_is_rendered_exactly(self):
-        expected = dev.mock.set_image("one", big_number("1"))
+        path, expected = device_image(dev.mock, "one", device_number("1"))
         dev.mock.display = {"image": "one", "refresh_rate": 300}
         with dev.boot() as s:
-            dev.mock.wait_for_request("/images/one.bmp", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=90)
+            dev.mock.wait_for_request(path, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
             result = s.compare_screen(expected, tolerance=64, max_ratio=0)
             self.assertTrue(result["match"], result)
 
@@ -42,7 +42,7 @@ class RefreshCycle(unittest.TestCase):
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 600, delta=15)
 
     def test_timer_wake_fetches_next_image(self):
-        expected = dev.mock.set_image("two", big_number("2"))
+        _, expected = device_image(dev.mock, "two", device_number("2"))
         dev.mock.display = {"image": "two", "refresh_rate": 300}
         with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
@@ -50,16 +50,17 @@ class RefreshCycle(unittest.TestCase):
             s.wake()
             req = dev.mock.wait_for_request("/api/display", after=n, timeout_s=90)
             self.assertEqual(req.headers["Update-Source"], "timer")
-            s.wait(state="deep_sleep", timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
             self.assertTrue(s.compare_screen(expected, tolerance=64)["match"])
 
+    @needs("button")
     def test_button_press_wakes_and_refreshes(self):
         with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             n = len(dev.mock.requests)
             s.press(150)
             req = dev.mock.wait_for_request("/api/display", after=n, timeout_s=90)
-            self.assertEqual(req.headers["Update-Source"], "button")
+            self.assertEqual(req.headers["Update-Source"], DEVICE.button_source)
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_reports_battery_voltage(self):
@@ -69,23 +70,32 @@ class RefreshCycle(unittest.TestCase):
             n = len(dev.mock.requests)
             s.wake()
             req = dev.mock.wait_for_request("/api/display", after=n, timeout_s=90)
-            self.assertAlmostEqual(float(req.headers["Battery-Voltage"]), 3.70, delta=0.05)
+            # boards that can't measure it report a fixed value (see Device.battery_tracks)
+            expected = 3.70 if DEVICE.battery_tracks else DEVICE.battery_v
+            self.assertAlmostEqual(float(req.headers["Battery-Voltage"]), expected, delta=0.05)
 
     def test_reports_device_identity(self):
         with dev.boot() as s:
             req = dev.mock.wait_for_request("/api/display", timeout_s=90)
             for h in ("ID", "FW-Version", "Model", "RSSI", "Width", "Height"):
                 self.assertIn(h, req.headers)
-            self.assertEqual((req.headers["Width"], req.headers["Height"]), ("800", "480"))
+            self.assertEqual(req.headers["Model"], DEVICE.model)
+            self.assertEqual((int(req.headers["Width"]), int(req.headers["Height"])), DEVICE.size)
             self.assertEqual(req.headers["RSSI"], "-54")
-            # read from the UC8179 by bit-banging its REV command (the simulator's default)
-            self.assertEqual(req.headers["Panel-Rev"], "0a0c1b2c")
+            if DEVICE.panel_rev:
+                # read from the UC8179 by bit-banging its REV command (the simulator's default)
+                self.assertEqual(req.headers["Panel-Rev"], "0a0c1b2c")
+            else:
+                self.assertNotIn("Panel-Rev", req.headers)
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_reports_the_panel_revision_it_reads(self):
         with dev.boot(extra_args=("--panel-rev", "0x00c0ffee")) as s:
             req = dev.mock.wait_for_request("/api/display", timeout_s=90)
-            self.assertEqual(req.headers["Panel-Rev"], "00c0ffee")
+            if DEVICE.panel_rev:
+                self.assertEqual(req.headers["Panel-Rev"], "00c0ffee")
+            else:  # the firmware only asks 7.5" UC8179 panels whose pins it knows
+                self.assertNotIn("Panel-Rev", req.headers)
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_omits_the_panel_revision_when_it_reads_zero(self):
@@ -103,12 +113,14 @@ class RefreshCycle(unittest.TestCase):
             self.assertEqual(req.headers["Update-Source"], "powercycle")
             self.assertEqual(dev.mock.count("/api/setup"), 0, "should not re-register")
 
+    @needs("button")
     def test_long_press_resets_wifi(self):
         with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
             s.press(6000)
             s.wait(portal=True, timeout_s=120)
 
+    @needs("button")
     def test_portal_soft_reset_forgets_the_device(self):
         # A long press only forgets WiFi; the portal's Soft Reset also clears the API key,
         # so the next onboarding has to register with /api/setup again.

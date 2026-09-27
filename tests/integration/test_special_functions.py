@@ -1,10 +1,10 @@
-"""Special functions (TRMNL OG): the server assigns one in an /api/display answer, and a
+"""Special functions (on the device under test): the server assigns one in an /api/display answer, and a
 double click (or a 1-5 s press) of the button runs it on the next wake. Also the
 /api/display status codes and actions around it."""
 
 import unittest
 
-from support import ProvisionedDevice, big_number, close_fixtures, fixture
+from support import ProvisionedDevice, close_fixtures, device_image, device_number, fixture, needs
 
 from devices import ANY
 
@@ -31,7 +31,7 @@ class Case(unittest.TestCase):
         """Boot answers assign `function`; returns once the device sleeps with it saved."""
         dev().mock.display = {"image": image, "refresh_rate": 300, "special_function": function}
         dev().mock.wait_for_request("/api/display", timeout_s=90)
-        s.wait(state="deep_sleep", timeout_s=90)
+        s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
 
     def run_function(self, s, answer: dict, press_ms: int = 1500):
         """Press the button (a medium press counts as a double click) and answer the
@@ -44,14 +44,15 @@ class Case(unittest.TestCase):
         return req
 
 
+@needs("button")  # a double click (or medium press) runs the function
 class SpecialFunctions(Case):
     def test_identify_shows_the_identify_image(self):
-        seven = dev().mock.set_image("seven", big_number("7"))
+        seven_path, seven = device_image(dev().mock, "seven", device_number("7"))
         with dev().boot() as s:
             self.assign(s, "identify")
             self.run_function(s, {"image": "seven", "action": "identify", "refresh_rate": 300})
-            dev().mock.wait_for_request("/images/seven.bmp", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=90)
+            dev().mock.wait_for_request(seven_path, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertTrue(s.compare_screen(seven, tolerance=64, max_ratio=0)["match"])
 
     def test_sleep_uses_the_answered_refresh_rate(self):
@@ -69,7 +70,7 @@ class SpecialFunctions(Case):
             self.assign(s, "sleep")
             screen = s.screenshot()
             self.run_function(s, {"image": "default", "action": "sleep", "refresh_rate": 1800})
-            s.wait(state="deep_sleep", timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertEqual(dev().mock.count("/api/log"), 0)
             self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])
 
@@ -93,12 +94,12 @@ class SpecialFunctions(Case):
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_restart_playlist_shows_the_first_item(self):
-        one = dev().mock.set_image("one", big_number("1"))
+        one_path, one = device_image(dev().mock, "one", device_number("1"))
         with dev().boot() as s:
             self.assign(s, "restart_playlist")
             self.run_function(s, {"image": "one", "action": "restart_playlist", "refresh_rate": 300})
-            dev().mock.wait_for_request("/images/one.bmp", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=90)
+            dev().mock.wait_for_request(one_path, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertTrue(s.compare_screen(one, tolerance=64, max_ratio=0)["match"])
 
     @unittest.expectedFailure
@@ -108,21 +109,21 @@ class SpecialFunctions(Case):
         # The OG doesn't cache BMP images under their filename (only PNG and JPEG), so with a
         # BMP it is always "empty or unreadable": the device submits an error log and draws an error message
         # over the image it just showed.
-        two = dev().mock.set_image("two", big_number("2"))
+        two_path, two = device_image(dev().mock, "two", device_number("2"))
         with dev().boot() as s:
             self.assign(s, "send_to_me", image="two")
             self.run_function(s, {"image": "two", "action": "send_to_me", "refresh_rate": 300})
-            s.wait(state="deep_sleep", timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertEqual(dev().mock.count("/api/log"), 0)
             self.assertTrue(s.compare_screen(two, tolerance=64, max_ratio=0)["match"])
 
     def test_guest_mode_shows_the_guest_image_for_its_refresh_rate(self):
-        three = dev().mock.set_image("three", big_number("3"))
+        three_path, three = device_image(dev().mock, "three", device_number("3"))
         with dev().boot() as s:
             self.assign(s, "guest_mode")
             self.run_function(s, {"image": "three", "action": "guest_mode", "refresh_rate": 1200})
-            dev().mock.wait_for_request("/images/three.bmp", timeout_s=90)
-            st = s.wait(state="deep_sleep", timeout_s=90)["status"]
+            dev().mock.wait_for_request(three_path, timeout_s=90)
+            st = s.wait(state="deep_sleep", display_idle=True, timeout_s=90)["status"]
             self.assertTrue(s.compare_screen(three, tolerance=64, max_ratio=0)["match"])
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 1200, delta=30)
 
@@ -140,6 +141,7 @@ class SpecialFunctions(Case):
             self.assertEqual(st["boot_count"], 1, "the device restarted (crashed)")
 
 
+@needs("button")
 class Identify(Case):
     def test_identify_with_the_empty_state_image(self):
         with dev().boot() as s:
@@ -226,12 +228,12 @@ class ApiStatus(Case):
             s.wait(portal=True, min_boots=2, timeout_s=120)
 
     def test_screen_wiper_clears_then_shows_the_next_item(self):
-        four = dev().mock.set_image("four", big_number("4"))
+        four_path, four = device_image(dev().mock, "four", device_number("4"))
         dev().mock.display_queue = [{"image": "default", "filename": "screen_wiper.png", "refresh_rate": 300}]
         dev().mock.display = {"image": "four", "refresh_rate": 300}
         with dev().boot() as s:
-            dev().mock.wait_for_request("/images/four.bmp", timeout_s=600)
-            s.wait(state="deep_sleep", timeout_s=600)
+            dev().mock.wait_for_request(four_path, timeout_s=600)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=600)
             self.assertTrue(s.compare_screen(four, tolerance=64, max_ratio=0)["match"])
 
     def test_screen_wiper_is_only_run_once_per_wake(self):
@@ -241,6 +243,7 @@ class ApiStatus(Case):
             self.assertEqual(dev().mock.count("/api/display"), 2)
 
 
+@needs("button")
 class Buttons(Case):
     def test_double_click_runs_the_special_function(self):
         with dev().boot() as s:

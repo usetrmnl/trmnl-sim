@@ -1,4 +1,4 @@
-"""The captive portal of a TRMNL OG in setup mode: what phones and laptops probe, the
+"""The captive portal of the device under test in setup mode: what phones and laptops probe, the
 settings page, the advanced join options (static IP, WPA2 Enterprise, NTP server,
 hostname) and several saved networks."""
 
@@ -8,7 +8,7 @@ import time
 import unittest
 from urllib.parse import urlparse
 
-from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, sim
+from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, needs, sim
 
 from devices import ANY
 
@@ -185,6 +185,7 @@ class SavedNetworks(unittest.TestCase):
         s.wait(portal=True, timeout_s=120)
         return s
 
+    @needs("button")  # add_network
     def test_second_network_is_used_when_the_first_is_gone(self):
         nets = [{"ssid": "TRMNL-Sim"}, {"ssid": "Office", "password": "office-pass", "rssi": -60}]
         with dev().boot_asleep(networks=nets) as s:
@@ -201,6 +202,7 @@ class SavedNetworks(unittest.TestCase):
             dev().mock.wait_for_request("/api/display", after=n, timeout_s=240)
             s.wait(state="deep_sleep", timeout_s=120)
 
+    @needs("button")
     def test_joining_a_saved_network_again_is_not_saved_twice(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
@@ -210,6 +212,7 @@ class SavedNetworks(unittest.TestCase):
             s.wait(console=r"Duplicate regular network found", since=c, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
 
+    @needs("button")
     def test_portal_lists_saved_networks_out_of_range(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)

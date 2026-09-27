@@ -2,11 +2,31 @@
 
 import unittest
 
-from support import GOLDEN, TEST_MAC, MockTrmnl, sim
+from support import DEVICE, TEST_MAC, MockTrmnl, assert_golden, sim
 
 from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
+
+
+
+def regions(w: int, h: int) -> dict:
+    """Where the screens' texts are (display_show_msg in the firmware's display.cpp): the
+    version line at (40, 48) left of the top-right QR code, the portal's texts at fixed
+    heights, the WiFi error 192 px above the bottom; centred. On the OG's 800x480 panel:
+    body (0, 56, 800, 424), top_right (320, 0, 480, 56), ssid_line (140, 368, 520, 44),
+    timed_out (260, 320, 280, 48), wifi_failed (100, 288, 600, 44). Other panels compare
+    with their own goldens (golden/<env>/, see support.golden)."""
+    return {
+        "body": (0, 56, w, h - 56),
+        "top_right": (320, 0, w - 320, 56),
+        "ssid_line": ((w - 520) // 2, 368, 520, 44),
+        "timed_out": ((w - 280) // 2, 320, 280, 48),
+        "wifi_failed": ((w - 600) // 2, h - 192, 600, 44),
+    }
+
+
+REGIONS = regions(*DEVICE.size)
 
 
 class FreshDevice(unittest.TestCase):
@@ -22,12 +42,12 @@ class FreshDevice(unittest.TestCase):
 
     def test_setup_screen(self):
         # All but the "TRMNL firmware <version> (<git hash>)" line, which changes every commit.
-        self.sim.assert_screen(GOLDEN / "setup_screen_body.png", region=(0, 56, 800, 424))
-        self.sim.assert_screen(GOLDEN / "setup_screen_top_right.png", region=(320, 0, 480, 56))
+        assert_golden(self.sim, "setup_screen_body.png", region=REGIONS["body"])
+        assert_golden(self.sim, "setup_screen_top_right.png", region=REGIONS["top_right"])
 
     def test_setup_screen_names_the_access_point(self):
         # Just the "Connect ... to TRMNL-XXXXXX" line, so version bumps don't break it.
-        self.sim.assert_screen(GOLDEN / "setup_ssid_line.png", region=(140, 368, 520, 44))
+        assert_golden(self.sim, "setup_ssid_line.png", region=REGIONS["ssid_line"])
 
     def test_portal_lists_simulated_networks(self):
         scan = self.sim.portal_scan()
@@ -49,10 +69,11 @@ class PortalTimeout(unittest.TestCase):
             st = s.wait(state="deep_sleep", timeout_s=40)["status"]
             self.assertGreaterEqual(st["sim_time_s"], 15 * 60)
             # "Wifi Captive Portal timed out" / "Press button to try again"
-            s.assert_screen(GOLDEN / "portal_timed_out.png", region=(260, 320, 280, 48))
-            s.set_portal_client(True)
-            s.press(200)
-            s.wait(portal=True, timeout_s=60)
+            assert_golden(s, "portal_timed_out.png", region=REGIONS["timed_out"])
+            if DEVICE.button:
+                s.set_portal_client(True)
+                s.press(200)
+                s.wait(portal=True, timeout_s=60)
 
 
 class Onboarding(unittest.TestCase):
@@ -63,8 +84,11 @@ class Onboarding(unittest.TestCase):
             s.wait(wifi_connected=True, timeout_s=60)
             setup = mock.wait_for_request("/api/setup", timeout_s=60)
             self.assertEqual(setup.headers["ID"], TEST_MAC)
-            self.assertEqual(setup.headers["Model"], "og")
-            self.assertEqual(setup.headers["Panel-Rev"], "0a0c1b2c")
+            self.assertEqual(setup.headers["Model"], DEVICE.model)
+            if DEVICE.panel_rev:
+                self.assertEqual(setup.headers["Panel-Rev"], "0a0c1b2c")
+            else:
+                self.assertNotIn("Panel-Rev", setup.headers)
             display = mock.wait_for_request("/api/display", timeout_s=60)
             self.assertEqual(display.headers["Access-Token"], mock.api_key)
             self.assertEqual(display.headers["Update-Source"], "powercycle")
@@ -79,7 +103,7 @@ class Onboarding(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=180)
             # "Can't establish WiFi connection. Will keep trying..." (the missing
             # apostrophe is a known firmware font bug; update the golden once fixed)
-            s.assert_screen(GOLDEN / "wifi_failed_message.png", region=(100, 288, 600, 44))
+            assert_golden(s, "wifi_failed_message.png", region=REGIONS["wifi_failed"])
 
     def test_unknown_network_shows_wifi_error_and_sleeps(self):
         self._join_and_expect_wifi_error("No Such Network", "x")

@@ -83,6 +83,52 @@ def device_image(mock: MockTrmnl, name: str, black, device: Device | None = None
     return f"/images/{name}.png", expected_gray(level, w, h, bits=1)
 
 
+def device_number(text: str, device: Device | None = None):
+    """big_number(text) drawn to fit and centred on the panel of `device` (the one under
+    test), for `device_image`. On the OG's 800x480 it is exactly big_number(text)."""
+    d = device or DEVICE
+    w, h = d.size
+    if (w, h) == (800, 480):
+        return big_number(text)
+    scale = max(4, min(w, h) // 20)
+    # big_number centres on 800x480; shift it onto this panel's centre
+    dx, dy = (800 - w) // 2, (480 - h) // 2
+    number = big_number(text, scale=scale)
+    return lambda x, y: number(x + dx, y + dy)
+
+
+def golden(name: str, device: Device | None = None) -> Path:
+    """The golden screenshot `name` for `device` (the one under test): its own in
+    golden/<env>/ if it has that directory, else the OG's in golden/ for other 800x480
+    panels (same layout), else golden/<env>/name (missing: see assert_golden)."""
+    d = device or DEVICE
+    if d.env == "trmnl":
+        return GOLDEN / name
+    own = GOLDEN / d.env / name
+    return own if own.parent.is_dir() or d.size != (800, 480) else GOLDEN / name
+
+
+def assert_golden(s: Simulator, name: str, region=None, device: Device | None = None, **kw) -> None:
+    """Simulator.assert_screen against golden(name), except that a missing golden fails
+    instead of being written, unless TRMNL_SIM_UPDATE_GOLDEN=1: a new device's goldens are
+    made on purpose, and looked at before they are committed."""
+    d = device or DEVICE
+    path = golden(name, d)
+    # only the device's own goldens are rewritten (another device's run leaves the OG's alone)
+    if os.environ.get("TRMNL_SIM_UPDATE_GOLDEN") == "1" and (d.env == "trmnl" or path.parent.name == d.env):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        s.screenshot(path, region)
+        return
+    if not path.exists():
+        raise AssertionError(f"no golden {path} for {d.env}: make it with TRMNL_SIM_UPDATE_GOLDEN=1 "
+                             f"and check it before committing it")
+    r = s.compare_screen(path, region, **kw)
+    if not r["match"]:
+        actual = path.with_suffix(f".{d.env}.actual.png")
+        s.screenshot(actual, region)
+        raise AssertionError(f"screen differs from {path}: {r['diff_pixels']} px ({r['diff_ratio']:.4%}); actual saved to {actual}")
+
+
 def require_build(build: Path):
     """Skip the calling module (from setUpModule) when `build` hasn't been built."""
     import unittest
@@ -249,4 +295,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "device_number", "golden", "assert_golden", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]

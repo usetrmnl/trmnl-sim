@@ -1,4 +1,4 @@
-"""Save points (TRMNL OG): save a device in deep sleep, restore it in a fresh simulator, and
+"""Save points (on the device under test): save a device in deep sleep, restore it in a fresh simulator, and
 carry on where it left off: same screen, no re-onboarding, both wake sources."""
 
 import shutil
@@ -6,12 +6,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import BUILD, BWRY_BUILD, ProvisionedDevice, Simulator, big_number, sim
+from support import BUILD, BWRY_BUILD, DEVICE, OG_BUILD, ProvisionedDevice, Simulator, device_image, device_number, needs, sim
 from trmnl_sim import SimError
 
 from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
+
+# Another device's firmware, which must refuse this device's save points.
+OTHER_BUILD = BWRY_BUILD if DEVICE.env == "trmnl" else OG_BUILD
 
 dev: ProvisionedDevice
 tmp: Path
@@ -25,11 +28,11 @@ def setUpModule():
     dev = ProvisionedDevice()
     tmp = Path(tempfile.mkdtemp(prefix="trmnl-savepoints-"))
     saved = tmp / "asleep.trmnlsave"
-    seven = dev.mock.set_image("seven", big_number("7"))
+    path, seven = device_image(dev.mock, "seven", device_number("7"))
     dev.mock.display = {"image": "seven", "refresh_rate": 300}
     with dev.boot() as s:
-        dev.mock.wait_for_request("/images/seven.bmp", timeout_s=120)
-        saved_status = s.wait(state="deep_sleep", timeout_s=120)["status"]
+        dev.mock.wait_for_request(path, timeout_s=120)
+        saved_status = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
         assert s.compare_screen(seven)["match"]
         info = s.save_point(saved, label="asleep showing 7")
         assert info["deep_sleep"] and info["label"] == "asleep showing 7", info
@@ -44,7 +47,7 @@ class SavePoints(unittest.TestCase):
     def setUp(self):
         dev.mock.requests.clear()
         dev.mock.display_queue.clear()
-        self.eight = dev.mock.set_image("eight", big_number("8"))
+        self.eight_path, self.eight = device_image(dev.mock, "eight", device_number("8"))
         dev.mock.display = {"image": "eight", "refresh_rate": 300}
 
     def restored(self) -> Simulator:
@@ -69,16 +72,17 @@ class SavePoints(unittest.TestCase):
             self.assertEqual(req.headers["Access-Token"], dev.mock.api_key)
             self.assertEqual(req.headers["Update-Source"], "timer")
             s.wait(console=r"rst:0x5 \(DSLEEP\)", min_boots=saved_status["boot_count"] + 1)
-            s.wait(state="deep_sleep", timeout_s=120)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
             self.assertTrue(s.compare_screen(self.eight)["match"])
             self.assertNotIn("/api/setup", [r.path for r in dev.mock.requests])
 
+    @needs("button")
     def test_button_wakes_a_restored_device(self):
         with self.restored() as s:
             s.wait(state="deep_sleep", timeout_s=30)
             s.press(150)
             req = dev.mock.wait_for_request("/api/display", timeout_s=120)
-            self.assertEqual(req.headers["Update-Source"], "button")
+            self.assertEqual(req.headers["Update-Source"], DEVICE.button_source)
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_in_memory_slot_goes_back_in_time(self):
@@ -87,8 +91,8 @@ class SavePoints(unittest.TestCase):
             slot = s.save_point()
             self.assertEqual([p["id"] for p in s.save_points()], [slot["id"]])
             s.wake()
-            dev.mock.wait_for_request("/images/eight.bmp", timeout_s=120)
-            st = s.wait(state="deep_sleep", timeout_s=120)["status"]
+            dev.mock.wait_for_request(self.eight_path, timeout_s=120)
+            st = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
             self.assertTrue(s.compare_screen(self.eight)["match"])
             info = s.restore(id=slot["id"])
             self.assertEqual(info["label"], slot["label"])
@@ -133,11 +137,11 @@ class SavePoints(unittest.TestCase):
         with self.assertRaisesRegex(SimError, "not a trmnl-sim save point"):
             sim(BUILD, restore=junk)
 
-    @unittest.skipUnless((BWRY_BUILD / "firmware.elf").exists(), "no trmnl_4clr build")
+    @unittest.skipUnless((OTHER_BUILD / "firmware.elf").exists(), f"no {OTHER_BUILD.name} build")
     def test_other_firmware_is_refused(self):
         with self.assertRaisesRegex(SimError, "restore it with the build it was saved from"):
-            sim(BWRY_BUILD, restore=saved)
-        with sim(BWRY_BUILD, erase=True) as s:
+            sim(OTHER_BUILD, restore=saved)
+        with sim(OTHER_BUILD, erase=True) as s:
             with self.assertRaisesRegex(SimError, "save point was taken with firmware"):
                 s.restore(saved)
 
