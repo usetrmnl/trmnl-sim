@@ -83,6 +83,34 @@ def device_image(mock: MockTrmnl, name: str, black, device: Device | None = None
     return f"/images/{name}.png", expected_gray(level, w, h, bits=1)
 
 
+def panel_number(text: str, scale: int = 24, device: Device | None = None):
+    """`big_number(text)` centred on the panel of `device` (the one under test) instead of
+    on 800x480: pixel(x, y) is True for ink."""
+    w, h = (device or DEVICE).size
+    px = big_number(text, scale)
+    dx, dy = (800 - w) // 2, (480 - h) // 2
+    return lambda x, y: px(x + dx, y + dy)
+
+
+def served_path(mock: MockTrmnl, name: str) -> str:
+    """The path the device downloads image `name` of `mock` from (as its /api/display answer
+    says: images/<name>.png if there is such a PNG, else the BMP)."""
+    return f"/images/{name}.png" if name + ".png" in mock.images else f"/images/{name}.bmp"
+
+
+def device_mock(tls: bool = False, device: Device | None = None) -> MockTrmnl:
+    """A MockTrmnl whose default screen is what the TRMNL server would send `device` (the one
+    under test): the OG's 800x480 BMP, else a 1-bit PNG of the panel's size (as
+    ProvisionedDevice serves)."""
+    d = device or DEVICE
+    mock = MockTrmnl(tls=tls)
+    if not d.default_bmp:
+        w, h = d.size
+        number = panel_number("0", device=d)
+        mock.images["default.png"] = png_image(lambda x, y: 0 if number(x, y) else 1, w, h, bits=1)
+    return mock
+
+
 def require_build(build: Path):
     """Skip the calling module (from setUpModule) when `build` hasn't been built."""
     import unittest
@@ -249,4 +277,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]

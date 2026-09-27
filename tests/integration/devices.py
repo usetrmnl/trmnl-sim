@@ -37,6 +37,13 @@ class Device:
     """Reads the panel revision (Panel-Rev header)."""
     general: str | None = None
     """Why the general tests can't run on it (None: they can)."""
+    psram: bool = True
+    """A BOARD_HAS_PSRAM build: takes images up to 750000 bytes instead of 90000 (config.h)."""
+
+    @property
+    def max_image(self) -> int:
+        """The largest image download the firmware accepts (MAX_IMAGE_SIZE)."""
+        return 750000 if self.psram else 90000
 
     @property
     def default_bmp(self) -> bool:
@@ -46,12 +53,12 @@ class Device:
 
 
 _DEVICES = [
-    Device("trmnl", "og", "TRMNL OG", chip="esp32c3", panel_rev=True),
-    Device("trmnl_4clr", "og_4clr", "TRMNL BWRY", inks="bwry", chip="esp32c3"),
+    Device("trmnl", "og", "TRMNL OG", chip="esp32c3", panel_rev=True, psram=False),
+    Device("trmnl_4clr", "og_4clr", "TRMNL BWRY", inks="bwry", chip="esp32c3", psram=False),
     Device("TRMNL_X", "x", "TRMNL X", size=(1872, 1404), inks="gray16", battery_v=None, button=False,
            general="onboarding goes through the factory flow and shipment mode; see test_trmnl_x"),
     Device("seeed_reTerminal_E1002", "reterminal_e1002", "reTerminal E1002", inks="spectra6"),
-    Device("seeed_xiao_esp32c3", "seeed_esp32c3", "XIAO ESP32-C3 + 7.5\" panel", chip="esp32c3", battery_v=0.0),
+    Device("seeed_xiao_esp32c3", "seeed_esp32c3", "XIAO ESP32-C3 + 7.5\" panel", chip="esp32c3", battery_v=0.0, psram=False),
     Device("seeed_xiao_esp32s3", "seeed_esp32s3", "XIAO ESP32-S3 + 7.5\" panel", battery_v=0.0),
     Device("TRMNL_7inch5_OG_DIY_Kit", "xiao_epaper_display", "TRMNL 7.5\" DIY Kit"),
     Device("TRMNL_7inch5_OG_DIY_Kit_3CLR", "xiao_epaper_3clr", "TRMNL 7.5\" BWR DIY Kit", inks="bwr"),
@@ -60,18 +67,18 @@ _DEVICES = [
     Device("seeed_reTerminal_E1001", "reterminal_e1001", "reTerminal E1001"),
     Device("seeed_reTerminal_E1004", "reterminal_e1004", "reTerminal E1004", size=(1200, 1600), inks="spectra6"),
     Device("seeed_sticky", "seeed_sticky", "Seeed Sticky"),
-    Device("xteink_x4", "xteink_x4", "Xteink X4", chip="esp32c3", battery_v=0.0),
-    Device("xteink_x3", "xteink_x3", "Xteink X3", size=(792, 528), chip="esp32c3"),
+    Device("xteink_x4", "xteink_x4", "Xteink X4", chip="esp32c3", battery_v=0.0, psram=False),
+    Device("xteink_x3", "xteink_x3", "Xteink X3", size=(792, 528), chip="esp32c3", psram=False),
     Device("WAVESHARE_397", "waveshare_397", "Waveshare ESP32-S3 3.97\""),
-    Device("CrowPanel42", "crowpanel42", "CrowPanel 4.2\"", size=(400, 300), battery_v=4.2),
-    Device("m5_paper_mono", "m5_paper_mono", "M5Paper Mono", battery_v=4.2),
+    Device("CrowPanel42", "crowpanel42", "CrowPanel 4.2\"", size=(400, 300), battery_v=4.2, psram=False),
+    Device("m5_paper_mono", "m5_paper_mono", "M5Paper Mono", battery_v=4.2, psram=False),
     Device("m5_paper_color", "m5_paper_color", "M5Paper Color", size=(400, 600), inks="spectra6", battery_v=4.2),
     Device("TRMNL_X_PAPERS3", "m5_papers3", "M5Stack PaperS3", size=(960, 540), inks="gray16", button=False),
     Device("TRMNL_X_LILYGO_T5PRO", "lilygo_t5pro", "LilyGo T5 4.7\" S3 Pro", size=(960, 540), inks="gray16"),
     Device("TRMNL_X_SENSORIAC5", "sensoria_c5", "Sensoria C5", size=(1280, 720), inks="gray16", chip="esp32c5",
            battery_v=0.0, general="the firmware reboots instead of sleeping (see test_byod_parallel.SensoriaC5)"),
     Device("trmnl_steam", "trmnl_steam", "TRMNL Steam", size=(648, 480), chip="esp32c3",
-           general="the firmware never boots (see test_byod_uc81xx.TrmnlSteamBoots)"),
+           general="the firmware never boots (see test_byod_uc81xx.TrmnlSteamBoots)", psram=False),
     Device("trmnl_gen2", "og_gen2", "TRMNL OG gen 2", chip="esp32c5"),
     Device("trmnl_gen2_4clr", "og_gen2_4clr", "TRMNL BWRY gen 2", inks="bwry", chip="esp32c5"),
 ]
