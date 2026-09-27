@@ -341,9 +341,13 @@ pub fn is_word_scanner(name: &str) -> bool {
         .contains(&name)
 }
 
-/// Code whose memory accesses are the allocator's own business.
+/// Code whose memory accesses are the allocator's own business (with heap poisoning, as in
+/// the ESP32-S3's Arduino 2 libraries, `multi_heap_malloc` writes the canaries around a block
+/// before returning it).
 pub fn is_allocator_code(name: &str) -> bool {
-    ["multi_heap_", "heap_caps_", "tlsf_", "assert_valid_block"].iter().any(|p| name.starts_with(p))
+    ["multi_heap_", "heap_caps_", "tlsf_", "assert_valid_block", "poison_allocated_region", "verify_allocated_region"]
+        .iter()
+        .any(|p| name.starts_with(p))
 }
 
 /// Symbolize a stack, optionally without the allocator frames on top.

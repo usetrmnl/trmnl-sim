@@ -28,6 +28,7 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols, mc: &mut Memcheck) {
     hooks.install(syms, "multi_heap_free", heap_free);
     hooks.install(syms, "multi_heap_aligned_free", heap_free);
     hooks.install(syms, "multi_heap_realloc", heap_realloc);
+    hooks.install(syms, "multi_heap_get_allocated_size", heap_allocated_size);
     hooks.install(syms, "prvAddNewTaskToReadyList", task_created);
     hooks.install(syms, "prvDeleteTCB", task_deleted);
     mc.bindings = Bindings {
@@ -123,6 +124,17 @@ fn heap_free(c: &mut HleCtx) -> Flow {
             raise(c, *v);
             Flow::Return(None)
         }
+    }
+}
+
+/// size_t multi_heap_get_allocated_size(heap, void *p): the size asked for, for a live block.
+/// When a realloc can't grow a block in its heap, `heap_caps_realloc` moves it to another
+/// one, copying this many bytes: the whole TLSF block would read past what was asked for.
+fn heap_allocated_size(c: &mut HleCtx) -> Flow {
+    let p = c.cpu.arg(1);
+    match c.mem.memcheck().and_then(|mc| mc.live_size(p)) {
+        Some(n) => Flow::Return(Some(n)),
+        None => Flow::Continue,
     }
 }
 
