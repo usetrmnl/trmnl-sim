@@ -413,8 +413,9 @@ The suite ([tests/integration](tests/integration)) runs in about two minutes and
 no internet. For the TRMNL OG it covers:
 
 - the first-boot setup screen and captive portal, and the portal's 15-minute timeout;
-- factory QA near a `TRMNL_QA` network: pass, fail on an overheating chip, stopped by the
-  button (needs the firmware's QA fix; see [test_errors.py](tests/integration/test_errors.py));
+- factory QA near a `TRMNL_QA` network (every build but the X's): pass, fail on an
+  overheating chip, stopped by the button (needs the firmware's QA fix; see
+  [test_errors.py](tests/integration/test_errors.py));
 - onboarding, and WiFi failures (unknown SSID, wrong password);
 - `/api/setup` and `/api/display` requests and their headers, including the `Panel-Rev`
   read from the panel;
@@ -495,7 +496,7 @@ so those tests are skipped (`@needs("double_click")`, `@needs("soft_reset_press"
 what the X doesn't have (factory QA, sensors, Panel-Rev). Its goldens are in
 [golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`support.golden`).
 
-Fault injection ([test_faults.py](tests/integration/test_faults.py) on the OG,
+Fault injection ([test_faults.py](tests/integration/test_faults.py) on the device under test,
 [test_faults_x.py](tests/integration/test_faults_x.py) on the X): HTTP 500 and malformed
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
 modem path); slow, high-latency and lossy links; DNS failure; an access point without
@@ -719,7 +720,9 @@ goes through exactly once (`malloc`, `heap_caps_*`, `new`, newlib in ROM; IDF 4.
 byte per byte of SRAM (and of the S3's 32 MB PSRAM window) marks user bytes of live
 blocks, freed blocks, block headers and the slack after a block, and never-allocated
 heap; every CPU load and store is checked against it (DMA and simulator accesses are
-not), except by the allocator's own code. Freed blocks wait in a small quarantine
+not), except by the allocator's own code (including heap poisoning's canaries, which the
+ESP32-S3's Arduino 2 libraries write; `multi_heap_get_allocated_size` answers the size asked
+for, so a realloc into another heap copies only that). Freed blocks wait in a small quarantine
 (16 KB internal, 256 KB PSRAM; blocks over a quarter of that are freed at once) before
 the allocator gets them back, and `realloc` always moves the block, so stale pointers
 keep pointing at poisoned memory. Off, its cost is within measurement noise (0-3%);

@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 import setup_cache
-from support import (BUILD, BWRY_BUILD, DEVICE, KNOWN_MEMORY_BUGS, TURBO, MockTrmnl, device_image, panel_number, sim,
+from support import (BUILD, BWRY_BUILD, DEVICE, DEVICES, GEN2_NTP_HANG_BUG, KNOWN_MEMORY_BUGS, TURBO, MockTrmnl, device_image, panel_number, sim,
                      skip_if)
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
@@ -58,7 +58,10 @@ def expected_failure_if(cond: bool):
 
 
 KNOWN_FAILURES = {
-    **{env: {"MemcheckOG.test_idf_task_stacks_have_room": IDF_SMALL_STACKS} for env in ()},
+    **{d.env: {"MemcheckOG.test_idf_task_stacks_have_room": IDF_SMALL_STACKS}
+       for d in DEVICES.values() if d.chip == "esp32s3" and d.env not in ARDUINO_3},
+    **{env: {"MemcheckOG.test_sntp_server_name_is_not_used_after_free": GEN2_NTP_HANG_BUG}
+       for env in ("trmnl_gen2", "trmnl_gen2_4clr")},
     "TRMNL_X_PAPERS3": {"MemcheckOG.test_qa_screen_is_not_read_past_its_buffer": QA_SECOND_DISPLAY_INIT},
     "TRMNL_X_LILYGO_T5PRO": {"MemcheckOG.test_qa_screen_is_not_read_past_its_buffer": QA_SECOND_DISPLAY_INIT},
 }
@@ -120,7 +123,8 @@ class MemcheckOG(unittest.TestCase):
             self.assertTrue([t for t in report["stacks"] if t["task"].startswith("IDLE")], "no IDLE task seen")
             assert_no_low_stacks(self, {"stacks": [t for t in report["stacks"] if t["task"].startswith(IDF_TASKS)]})
 
-    @unittest.expectedFailure
+    @fixed_on("TRMNL_X", "TRMNL_X_PAPERS3", "TRMNL_X_LILYGO_T5PRO", "TRMNL_X_SENSORIAC5",
+              why="Arduino 3's SNTP (IDF 5's lwIP) doesn't ask for the freed name again before the device sleeps")
     def test_sntp_server_name_is_not_used_after_free(self):
         # Clock::sync hands configTime() the c_str() of a String that setTimeFromNTP frees on
         # return; SNTP keeps the pointer and resolves it again on every retry.
