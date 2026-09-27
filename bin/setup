@@ -3,7 +3,8 @@
 #   - Rust (stable, via rustup) with clippy and rustfmt
 #   - a C toolchain (for crates with build scripts)
 #   - Python 3 (integration tests)
-#   - the ESP32 ROM ELFs from PlatformIO (only if PlatformIO is installed)
+#   - the ESP32 ROM ELFs: Espressif's esp-rom-elfs release into rom/ (the ESP32-C5 one),
+#     and PlatformIO's tool-esp-rom-elfs (only if PlatformIO is installed)
 #
 #   bin/setup
 set -euo pipefail
@@ -58,6 +59,12 @@ if have rustup; then
   rustup toolchain install stable --profile minimal --component clippy,rustfmt
 fi
 
+# ---- ROM ELFs ------------------------------------------------------------------------------------
+# PlatformIO's package lacks the ESP32-C5 production-silicon ROM: fetch Espressif's release.
+if [[ ! -f rom/esp32c5_rev100_rom.elf ]] && have curl; then
+  say "Downloading Espressif's ROM ELFs into rom/ (esp-rom-elfs)"
+  scripts/fetch-rom-elfs.sh || warn "could not fetch the ROM ELFs (ESP32-C5 builds need rom/esp32c5_rev100_rom.elf)"
+fi
 # ---- PlatformIO ROM ELFs -------------------------------------------------------------------------
 if have pio; then
   if ! ls -d "$HOME"/.platformio/packages/tool-esp-rom-elfs* >/dev/null 2>&1; then

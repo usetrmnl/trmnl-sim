@@ -15,6 +15,8 @@ Supported devices, picked from the build directory's name (the PlatformIO env) o
 | `trmnl_4clr` | TRMNL BWRY | ESP32-C3 (RISC-V) | 7.5" 800×480 black/white/yellow/red (GDEM075F52) | button |
 | `TRMNL_X` | TRMNL X | ESP32-S3 (dual-core Xtensa LX7) + ESP32-C5 modem | 10.3" 1872×1404 parallel panel, 16 grays | touch bar (left/center/right), magnetic dock |
 | `seeed_reTerminal_E1002` | Seeed reTerminal E1002 | ESP32-S3 (XIAO, 8 MB octal PSRAM) | 7.3" 800×480 Spectra 6: black/white/yellow/red/blue/green (GDEP073E01) over SPI | button |
+| `trmnl_gen2` | TRMNL OG gen 2 | ESP32-C5 (RISC-V, 2.4 + 5 GHz WiFi) | 7.5" 800×480, UC8179 over SPI | button, USB power (dock switch) |
+| `trmnl_gen2_4clr` | TRMNL BWRY gen 2 | ESP32-C5 | 7.5" 800×480 black/white/yellow/red | button, USB power (dock switch) |
 
 BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEVICE_MODEL`):
 
@@ -42,8 +44,11 @@ BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEV
 ¹ main's `platformio.ini` can't build these envs: `seeed_xiao_esp32s3` lacks `framework = arduino`
 and `CrowPanel42` lacks `lib_deps` (build them from a copy of the ini with those added, and a
 separate `[platformio] build_dir`: a different project config makes pio wipe `.pio/build`).
-Boards with ESP32 (classic) or ESP32-C5 chips (`waveshare`, `esp32dev`, `sensoria_c5`,
-`esp32-c5-devkitc-1`, `trmnl_gen2`) need a CPU/SoC model the simulator doesn't have.
+Boards with an ESP32 (classic) chip (`waveshare`, `esp32dev`) need a CPU/SoC model the
+simulator doesn't have. Of the other ESP32-C5 envs, `TRMNL_X_SENSORIAC5` (`sensoria_c5`, a
+FastEPD parallel panel on the C5's PARLIO, with quad PSRAM) needs PSRAM and PARLIO models, and
+`esp32-c5-devkitc-1` doesn't build (no platform override, so PlatformIO's espressif32 6.x
+doesn't know the board) and has no `DEVICE_MODEL`.
 
 ![setup screen as rendered by the simulator](tests/integration/golden/setup_screen.png)
 
@@ -70,6 +75,21 @@ panel; detected from the firmware):
 | 4-color panel (BWRY) | The same UC81xx command set with one 2 bit/pixel image (`DTM1`) and the panel's built-in ~16 s refresh: the screen flashes rapidly black and white (every 100 ms for 9 s), then shows the image in exact black/white/yellow/red. The window's **Refresh flashing** checkbox turns the flashes off (same timing). Screenshots and the window are in color |
 | Button | GPIO2 with pull-up: presses, holds, double-clicks, and deep-sleep GPIO wake |
 | Battery | ADC on GPIO3 behind the ½ divider; settable voltage |
+
+**TRMNL OG gen 2** (`trmnl_gen2`) and **TRMNL BWRY gen 2** (`trmnl_gen2_4clr`; the
+firmware's `og_gen2` / `og_gen2_4clr` rows): the OG's panels on an ESP32-C5 board (SCK 6,
+MOSI 1, CS 4, RST 2, DC 5, BUSY 0, button GPIO 3).
+
+| Part | How |
+|---|---|
+| CPU | RV32IMAC interpreter with the C5's CLIC (hardware-vectored interrupts through `mtvt`, `mintthresh`/`mintstatus` levels, nesting), at the firmware's clock (240 MHz) |
+| Boot | The production-silicon (v1.x) mask ROM, `esp32c5_rev100_rom.elf`, and the 2nd-stage bootloader from flash offset 0x2000 |
+| Peripherals | ESP32-C5 memory map (384 KB HP SRAM, 16 KB LP SRAM kept in deep sleep), 8 or 16 MB flash through SPI_MEM and the 512-entry cache MMU (with the boot-time MSPI timing tuning), interrupt matrix + CLIC, PCR clocks and resets, the low-power domain (PMU wake causes, LP_CLKRST reset causes, LP_TIMER, LP_AON), SYSTIMER, TIMG calibration, GPIO/IO_MUX (29 pins), regi2c analog registers, UART0 and the USB serial/JTAG console (merged: IDF logs to both, a line is shown once), I2C, GPSPI2, eFuse (MAC, chip v1.0, block v0.2), RNG |
+| Crypto | SHA (incl. SHA-384/512), AES and AES-GCM over the AHB DMA, RSA/MPI, and the ECC (point multiplication and verification, Jacobian and modular modes; P-192/256/384) and ECDSA (signature verification) accelerators, so TLS runs on them as on the chip |
+| WiFi | Dual band: besides **TRMNL-Sim** and **Neighbors WiFi**, **TRMNL-Sim-5G** (channel 36, −48 dBm, any password) joins on the C5's own radio (`WiFi-Band: 5`) |
+| Battery | BQ27427 fuel gauge on I2C (SDA 23 / SCL 10; BWRY: 11 / 12); the firmware reads its voltage |
+| USB power | BQ25616 charger: PG (GPIO 25) and STAT (GPIO 24), open drain, follow the dock switch (USB plugged in; charging below 4.15 V), reported as `USB-Connected` / `Battery-Charging` |
+| Firmware | IDF 5.5 built from source with Arduino 3.3 (`framework = arduino, espidf`), `DEV_FIRMWARE` logging |
 
 **Seeed reTerminal E1002** (`seeed_reTerminal_E1002`; an ESP32-S3 build that drives an SPI
 panel through bb_epaper): the ESP32-S3 below with the SPI e-paper board above, wired as the
@@ -112,6 +132,9 @@ Firmware bugs these boards show (each is an expected-failure test):
 - The BWR DIY kit has no black/white/red image path: 2-bit color PNGs go through the 4-gray
   planes and land in the wrong inks.
 - The Xteink X4 reports 0 V (`batt_pin` 0xff although `PIN_BATTERY` is 0).
+- The gen-2 BWRY (`trmnl_gen2_4clr`) defines `BOARD_TRMNL_GEN2` but not `BOARD_TRMNL_4CLR`,
+  which the 4-color image path is compiled under: images are sent as two 1-bit planes that
+  the panel reads as 2 bits per pixel, so only the top half changes, in the wrong inks.
 - On 960 px parallel panels the setup screen's instructions overflow the width; the
   CrowPanel's 800×480 layouts don't fit 400×300.
 
@@ -129,12 +152,18 @@ Firmware bugs these boards show (each is an expected-failure test):
 ## Requirements
 
 - Rust (stable, 1.85+).
-- A PlatformIO build of the firmware: `pio run -e trmnl`, `-e trmnl_4clr`, `-e TRMNL_X`
-  and/or `-e seeed_reTerminal_E1002` in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
+- A PlatformIO build of the firmware: `pio run -e trmnl`, `-e trmnl_4clr`, `-e TRMNL_X`,
+  `-e seeed_reTerminal_E1002`, `-e trmnl_gen2` and/or `-e trmnl_gen2_4clr` in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
   and the modem firmware); its post-build script downloads it into the build dir.
-- The ESP32-C3 / ESP32-S3 ROM ELFs from PlatformIO's `tool-esp-rom-elfs` package.
-  They are usually already installed; if not, run
-  `pio pkg install -g -t platformio/tool-esp-rom-elfs`, or pass `--rom path/to/rom.elf`.
+- The chips' mask ROM ELFs. The ESP32-C3 and ESP32-S3 ones come with PlatformIO's
+  `tool-esp-rom-elfs` package (usually already installed; else
+  `pio pkg install -g -t platformio/tool-esp-rom-elfs`). The ESP32-C5's production silicon
+  (v1.x) has a different ROM than the v0.x samples in that package: `esp32c5_rev100_rom.elf`,
+  from Espressif's [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs/releases) release
+  20260528. `scripts/fetch-rom-elfs.sh` (run by `bin/setup`) downloads and checks it into
+  `rom/`. The simulator looks for a ROM ELF in `rom/` of its checkout, `rom/` next to the
+  executable, `~/.cache/trmnl-sim/rom-elfs` (`$XDG_CACHE_HOME`), then PlatformIO's
+  `tool-esp-rom-elfs` packages; `--rom path/to/rom.elf` (or `TRMNL_SIM_ROM`) overrides it.
 - Python 3.9+ for the integration tests (standard library only).
 
 ## Quick start
@@ -143,7 +172,7 @@ Firmware bugs these boards show (each is an expected-failure test):
 bin/setup      # install Rust (rustup), a C toolchain, Python 3, the ESP32 ROM ELFs
 bin/build      # cargo build --release
 bin/dev        # build, then run the OG build from ../trmnl-firmware
-bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X
+bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
 bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy and unit tests
 bin/spec       # integration tests (bin/spec test_trmnl_x for a subset)
@@ -157,6 +186,7 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr  # TRMNL BWRY
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X   # TRMNL X
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002  # reTerminal E1002
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
 The window shows the device. On the OG, click and hold the button on screen, or hold
@@ -301,7 +331,9 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 The simulated WiFi environment has two networks: **TRMNL-Sim** (any password
 works) and **Neighbors WiFi** (password `hunter2hunter2`), at −54 and −81 dBm. The
 TRMNL X modem also sees **TRMNL-Sim-5G** (channel 36, −48 dBm, any password); joining
-it makes the firmware do all its HTTP through the modem.
+it makes the firmware do all its HTTP through the modem. The ESP32-C5's own radio is dual
+band: it sees TRMNL-Sim-5G too and joins it directly. Access points on channels 36 and up
+are invisible to the 2.4 GHz-only C3 and S3.
 
 ### Time
 
@@ -383,6 +415,14 @@ goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switch
 divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with and without
 alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
 and a save point keeping the color image.
+
+For the gen-2 OG and BWRY ([test_og_gen2.py](tests/integration/test_og_gen2.py), a class
+each; skipped without a `trmnl_gen2` / `trmnl_gen2_4clr` build in `TRMNL_FIRMWARE_BUILDS`):
+the BYOD checks (onboarding through the portal, identity headers, a served image), the
+fuel gauge's voltage, `USB-Connected`/`Battery-Charging` from the charger lines, timer and
+button wake, deep-sleep and power-off save points, onboarding on 5 GHz with the C5's own
+radio (`WiFi-Band`), HTTPS on the crypto accelerators, and memcheck and coverage runs; the
+BWRY's colors and the long refresh (its image bug is an expected failure).
 
 For the BYOD boards ([test_byod_uc8179.py](tests/integration/test_byod_uc8179.py),
 [test_byod_uc81xx.py](tests/integration/test_byod_uc81xx.py),
@@ -667,8 +707,9 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 ├─ arch/               CPU cores behind MemBus + GuestCpu traits (riscv.rs, xtensa.rs)
 ├─ soc/                one module per chip, implementing the chip-agnostic Machine trait
 │  ├─ esp32c3/         memory map, peripherals, crypto/GDMA, boot flow, interrupt routing
-│  └─ esp32s3/         the same for the dual-core S3, plus PSRAM, LCD_CAM, USB console
-├─ periph/             IP blocks shared by chips (SYSTIMER, I2C engine, SHA, AES/RSA math)
+│  ├─ esp32s3/         the same for the dual-core S3, plus PSRAM, LCD_CAM, USB console
+│  └─ esp32c5/         the C5: CLIC, PCR/LP domain, cache MMU, AHB DMA, ECC/ECDSA, USB console
+├─ periph/             IP blocks shared by chips (SYSTIMER, I2C engine, SHA, AES/RSA math, EC math)
 ├─ board/              what's wired to the pins (spi_epd.rs: OG, BWRY and SPI-panel BYOD boards;
 │                      trmnl_x.rs; parallel_byod.rs: PaperS3, T5 Pro); Board trait
 ├─ devices/            e-paper controllers (UC8179/UC81xx, SSD16xx, dual-CS, parallel), SPI NOR flash,
@@ -687,11 +728,12 @@ crates/
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```
 
-**Chips and boards.** The build's image header names the chip (C3 or S3); the board comes
-from `--board` or the build directory's name, else from the chip and the firmware's symbols. A core implements `GuestCpu`; the Xtensa windowed ABI
+**Chips and boards.** The build's image header names the chip (C3, S3 or C5); the board comes
+from `--board` or the build directory's name, else from the chip and the firmware's symbols. A core implements `GuestCpu`; the C3 and C5 share
+the RISC-V core (the C5 switches on its CLIC mode), and the Xtensa windowed ABI
 lives behind `arg`, `return_from_hook`, `alloc_scratch` and `begin_call`, so the
-IDF-level HLE (WiFi, sleep, ADC) is the same code on both chips. The WiFi model
-handles the struct layouts of both IDF 4.4 and 5.5. A new board is a `Board`
+IDF-level HLE (WiFi, sleep, ADC) is the same code on every chip. The WiFi model
+handles the struct layouts of IDF 4.4 and 5.5 (and 5.5's dual-band variant on the C5). A new board is a `Board`
 implementation plus its devices; a new chip is a `soc/` module.
 
 **HLE and OTA.** Hooks are bound to addresses from `firmware.elf`. On every boot the
@@ -701,8 +743,12 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
 
 ## Limitations
 
-- ESP32-C3 and ESP32-S3 boards only (no classic ESP32 or ESP32-C5 builds). BYOD boards
-  model what the firmware uses: no SD cards, touch panels, power-hold latches or charging.
+- ESP32-C3, ESP32-S3 and ESP32-C5 boards only (no classic ESP32). BYOD boards model what the
+  firmware uses: no SD cards, touch panels or power-hold latches; charging only where the
+  firmware reads a charger (TRMNL X, gen-2 OG).
+- ESP32-C5: no PSRAM, PARLIO, ADC or LP core models yet (the gen-2 OG builds don't use
+  them); the ECDSA accelerator verifies signatures but can't sign or export keys (those use
+  eFuse keys). WiFi 6 / 802.11ax details and BLE aren't modelled.
 - No 802.11 emulation: WiFi is modelled at the ESP-IDF driver API. Signal strength,
   roaming and power-save behaviour are canned.
 - TRMNL OG: no sensors on the I2C bus (all addresses NACK). No USB data, no serial
