@@ -8,6 +8,21 @@ from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
+# Firmware layout bug on panels smaller than 800x480: display_show_msg() puts the screens'
+# texts at the OG's fixed coordinates (the version line at (40, 48) next to the QR code at
+# width - 106, the portal texts at y 386 and 340) and centres lines wider than the panel.
+SMALL_PANEL = ("display_show_msg() lays the screen out for 800x480 (display.cpp:2796-2813, 2559, 2225-2243): "
+               "texts off the bottom, cut off at the sides, the version line under the QR code")
+
+KNOWN_FAILURES: dict[str, dict[str, str]] = {
+    "CrowPanel42": {
+        "FreshDevice.test_setup_screen": SMALL_PANEL,
+        "FreshDevice.test_setup_screen_names_the_access_point": SMALL_PANEL,
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps": SMALL_PANEL,
+        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": SMALL_PANEL,
+        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": SMALL_PANEL,
+    },
+}
 
 
 def regions(w: int, h: int) -> dict:

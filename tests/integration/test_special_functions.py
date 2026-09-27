@@ -16,12 +16,28 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 # "old" RAM (0x26); that holds an earlier picture (or its inverse after a fast refresh), so
 # the BMP comes out as a mix of the two. See test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh.
 SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) (display.cpp:1764) with the "
+                 "bb_epaper product number the panel was begun with, selecting a 2.9\" 128x296 panel: 1-bit PNGs "
+                 "never show (see test_byod_ssd.CrowPanel42)")
+# Firmware bug: classify_button_presses() (button.cpp:62-92) times a press from when it starts
+# reading the button, not from the wake. If the first click is still held then (the firmware
+# took longer to boot than usual) but released within 50 ms, it is NoAction and the second
+# click is never waited for.
+SLOW_BOOT_CLICK = ("button.cpp:84-92: a first click still held when classify_button_presses() starts (50 ms after "
+                   "boot) but released within 50 ms counts as NoAction; the double click is lost")
 
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
         "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
         "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "CrowPanel42": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": CROWPANEL_PNG,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": CROWPANEL_PNG,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": CROWPANEL_PNG,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": CROWPANEL_PNG,
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
     },
 }
 

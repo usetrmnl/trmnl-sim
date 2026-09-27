@@ -14,6 +14,9 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 # "old" RAM (0x26); that holds an earlier picture (or its inverse after a fast refresh), so
 # the BMP comes out as a mix of the two. See test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh.
 SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) (display.cpp:1764) with the "
+                 "bb_epaper product number the panel was begun with, selecting a 2.9\" 128x296 panel: 1-bit PNGs "
+                 "never show (see test_byod_ssd.CrowPanel42)")
 X4_BATTERY = ("device_list[] (display.cpp:51) gives the X4 batt_pin 0xff though its divider is on GPIO0 "
               "(config.h:117), so it always reports 0 V")
 
@@ -22,6 +25,10 @@ KNOWN_FAILURES = {
         "RefreshCycle.test_image_is_rendered_exactly": SSD_BMP,
         "RefreshCycle.test_timer_wake_fetches_next_image": SSD_BMP,
         "RefreshCycle.test_reports_battery_voltage": X4_BATTERY,
+    },
+    "CrowPanel42": {
+        "RefreshCycle.test_image_is_rendered_exactly": CROWPANEL_PNG,
+        "RefreshCycle.test_timer_wake_fetches_next_image": CROWPANEL_PNG,
     },
 }
 

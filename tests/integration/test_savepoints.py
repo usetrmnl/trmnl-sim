@@ -19,10 +19,17 @@ OTHER_BUILD = BWRY_BUILD if DEVICE.env == "trmnl" else OG_BUILD
 # Firmware bug on the SSD16xx boards (see test_refresh_cycle): the next image, a 1-bit BMP, is
 # refreshed partially against a stale old-image RAM.
 SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) (display.cpp:1764) with the "
+                 "bb_epaper product number the panel was begun with, selecting a 2.9\" 128x296 panel: 1-bit PNGs "
+                 "never show (see test_byod_ssd.CrowPanel42)")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SavePoints.test_timer_wake_refreshes_without_onboarding": SSD_BMP,
         "SavePoints.test_in_memory_slot_goes_back_in_time": SSD_BMP,
+    },
+    "CrowPanel42": {
+        "SavePoints.test_timer_wake_refreshes_without_onboarding": CROWPANEL_PNG,
+        "SavePoints.test_in_memory_slot_goes_back_in_time": CROWPANEL_PNG,
     },
 }
 
