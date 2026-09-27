@@ -9,7 +9,9 @@ from pathlib import Path
 from support import BUILD, BWRY_BUILD, ProvisionedDevice, Simulator, big_number, sim
 from trmnl_sim import SimError
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 dev: ProvisionedDevice
 tmp: Path

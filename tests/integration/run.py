@@ -143,9 +143,44 @@ SLOW_FIRST = ["test_trmnl_x", "test_faults_x", "test_memcheck", "test_faults", "
 COUNTS = ("run", "failures", "errors", "skipped", "expected_failures", "unexpected_successes")
 
 
+class DeviceLoader(unittest.TestLoader):
+    """Loads tests with the device under test's known failures marked: a module's
+    KNOWN_FAILURES = {"<env>": {"Class.test_name" or "Class": "what the firmware gets wrong"}}
+    turns those tests into expected failures when that environment is under test."""
+
+    def loadTestsFromNames(self, names, module=None):
+        return self._mark(super().loadTestsFromNames(names, module))
+
+    def loadTestsFromModule(self, module, *args, **kw):
+        return self._mark(super().loadTestsFromModule(module, *args, **kw))
+
+    @staticmethod
+    def _mark(suite):
+        from devices import under_test
+
+        env = under_test().env
+
+        def walk(s):
+            for t in s:
+                if isinstance(t, unittest.TestSuite):
+                    walk(t)
+                    continue
+                cls = type(t)
+                known = getattr(sys.modules.get(cls.__module__), "KNOWN_FAILURES", {}).get(env, {})
+                name = getattr(t, "_testMethodName", None)
+                if name and (f"{cls.__name__}.{name}" in known or cls.__name__ in known):
+                    fn = getattr(cls, name)
+                    if not getattr(fn, "__unittest_expecting_failure__", False):
+                        setattr(cls, name, unittest.expectedFailure(fn))
+
+        walk(suite)
+        return suite
+
+
 def run_here(argv: list[str]) -> bool:
     """unittest.main on `argv`; writes the counts to $TRMNL_SPEC_RESULT if set."""
-    prog = unittest.main(module=None, argv=["run.py", *argv], testRunner=ColorRunner, exit=False)
+    prog = unittest.main(module=None, argv=["run.py", *argv], testRunner=ColorRunner, testLoader=DeviceLoader(),
+                         exit=False)
     r = prog.result
     out = os.environ.get("TRMNL_SPEC_RESULT")
     if out:
@@ -225,37 +260,25 @@ def classes_by_env() -> dict[str, list[tuple[str, str]]]:
                     missing.append(f"{name}.{type(t).__name__}")
 
         walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+    from devices import ANY, DEVICES
+
+    strays = sorted(e for e in out if e != ANY and e not in DEVICES)
+    if strays:
+        sys.exit(f"tests name environments devices.py doesn't know: {', '.join(strays)}")
     if missing:
         sys.exit(f"these test classes don't say which PlatformIO environment they run (set ENV on "
                  f"the class or its module): {', '.join(missing)}")
     return out
 
 
-def env_units(envs: list[str]) -> list[str]:
-    """The run units for environments' tests: a whole module when all of it is theirs
-    (keeping its fixtures shared), else its classes. Exits if an environment has no tests
-    or no build."""
+def units_of(classes: set[tuple[str, str]], by_env: dict[str, list[tuple[str, str]]]) -> list[str]:
+    """Run units for a set of test classes: a whole module when all of it is in the set and
+    it keeps its fixtures module-wide (no PARALLEL_BY_CLASS), else its classes."""
     import importlib
 
-    by_env = classes_by_env()
-    # PlatformIO's names are case-sensitive; accept e.g. trmnl_x for TRMNL_X
-    folded = {e.lower(): e for e in by_env}
-    envs = [e if e in by_env else folded.get(e.lower(), e) for e in envs]
-    unknown = [e for e in envs if e not in by_env]
-    if unknown:
-        sys.exit(f"no tests for {', '.join(unknown)} (environments with tests: {', '.join(sorted(by_env))}; "
-                 f"test modules are named test_*)")
-    from support import build_for_env
-
-    for e in envs:
-        build = build_for_env(e)
-        if not (build / "firmware.elf").exists():
-            sys.exit(f"no {e} build at {build}: run `pio run -e {e}` in the firmware checkout "
-                     f"(or bin/spec --build-firmware {e})")
-    wanted = {c for e in envs for c in by_env[e]}
     units = []
     for name in test_modules():
-        mine = [c for m, c in sorted(wanted) if m == name]
+        mine = {c for m, c in classes if m == name}
         if not mine:
             continue
         everything = [c for cs in by_env.values() for m, c in cs if m == name]
@@ -267,15 +290,49 @@ def env_units(envs: list[str]) -> list[str]:
     return units
 
 
-def list_envs() -> None:
+def env_units(envs: list[str]) -> list[tuple[str, str]]:
+    """(selector, environment) run units for environments: the tests specific to each, plus
+    the general ones (ENV = ANY) with it as the device under test. Exits if an environment
+    is unknown or not built."""
+    from devices import ANY, device
     from support import build_for_env
 
     by_env = classes_by_env()
-    print(f"{'environment':32} {'tests':>5}  build")
-    for env in sorted(by_env, key=str.lower):
+    try:
+        envs = [device(e).env for e in envs]  # PlatformIO names are case-sensitive; accept trmnl_x
+    except KeyError as e:
+        sys.exit(f"{e.args[0]}; test modules are named test_*")
+    units = []
+    for e in envs:
+        build = build_for_env(e)
+        if not (build / "firmware.elf").exists():
+            sys.exit(f"no {e} build at {build}: run `pio run -e {e}` in the firmware checkout "
+                     f"(or bin/spec --build-firmware {e})")
+        classes = set(by_env.get(e, []))
+        why = device(e).general
+        if why:
+            print(paint(YELLOW, f"{e}: the general tests don't run: {why}"), file=sys.stderr)
+        else:
+            classes |= set(by_env.get(ANY, []))
+        units += [(u, e) for u in units_of(classes, by_env)]
+    return units
+
+
+def list_envs() -> None:
+    from support import build_for_env
+
+    from devices import ANY, DEVICES
+
+    by_env = classes_by_env()
+    general = sum(TEST_COUNTS.get(c, 0) for c in by_env.get(ANY, []))
+    print(f"{general} general tests run on every device unless noted\n")
+    print(f"{'environment':32} {'own':>5} {'total':>5}  build")
+    for env in sorted(DEVICES, key=str.lower):
         built = "yes" if (build_for_env(env) / "firmware.elf").exists() else "missing"
-        tests = sum(TEST_COUNTS.get(c, 0) for c in by_env[env])
-        print(f"{env:32} {tests:>5}  {built}")
+        own = sum(TEST_COUNTS.get(c, 0) for c in by_env.get(env, []))
+        why = DEVICES[env].general
+        total = own if why else own + general
+        print(f"{env:32} {own:>5} {total:>5}  {built}" + (f"  (no general tests: {why})" if why else ""))
 
 
 def split_by_class(unit: str) -> list[str]:
@@ -301,7 +358,13 @@ def split_by_class(unit: str) -> list[str]:
     return [f"{unit}.{c}" for c in classes]
 
 
-def run_parallel(jobs: int, flags: list[str], units: list[str]) -> bool:
+def unit_name(unit) -> str:
+    return f"{unit[0]} [{unit[1]}]" if isinstance(unit, tuple) else unit
+
+
+def run_parallel(jobs: int, flags: list[str], units: list) -> bool:
+    """Run each unit (a selector, or (selector, environment of the device under test)) in a
+    worker process."""
     env = dict(os.environ)
     if COLOR:
         env["FORCE_COLOR"] = "1"
@@ -313,11 +376,16 @@ def run_parallel(jobs: int, flags: list[str], units: list[str]) -> bool:
         while pending or running:
             while pending and len(running) < jobs:
                 unit = pending.pop(0)
-                result, log = tmp / f"{unit}.json", tmp / f"{unit}.log"
+                selector, device = unit if isinstance(unit, tuple) else (unit, None)
+                stem = unit_name(unit).replace(" ", "")
+                result, log = tmp / f"{stem}.json", tmp / f"{stem}.log"
                 fh = open(log, "w+")
+                wenv = {**env, "TRMNL_SPEC_RESULT": str(result)}
+                if device:
+                    wenv["TRMNL_SIM_DEVICE"] = device
                 proc = subprocess.Popen(
-                    [sys.executable, __file__, "-j", "1", *flags, unit],
-                    cwd=HERE, env={**env, "TRMNL_SPEC_RESULT": str(result)},
+                    [sys.executable, __file__, "-j", "1", *flags, selector],
+                    cwd=HERE, env=wenv,
                     stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
                 )
                 running[proc] = (unit, result, fh, time.monotonic())
@@ -333,10 +401,10 @@ def run_parallel(jobs: int, flags: list[str], units: list[str]) -> bool:
                     for k in COUNTS:
                         totals[k] += counts[k]
                 if not ok:
-                    failed.append(unit)
+                    failed.append(unit_name(unit))
                 took = time.monotonic() - start
                 mark = paint(GREEN, "ok") if ok else paint(RED + BOLD, "FAILED")
-                print(paint(BOLD, f"\n=== {unit} ({took:.0f}s) ") + mark, file=sys.stderr)
+                print(paint(BOLD, f"\n=== {unit_name(unit)} ({took:.0f}s) ") + mark, file=sys.stderr)
                 sys.stderr.write(output)
                 sys.stderr.flush()
     except KeyboardInterrupt:
@@ -368,8 +436,20 @@ if __name__ == "__main__":
         sys.exit(0)
     envs = [s for s in selectors if is_env(s)]
     if envs:
-        selectors = [s for s in selectors if not is_env(s)] + env_units(envs)
-        print(paint(BOLD, f"{', '.join(envs)}: " + " ".join(selectors)), file=sys.stderr, flush=True)
+        units = [u for s in selectors if not is_env(s) for u in split_by_class(s)] + env_units(envs)
+        if jobs == 1:
+            # one environment at a time, each in-process run with its device under test
+            ok = True
+            for u in units:
+                selector, device = u if isinstance(u, tuple) else (u, None)
+                code = subprocess.call([sys.executable, __file__, "-j", "1", *flags, selector], cwd=HERE,
+                                       env={**os.environ, **({"TRMNL_SIM_DEVICE": device} if device else {})})
+                ok = ok and code == 0
+        else:
+            ok = run_parallel(jobs, flags, units)
+        if os.environ.get("TRMNL_SIM_COVERAGE") and not os.environ.get("TRMNL_SPEC_RESULT"):
+            report_coverage(os.environ["TRMNL_SIM_COVERAGE"])
+        sys.exit(not ok)
     units = selectors or sorted((p.stem for p in HERE.glob("test_*.py")), key=lambda m: (m not in SLOW_FIRST, SLOW_FIRST.index(m) if m in SLOW_FIRST else 0, m))
     if jobs == 1 or len(units) == 1:
         ok = run_here([*flags, *selectors])

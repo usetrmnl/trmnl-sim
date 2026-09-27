@@ -13,7 +13,9 @@ from support import ROOT, sim
 sys.path.insert(0, str(ROOT / "scripts"))
 import coverage  # noqa: E402  (scripts/coverage.py)
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 
 def load(path: Path) -> dict:

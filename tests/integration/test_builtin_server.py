@@ -8,7 +8,9 @@ import urllib.request
 from support import BUILD, BWRY_BUILD, sim, big_number
 from trmnl_mock import color_bars, expected_bwry, png_gray, png_rgb
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 
 def onboard(s, refresh_rate: int = 300) -> str:

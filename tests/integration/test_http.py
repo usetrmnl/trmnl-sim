@@ -5,7 +5,9 @@ import unittest
 
 from support import MockTrmnl, ProvisionedDevice, big_number, close_fixtures, fixture, sim
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 

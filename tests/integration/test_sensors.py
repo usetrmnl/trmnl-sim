@@ -5,7 +5,9 @@ import unittest
 
 from support import ProvisionedDevice, close_fixtures, fixture
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 dev = fixture(ProvisionedDevice)
 

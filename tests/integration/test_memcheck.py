@@ -13,7 +13,9 @@ import setup_cache
 from support import BUILD, BWRY_BUILD, TURBO, MockTrmnl, big_number, sim
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
-ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+from devices import ANY
+
+ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 

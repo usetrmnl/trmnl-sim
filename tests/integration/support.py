@@ -10,12 +10,14 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-from trmnl_mock import MockTrmnl, big_number, png_image  # noqa: E402
+from trmnl_mock import MockTrmnl, big_number, expected_gray, png_image  # noqa: E402
 from trmnl_sim import Simulator  # noqa: E402
 
 import setup_cache  # noqa: E402
+from devices import ANY, DEVICES, Device, by_build_name, under_test  # noqa: E402
 
-BUILD = Path(os.environ.get("TRMNL_FIRMWARE_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl"))
+# The TRMNL OG's build.
+OG_BUILD = Path(os.environ.get("TRMNL_FIRMWARE_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl"))
 BWRY_BUILD = Path(os.environ.get("TRMNL_BWRY_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/trmnl_4clr"))
 E1002_BUILD = Path(os.environ.get("TRMNL_E1002_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/seeed_reTerminal_E1002"))
 # PlatformIO build directories of the firmware checkout, one per environment
@@ -31,10 +33,54 @@ def build_of(env: str) -> Path:
 def build_for_env(env: str) -> Path:
     """The build the tests of PlatformIO environment `env` use (the OG, BWRY, X and E1002
     builds can be moved with their TRMNL_*_BUILD variables)."""
-    from support_x import X_BUILD
+    x_build = Path(os.environ.get("TRMNL_X_BUILD", ROOT.parent / "trmnl-firmware/.pio/build/TRMNL_X"))
+    known = {"trmnl": OG_BUILD, "trmnl_4clr": BWRY_BUILD, "TRMNL_X": x_build, "seeed_reTerminal_E1002": E1002_BUILD}
+    return known.get(env, build_of(env))
 
-    return {"trmnl": BUILD, "trmnl_4clr": BWRY_BUILD, "TRMNL_X": X_BUILD, "seeed_reTerminal_E1002": E1002_BUILD}.get(
-        env, build_of(env))
+
+# The device the general tests (ENV = ANY) run on, and its build: TRMNL_SIM_DEVICE=<env>,
+# else the TRMNL OG (see devices.py).
+DEVICE: Device = under_test()
+BUILD = build_for_env(DEVICE.env)
+
+
+def needs(*features: str):
+    """Skip a test (or class) unless the device under test has these `Device` features,
+    e.g. @needs("button"), @needs("panel_rev")."""
+    import unittest
+
+    missing = [f for f in features if not getattr(DEVICE, f)]
+    return unittest.skipIf(bool(missing), f"{DEVICE.name} has no {', '.join(missing)}")
+
+
+def only_on(*envs: str, why: str):
+    """Skip a test (or class) unless the device under test is one of these environments;
+    `why` says what makes it specific to them."""
+    import unittest
+
+    return unittest.skipUnless(DEVICE.env in envs, f"only on {', '.join(envs)}: {why}")
+
+
+def device_image(mock: MockTrmnl, name: str, black, device: Device | None = None) -> tuple[str, bytes]:
+    """Serve a black-and-white image the way the TRMNL server would for `device` (the one
+    under test): an 800x480 1-bit BMP for the OG-size panels, else a PNG of the panel's size
+    (a palette PNG for color panels). `black(x, y)` says which pixels are ink. Returns the
+    path the device downloads and the screenshot it should give."""
+    d = device or DEVICE
+    w, h = d.size
+    if d.default_bmp and d.inks == "mono":
+        return f"/images/{name}.bmp", mock.set_image(name, black)
+    if d.inks == "bwry":
+        return f"/images/{name}.png", mock.set_color_png(name, lambda x, y: (0, 0, 0) if black(x, y) else (255, 255, 255), w, h)
+    if d.inks == "spectra6":
+        return f"/images/{name}.png", mock.set_spectra6_png(name, lambda x, y: (0, 0, 0) if black(x, y) else (255, 255, 255), w, h)
+
+    def level(x, y):
+        return 0 if black(x, y) else 1
+
+    mock.images[name + ".png"] = png_image(level, w, h, bits=1)
+    mock._stamp(name)
+    return f"/images/{name}.png", expected_gray(level, w, h, bits=1)
 
 
 def require_build(build: Path):
@@ -137,9 +183,14 @@ class ProvisionedDevice:
     SIM_ARGS: tuple[str, ...] = ("--offline",)
     DEVICE_HOST = "10.0.2.2"
 
-    def __init__(self, build: Path = BUILD, panel_size: tuple[int, int] | None = None):
-        """`panel_size`: serve the default image as a 1-bit PNG of that size (as the TRMNL
-        server does for other panels) instead of the OG's 800x480 BMP."""
+    def __init__(self, build: Path | None = None, panel_size: tuple[int, int] | None | object = ...):
+        """`build`: default, the device under test's. `panel_size`: serve the default image as
+        a 1-bit PNG of that size (as the TRMNL server does for other panels) instead of the
+        OG's 800x480 BMP; default, what the build's device takes (see Device.default_bmp)."""
+        build = build or BUILD
+        if panel_size is ...:
+            d = by_build_name(build.name)
+            panel_size = None if d is None or d.default_bmp else d.size
         self.build = build
         self.panel_size = panel_size
         inputs = {"build": setup_cache.build_id(build), "memcheck": MEMCHECK, "turbo": TURBO, "args": self.SIM_ARGS, "host": self.DEVICE_HOST}
@@ -198,4 +249,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
