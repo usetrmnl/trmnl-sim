@@ -79,6 +79,38 @@ class XPng(Case):
             pass
 
 
+class XModemDownload(Case):
+    def test_long_url_slow_download(self):
+        # An image URL too long for AT+HTTPCLIENT goes through AT+HTTPURLCFG; at 4 kB/s the
+        # download takes a few seconds, so the modem driver reports its progress.
+        m = dev().mock
+        m.set_fault("/img/*", rate=4000)
+        name = "long-" + "x" * 240 + ".png"
+        expected = m.set_png("tmp", digits("4"))
+        # (The driver's Serial lines aren't in a production build's log.)
+        with self.show(name, m.images.pop("tmp.png"), "image/png") as s:
+            self.assertTrue(s.compare_screen(expected, tolerance=64, max_ratio=0)["match"])
+
+
+class XModemLimits(Case):
+    def test_image_larger_than_the_download_buffer(self):
+        # MAX_IMAGE_SIZE is 750000 bytes on the X; the modem download stops past it.
+        # (It is downloaded, and refused, 5 times: a too-big file is retried like any error.)
+        # (The error log isn't submitted: on 5 GHz only the modem is connected, and stored
+        # logs go out over the S3's own WiFi.)
+        with self.show("huge.png", bytes(800_000), "image/png") as s:
+            console = "\n".join(s.console(0))
+        self.assertNotIn("Guru Meditation", console)
+        self.assertIn("HTTPS_IMAGE_FILE_TOO_BIG - file size too big: more than 750000 bytes", console)
+
+    def test_empty_image(self):
+        with self.show("empty.png", b"", "image/png") as s:
+            console = "\n".join(s.console(0))
+        # The modem driver treats a response without data as a failed request, so this never
+        # gets to finishBody()'s "No data received" either.
+        self.assertIn("HTTPS_RESPONSE_CODE_INVALID - modem HTTP status -1, 0 bytes received", console)
+
+
 class XJpeg(Case):
     def test_jpeg_is_dithered_to_16_grays(self):
         with self.show("five.jpg", (DATA / "five_1872x1404.jpg").read_bytes(), "image/jpeg") as s:

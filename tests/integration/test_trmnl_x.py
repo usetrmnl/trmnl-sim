@@ -218,11 +218,11 @@ class TouchAndDock(ProvisionedCase):
 class PortalTimeout(unittest.TestCase):
     """Nobody joins the setup portal: after 15 minutes the X goes back to shipment mode."""
 
-    def time_out(self, s):
+    def time_out(self, s, docked: bool = False):
         s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=30)
         s.dock(True)
         s.wait(portal=True, timeout_s=30)
-        s.dock(False)
+        s.dock(docked)
         s.set_portal_client(False)  # so turbo can run to the timeout
         # Serial isn't running when enter_shipment_sleep() announces itself on a production
         # build, so go by the clock: the portal is gone once 15 minutes have passed.
@@ -236,7 +236,16 @@ class PortalTimeout(unittest.TestCase):
 
     def test_unattended_portal_goes_back_to_shipment_mode(self):
         with shipped().boot() as s:
-            c = self.time_out(s)
+            # Still docked: "ready to ship" until it comes off USB power, then shipment mode.
+            self.time_out(s, docked=True)
+            g = s.status()["display_generation"]
+            s.dock(False)  # checked every 2 s: then the shipping screen
+            deadline = time.time() + 30
+            while s.status()["display_generation"] == g:
+                self.assertLess(time.time(), deadline, "the shipping screen was not drawn")
+                time.sleep(0.2)
+            s.wait(display_idle=True, timeout_s=30)
+            c = s.status()["console_total"]
             s.dock(True)  # the charger ends shipment mode
             s.wait(console=r"CHARGER DETECTED - Exiting shipment mode", since=c, timeout_s=30)
 
