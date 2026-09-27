@@ -29,7 +29,15 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols, mc: &mut Memcheck) {
     hooks.install(syms, "multi_heap_aligned_free", heap_free);
     hooks.install(syms, "multi_heap_realloc", heap_realloc);
     hooks.install(syms, "multi_heap_get_allocated_size", heap_allocated_size);
-    hooks.install(syms, "prvAddNewTaskToReadyList", task_created);
+    if !hooks.install(syms, "prvAddNewTaskToReadyList", task_created) {
+        // GCC's IPA-SRA clone (IDF 4.4 on the S3: prvAddNewTaskToReadyList$isra$6) keeps the
+        // TCB as its first argument
+        if let Some(name) = syms.names_with_prefix("prvAddNewTaskToReadyList$isra").into_iter().next()
+            && let Some(a) = syms.addr(&name)
+        {
+            hooks.install_at(a & !1, "prvAddNewTaskToReadyList", task_created);
+        }
+    }
     hooks.install(syms, "prvDeleteTCB", task_deleted);
     mc.bindings = Bindings {
         malloc: syms.addr("multi_heap_malloc").unwrap_or(0),
@@ -200,12 +208,23 @@ fn release(c: &mut HleCtx, heap: u32, p: u32, site: &Site, ret: u32) -> Flow {
 /// static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB, ...): the TCB is filled in.
 fn task_created(c: &mut HleCtx) -> Flow {
     let tcb = c.cpu.arg(0);
-    let name = super::idf::read_cstr(c, tcb + TCB_NAME, 16);
-    let stack = c.mem.read_u32(tcb + TCB_STACK).unwrap_or(0);
+    // IDF 4.4's Xtensa port has one more word before pxStack (the S3's Arduino 2 builds): the
+    // fields are where the task name reads as one.
+    let shift = [0, 4]
+        .into_iter()
+        .find(|s| {
+            c.mem.read_bytes(tcb + TCB_NAME + s, 16).is_some_and(|b| {
+                let n = b.iter().position(|&x| x == 0).unwrap_or(16);
+                n > 0 && b[..n].iter().all(|x| x.is_ascii_graphic())
+            })
+        })
+        .unwrap_or(0);
+    let name = super::idf::read_cstr(c, tcb + TCB_NAME + shift, 16);
+    let stack = c.mem.read_u32(tcb + TCB_STACK + shift).unwrap_or(0);
     let looks_like_end = |e: &u32| *e > stack && e - stack < 1 << 20;
     let end = [TCB_END_OF_STACK, TCB_END_OF_STACK_UNICORE]
         .iter()
-        .filter_map(|off| c.mem.read_u32(tcb + off))
+        .filter_map(|off| c.mem.read_u32(tcb + off + shift))
         .find(looks_like_end)
         .unwrap_or(0);
     if let Some(mc) = c.mem.memcheck() {
