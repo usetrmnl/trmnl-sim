@@ -15,12 +15,20 @@ HTTP-level faults are per path (exact, or a prefix ending in "*"):
     mock.set_fault("/api/display", status=500)           # every /api/display answers 500
     mock.set_fault("/images/*", truncate=1000, times=1)  # the next image stops after 1000 bytes
     mock.clear_faults()
+
+`MockTrmnl(tls=True)` serves HTTPS instead (a throwaway self-signed certificate made
+with the `openssl` command line tool), to exercise the device's TLS stack.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import ssl
 import struct
+import subprocess
+import tempfile
 import threading
 import time
 import zlib
@@ -261,9 +269,39 @@ class RecordedRequest:
     headers: dict
     body: bytes
     at: float = field(default_factory=time.time)
+    # HTTPS (`MockTrmnl(tls=True)`): whether the connection resumed an earlier TLS session
+    tls_resumed: Optional[bool] = None
 
     def json(self):
         return json.loads(self.body or b"null")
+
+
+def _tls_context(host: str) -> ssl.SSLContext:
+    """Server context with a fresh self-signed P-384 ECDSA certificate."""
+    tmp = tempfile.mkdtemp(prefix="trmnl-mock-tls-")
+    try:
+        key, cert, conf = (os.path.join(tmp, f) for f in ("key.pem", "cert.pem", "req.cnf"))
+        # A v3 certificate (mbedTLS rejects v1); a config file works with OpenSSL and LibreSSL.
+        san = f"IP:{host}" if host.replace(".", "").isdigit() else f"DNS:{host}"
+        with open(conf, "w") as f:
+            f.write("[req]\ndistinguished_name = dn\nx509_extensions = v3\nprompt = no\n"
+                    f"[dn]\nCN = {host}\n"
+                    f"[v3]\nbasicConstraints = CA:FALSE\nsubjectAltName = {san}\n")
+        subprocess.run(
+            # named_curve: LibreSSL (macOS) otherwise writes explicit curve parameters,
+            # which mbedTLS rejects ("bad certificate", even with verification off)
+            ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:secp384r1",
+             "-pkeyopt", "ec_param_enc:named_curve", "-nodes",
+             "-keyout", key, "-out", cert, "-days", "2", "-config", conf, "-sha384"],
+            check=True, capture_output=True,
+        )
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        ctx.set_ciphers("ECDHE-ECDSA-AES256-GCM-SHA384")
+        ctx.load_cert_chain(cert, key)
+        return ctx
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 class MockTrmnl:
@@ -274,9 +312,13 @@ class MockTrmnl:
         display: dict describing the next /api/display answer: image (name), refresh_rate,
                  plus any raw fields (update_firmware, firmware_url, special_function, ...).
         display_queue: list of such dicts consumed first, one per request.
+
+    With `tls=True` it speaks HTTPS: TLS 1.2 only, ECDHE-ECDSA-AES256-GCM-SHA384 with a
+    P-384 certificate, so the handshake needs SHA-384, ECDSA, ECDH and AES-GCM (the
+    devices connect with certificate checks off, like they do to trmnl.app).
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 0):
+    def __init__(self, host: str = "127.0.0.1", port: int = 0, tls: bool = False):
         self.requests: list[RecordedRequest] = []
         self.images: dict[str, bytes] = {}
         self.filenames: dict[str, str] = {}
@@ -310,7 +352,8 @@ class MockTrmnl:
             def _serve(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else b""
-                rec = RecordedRequest(self.command, self.path.split("?")[0], Headers(self.headers.items()), body)
+                rec = RecordedRequest(self.command, self.path.split("?")[0], Headers(self.headers.items()), body,
+                                      tls_resumed=getattr(self.connection, "session_reused", None))
                 with mock._cv:
                     mock.requests.append(rec)
                     mock._cv.notify_all()
@@ -371,6 +414,11 @@ class MockTrmnl:
             do_GET = do_POST = _handle
 
         self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.tls = tls
+        if tls:
+            # Handshake in the handler thread, not in the accept loop.
+            self.httpd.socket = _tls_context(self.device_host).wrap_socket(
+                self.httpd.socket, server_side=True, do_handshake_on_connect=False)
         self.port = self.httpd.server_address[1]
         self._thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self._thread.start()
@@ -378,11 +426,15 @@ class MockTrmnl:
     # URLs as seen from the device (10.0.2.2 is the host) and from the host.
     @property
     def device_url(self) -> str:
-        return f"http://{self.device_host}:{self.port}"
+        return f"{self._scheme}://{self.device_host}:{self.port}"
 
     @property
     def host_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"{self._scheme}://127.0.0.1:{self.port}"
+
+    @property
+    def _scheme(self) -> str:
+        return "https" if self.tls else "http"
 
     def close(self) -> None:
         self._closing.set()

@@ -287,9 +287,12 @@ scripts/integration-tests.sh test_trmnl_x     # only the TRMNL X tests
 The suite ([tests/integration](tests/integration)) runs in about two minutes and needs
 no internet. For the TRMNL OG it covers:
 
-- the first-boot setup screen and captive portal;
+- the first-boot setup screen and captive portal, and the portal's 15-minute timeout;
 - onboarding, and WiFi failures (unknown SSID, wrong password);
-- `/api/setup` and `/api/display` requests and their headers;
+- `/api/setup` and `/api/display` requests and their headers, including the `Panel-Rev`
+  read from the panel;
+- HTTPS ([test_https.py](tests/integration/test_https.py)), and for trmnl.app the TLS
+  session resumed across deep sleep;
 - pixel-exact image rendering;
 - sleep duration from `refresh_rate`;
 - timer and button wake sources;
@@ -310,8 +313,9 @@ color image.
 For the Seeed reTerminal E1002 ([test_reterminal_e1002.py](tests/integration/test_reterminal_e1002.py);
 skipped if there is no `seeed_reTerminal_E1002` build): the setup screen (the OG's
 goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switched battery
-divider, palette and truecolor PNGs reduced to the six inks exactly as the firmware does,
-the long refresh, button wake, and a save point keeping the color image.
+divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with and without
+alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
+and a save point keeping the color image.
 
 For the TRMNL X ([test_trmnl_x.py](tests/integration/test_trmnl_x.py); skipped if there is
 no `TRMNL_X` build):
@@ -319,7 +323,9 @@ no `TRMNL_X` build):
 - the factory flow: modem flashing, then shipment mode until docked;
 - onboarding on 2.4 GHz (the S3's own radio) and on 5 GHz (through the modem);
 - request headers, including `Width`/`Height`/`Model`, the RSSI of the radio in use,
-  and `USB-Connected`/`Battery-Charging` on and off the dock;
+  `USB-Connected`/`Battery-Charging` on and off the dock, and the fuel gauge's readings
+  next to the voltage-based estimate;
+- an unattended portal timing out back into shipment mode;
 - pixel-exact 1-bit PNGs and a 16-level 4-bit gray ramp on the 1872×1404 panel;
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
@@ -332,7 +338,8 @@ Fault injection ([test_faults.py](tests/integration/test_faults.py) on the OG,
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
 modem path); slow, high-latency and lossy links; DNS failure; an access point without
 internet; power loss mid-write in NVS (torn pages), in otadata and during an OTA (the old
-firmware keeps booting); a stuck panel or failed PMIC; a missing fuel gauge; an
+firmware keeps booting); a stuck panel or failed PMIC; a missing fuel gauge, or one that
+loses its configuration (the golden file is rewritten and the current's sign fixed); an
 unresponsive modem.
 
 | Env var | |
@@ -366,6 +373,9 @@ Two standard-library Python modules live in [python/](python):
   close=, times=)` makes a path (or a `prefix*`) misbehave: an HTTP error, a malformed
   body, a timeout, a body cut short, a slow download or a dropped connection;
   `device_host` lets the device reach it by a name (with `--dns NAME=10.0.2.2`).
+  `MockTrmnl(tls=True)` serves HTTPS (TLS 1.2, ECDHE-ECDSA with a throwaway P-384
+  certificate made with `openssl`); each request's `tls_resumed` says whether its
+  connection resumed an earlier TLS session.
 - **`sim.mock`** (`trmnl_sim.BuiltinServer`) drives the simulator's
   [built-in server](#built-in-mock-server) instead, so no second server is needed:
   `start()` returns the device URL, `add_image(name, png_or_jpeg_bytes, current=True)`
