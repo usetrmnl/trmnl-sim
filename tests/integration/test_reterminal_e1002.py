@@ -9,6 +9,8 @@ from support import E1002_BUILD, GOLDEN, ProvisionedDevice, close_fixtures, fixt
 from trmnl_mock import (SPECTRA6_RGB, expected_spectra6, png_image, png_palette, png_rgb, png_rgba,
                         spectra_bars)
 
+ENV = "seeed_reTerminal_E1002"  # the PlatformIO environment these tests run (bin/spec seeed_reTerminal_E1002)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 dev = fixture(lambda: ProvisionedDevice(E1002_BUILD))

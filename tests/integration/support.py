@@ -28,6 +28,15 @@ def build_of(env: str) -> Path:
     return BUILDS / env
 
 
+def build_for_env(env: str) -> Path:
+    """The build the tests of PlatformIO environment `env` use (the OG, BWRY, X and E1002
+    builds can be moved with their TRMNL_*_BUILD variables)."""
+    from support_x import X_BUILD
+
+    return {"trmnl": BUILD, "trmnl_4clr": BWRY_BUILD, "TRMNL_X": X_BUILD, "seeed_reTerminal_E1002": E1002_BUILD}.get(
+        env, build_of(env))
+
+
 def require_build(build: Path):
     """Skip the calling module (from setUpModule) when `build` hasn't been built."""
     import unittest
@@ -189,4 +198,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "BUILDS", "build_of", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]

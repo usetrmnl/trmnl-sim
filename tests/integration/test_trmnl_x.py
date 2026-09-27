@@ -11,6 +11,8 @@ from support import MockTrmnl, big_number, close_fixtures, fixture
 from trmnl_mock import expected_gray, png_image
 from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
 
+ENV = "TRMNL_X"  # the PlatformIO environment these tests run (bin/spec TRMNL_X)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 shipped = fixture(ShippedX)

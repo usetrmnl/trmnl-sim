@@ -7,6 +7,8 @@ from pathlib import Path
 from support import BWRY_BUILD, ProvisionedDevice
 from trmnl_mock import BWRY_RGB, color_bars
 
+ENV = "trmnl_4clr"  # the PlatformIO environment these tests run (bin/spec trmnl_4clr)
+
 dev: ProvisionedDevice
 
 

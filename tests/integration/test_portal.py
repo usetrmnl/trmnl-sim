@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, sim
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 dev = fixture(ProvisionedDevice)

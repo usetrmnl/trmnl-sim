@@ -4,6 +4,8 @@ import unittest
 
 from support import GOLDEN, TEST_MAC, MockTrmnl, sim
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 
 class FreshDevice(unittest.TestCase):
     @classmethod

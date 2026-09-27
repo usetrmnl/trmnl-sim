@@ -13,6 +13,8 @@ from support import ROOT, sim
 sys.path.insert(0, str(ROOT / "scripts"))
 import coverage  # noqa: E402  (scripts/coverage.py)
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 
 def load(path: Path) -> dict:
     cov = {}

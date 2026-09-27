@@ -13,6 +13,8 @@ import setup_cache
 from support import BUILD, BWRY_BUILD, TURBO, MockTrmnl, big_number, sim
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 SNTP_BUG = ("_ZN5Clock14setTimeFromNTPEv", "sntp_request")
@@ -82,6 +84,7 @@ class MemcheckOG(unittest.TestCase):
 
 
 class MemcheckBwry(unittest.TestCase):
+    ENV = "trmnl_4clr"
     @classmethod
     def setUpClass(cls):
         if not (BWRY_BUILD / "firmware.elf").exists():
@@ -107,6 +110,7 @@ class MemcheckXCase(unittest.TestCase):
     firmware/simulator: it comes from the setup cache and is only cached if it was clean),
     then onboarding on 2.4 GHz: WiFi stop/start around the portal is where Arduino once
     freed a netif the event task still used."""
+    ENV = "TRMNL_X"
 
     @classmethod
     def setUpClass(cls):

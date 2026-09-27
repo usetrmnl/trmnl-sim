@@ -6,6 +6,8 @@ import unittest
 from support import ProvisionedDevice, close_fixtures, fixture
 from support_x import ProvisionedX, ShippedX, X_BUILD
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 dev = fixture(ProvisionedDevice)
@@ -95,6 +97,7 @@ class OgUpdates(Case):
 
 
 class XModemUpdates(Case):
+    ENV = "TRMNL_X"
     device = staticmethod(x)
 
     @classmethod

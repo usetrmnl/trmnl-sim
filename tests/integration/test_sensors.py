@@ -5,6 +5,8 @@ import unittest
 
 from support import ProvisionedDevice, close_fixtures, fixture
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 dev = fixture(ProvisionedDevice)
 
 

@@ -4,6 +4,12 @@
     python3 run.py test_trmnl_x     # any unittest selectors
     python3 run.py -j 1             # one at a time, in this process
     python3 run.py --no-cache       # build the devices the tests start from afresh
+    python3 run.py xteink_x4        # every test of a PlatformIO environment (or --env NAME)
+    python3 run.py --list-envs      # the environments and how many tests each has
+
+Every test class says which PlatformIO environment's build it runs: its `ENV` attribute,
+else its module's `ENV`. A selector that isn't a test module (test_*) is an environment
+name and stands for all of that environment's test classes.
 
 Each selector (by default, each test_*.py) runs in its own worker process, up to -j N
 (default: the number of CPUs) at a time, slowest modules first. A module that sets
@@ -149,11 +155,16 @@ def run_here(argv: list[str]) -> bool:
 
 
 def parse_args(argv: list[str]) -> tuple[int, list[str], list[str]]:
-    """Split off -j N / --jobs N; the rest is unittest flags and selectors."""
+    """Split off -j N / --jobs N; the rest is unittest flags and selectors (--env NAME
+    becomes the selector NAME)."""
     jobs, flags, selectors = os.cpu_count() or 1, [], []
     it = iter(argv)
     for a in it:
-        if a in ("-j", "--jobs"):
+        if a == "--env":
+            selectors.append(next(it))
+        elif a.startswith("--env="):
+            selectors.append(a.split("=", 1)[1])
+        elif a in ("-j", "--jobs"):
             jobs = int(next(it))
         elif a.startswith("-j") and a[2:].isdigit():
             jobs = int(a[2:])
@@ -168,6 +179,103 @@ def parse_args(argv: list[str]) -> tuple[int, list[str], list[str]]:
         else:
             selectors.append(a)
     return max(1, jobs), flags, selectors
+
+
+def test_modules() -> list[str]:
+    return sorted(p.stem for p in HERE.glob("test_*.py"))
+
+
+def is_env(selector: str) -> bool:
+    """A selector that names a PlatformIO environment rather than tests."""
+    return not selector.startswith("test_") and "." not in selector
+
+
+TEST_COUNTS: dict[tuple[str, str], int] = {}
+
+
+def classes_by_env() -> dict[str, list[tuple[str, str]]]:
+    """Every test class as (module, class), by the environment it runs (`ENV` on the class,
+    else on its module). Exits listing any class that declares none."""
+    import importlib
+
+    sys.path.insert(0, str(HERE))
+    out: dict[str, list[tuple[str, str]]] = {}
+    missing = []
+    TEST_COUNTS.clear()
+    for name in test_modules():
+        module = importlib.import_module(name)
+        seen = set()
+
+        def walk(suite):
+            for t in suite:
+                if isinstance(t, unittest.TestSuite):
+                    walk(t)
+                    continue
+                if isinstance(t, unittest.loader._FailedTest):
+                    continue
+                key = (name, type(t).__name__)
+                TEST_COUNTS[key] = TEST_COUNTS.get(key, 0) + 1
+                if type(t) in seen:
+                    continue
+                seen.add(type(t))
+                env = getattr(type(t), "ENV", None) or getattr(module, "ENV", None)
+                if env:
+                    out.setdefault(env, []).append(key)
+                else:
+                    missing.append(f"{name}.{type(t).__name__}")
+
+        walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+    if missing:
+        sys.exit(f"these test classes don't say which PlatformIO environment they run (set ENV on "
+                 f"the class or its module): {', '.join(missing)}")
+    return out
+
+
+def env_units(envs: list[str]) -> list[str]:
+    """The run units for environments' tests: a whole module when all of it is theirs
+    (keeping its fixtures shared), else its classes. Exits if an environment has no tests
+    or no build."""
+    import importlib
+
+    by_env = classes_by_env()
+    # PlatformIO's names are case-sensitive; accept e.g. trmnl_x for TRMNL_X
+    folded = {e.lower(): e for e in by_env}
+    envs = [e if e in by_env else folded.get(e.lower(), e) for e in envs]
+    unknown = [e for e in envs if e not in by_env]
+    if unknown:
+        sys.exit(f"no tests for {', '.join(unknown)} (environments with tests: {', '.join(sorted(by_env))}; "
+                 f"test modules are named test_*)")
+    from support import build_for_env
+
+    for e in envs:
+        build = build_for_env(e)
+        if not (build / "firmware.elf").exists():
+            sys.exit(f"no {e} build at {build}: run `pio run -e {e}` in the firmware checkout "
+                     f"(or bin/spec --build-firmware {e})")
+    wanted = {c for e in envs for c in by_env[e]}
+    units = []
+    for name in test_modules():
+        mine = [c for m, c in sorted(wanted) if m == name]
+        if not mine:
+            continue
+        everything = [c for cs in by_env.values() for m, c in cs if m == name]
+        module = importlib.import_module(name)
+        if len(mine) == len(everything) and not getattr(module, "PARALLEL_BY_CLASS", False):
+            units.append(name)
+        else:
+            units += [f"{name}.{c}" for c in everything if c in mine]
+    return units
+
+
+def list_envs() -> None:
+    from support import build_for_env
+
+    by_env = classes_by_env()
+    print(f"{'environment':32} {'tests':>5}  build")
+    for env in sorted(by_env, key=str.lower):
+        built = "yes" if (build_for_env(env) / "firmware.elf").exists() else "missing"
+        tests = sum(TEST_COUNTS.get(c, 0) for c in by_env[env])
+        print(f"{env:32} {tests:>5}  {built}")
 
 
 def split_by_class(unit: str) -> list[str]:
@@ -255,6 +363,13 @@ def run_parallel(jobs: int, flags: list[str], units: list[str]) -> bool:
 
 if __name__ == "__main__":
     jobs, flags, selectors = parse_args(sys.argv[1:])
+    if "--list-envs" in flags:
+        list_envs()
+        sys.exit(0)
+    envs = [s for s in selectors if is_env(s)]
+    if envs:
+        selectors = [s for s in selectors if not is_env(s)] + env_units(envs)
+        print(paint(BOLD, f"{', '.join(envs)}: " + " ".join(selectors)), file=sys.stderr, flush=True)
     units = selectors or sorted((p.stem for p in HERE.glob("test_*.py")), key=lambda m: (m not in SLOW_FIRST, SLOW_FIRST.index(m) if m in SLOW_FIRST else 0, m))
     if jobs == 1 or len(units) == 1:
         ok = run_here([*flags, *selectors])

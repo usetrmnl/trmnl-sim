@@ -7,6 +7,8 @@ import unittest
 from support import big_number
 from support_x import ProvisionedX, ShippedX, X_BUILD
 
+ENV = "TRMNL_X"  # the PlatformIO environment these tests run (bin/spec TRMNL_X)
+
 shipped: ShippedX
 dev: ProvisionedX
 

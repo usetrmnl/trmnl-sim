@@ -4,6 +4,8 @@ import unittest
 
 from support import BUILD, ProvisionedDevice, big_number
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 dev: ProvisionedDevice
 
 

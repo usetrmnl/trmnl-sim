@@ -4,6 +4,8 @@ import unittest
 
 from support import GOLDEN, NETWORK, sim
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 
 @unittest.skipUnless(NETWORK, "set TRMNL_SIM_NETWORK=1 to talk to trmnl.app")
 class TrmnlApp(unittest.TestCase):

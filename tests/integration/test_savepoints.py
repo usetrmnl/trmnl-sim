@@ -9,6 +9,8 @@ from pathlib import Path
 from support import BUILD, BWRY_BUILD, ProvisionedDevice, Simulator, big_number, sim
 from trmnl_sim import SimError
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 dev: ProvisionedDevice
 tmp: Path
 saved: Path  # deep sleep, showing `seven`, taken in setUpModule

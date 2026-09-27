@@ -8,6 +8,8 @@ from support import close_fixtures, fixture
 from support_x import ProvisionedX, ShippedX, X_BUILD
 from test_trmnl_x import digits
 
+ENV = "TRMNL_X"  # the PlatformIO environment these tests run (bin/spec TRMNL_X)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 shipped = fixture(ShippedX)

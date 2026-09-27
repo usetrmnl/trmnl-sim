@@ -6,6 +6,8 @@ import unittest
 
 from support import BUILD, ProvisionedDevice, big_number, close_fixtures, fixture
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 

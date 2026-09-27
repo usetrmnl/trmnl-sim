@@ -383,6 +383,20 @@ scripts/integration-tests.sh test_refresh_cycle.RefreshCycle.test_button_press_w
 scripts/integration-tests.sh test_trmnl_x     # only the TRMNL X tests
 ```
 
+To test one device, name its PlatformIO environment (`bin/spec` is the same script):
+
+```sh
+bin/spec xteink_x4                    # every test that runs the xteink_x4 build
+bin/spec TRMNL_X trmnl_gen2           # several environments (names are case-insensitive)
+bin/spec --build-firmware xteink_x4   # pio run -e xteink_x4 first, then its tests
+bin/spec --list-envs                  # the environments with tests, test counts, builds present
+```
+
+Every test class declares the environment whose build it runs: `ENV = "<env>"` on the
+class, or on its module for all of its classes (BYOD board classes already set `ENV`). The
+runner refuses to select by environment while any class lacks one, and fails up front if the
+requested environment hasn't been built.
+
 The suite ([tests/integration](tests/integration)) runs in about two minutes and needs
 no internet. For the TRMNL OG it covers:
 
@@ -485,6 +499,9 @@ unresponsive modem.
 | `TRMNL_SIM_BIN` | Simulator binary (default `target/release/trmnl-sim`) |
 
 ### Writing tests
+
+Give every new test module (or class) an `ENV` naming the PlatformIO environment it runs,
+so `bin/spec <env>` picks it up.
 
 Two standard-library Python modules live in [python/](python):
 

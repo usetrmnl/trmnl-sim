@@ -9,6 +9,8 @@ import unittest
 from support import BWRY_BUILD, HERE, ProvisionedDevice, big_number, close_fixtures, fixture
 from trmnl_mock import bmp_1bit, expected_gray, png_image, png_palette, png_rgb
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 DATA = HERE / "data"
@@ -282,6 +284,7 @@ class Refused(Case):
 
 
 class BwryPng(Case):
+    ENV = "trmnl_4clr"
     device = staticmethod(bwry)
 
     def setUp(self):

@@ -85,6 +85,7 @@ STEAM_BUG = "firmware bug: no trmnl_steam row in device_list[] with this env's b
 
 
 class TrmnlSteamBoots(unittest.TestCase):
+    ENV = "trmnl_steam"
     @classmethod
     def setUpClass(cls):
         if not (build_of("trmnl_steam") / "firmware.elf").exists():

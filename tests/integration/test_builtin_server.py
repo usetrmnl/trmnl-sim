@@ -8,6 +8,8 @@ import urllib.request
 from support import BUILD, BWRY_BUILD, sim, big_number
 from trmnl_mock import color_bars, expected_bwry, png_gray, png_rgb
 
+ENV = "trmnl"  # the PlatformIO environment these tests run (bin/spec trmnl)
+
 
 def onboard(s, refresh_rate: int = 300) -> str:
     """Start the built-in server and onboard the fresh device `s` against it."""
@@ -57,6 +59,7 @@ class BuiltinServerOg(unittest.TestCase):
 
 
 class BuiltinServerBwry(unittest.TestCase):
+    ENV = "trmnl_4clr"
     @classmethod
     def setUpClass(cls):
         if not (BWRY_BUILD / "firmware.elf").exists():
