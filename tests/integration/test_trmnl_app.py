@@ -2,7 +2,7 @@
 
 import unittest
 
-from support import GOLDEN, NETWORK, sim
+from support import NETWORK, golden, sim
 
 from devices import ANY
 
@@ -18,7 +18,7 @@ class TrmnlApp(unittest.TestCase):
             s.portal_connect("TRMNL-Sim", "pw")
             s.wait(wifi_connected=True, timeout_s=60)
             s.wait(min_refreshes=refreshes + 1, display_idle=True, settle_ms=500, timeout_s=120)
-            s.assert_screen(GOLDEN / "not_registered_text.png", region=(0, 320, 800, 50))
+            s.assert_screen(*golden("not_registered_text.png", (0, 320, 800, 50)))
             s.wait(state="deep_sleep", timeout_s=120)
 
 

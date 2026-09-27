@@ -5,7 +5,7 @@ import unittest
 import urllib.parse
 import urllib.request
 
-from support import BUILD, BWRY_BUILD, sim, big_number
+from support import BUILD, BWRY_BUILD, DEVICE, sim, big_number
 from trmnl_mock import color_bars, expected_bwry, png_gray, png_rgb
 
 from devices import ANY
@@ -36,18 +36,19 @@ class BuiltinServerOg(unittest.TestCase):
             self.assertEqual(setup["headers"]["ID"], "7C:DF:A1:00:00:01")
             req = s.mock.wait_for_request("/api/display", timeout_s=120)
             self.assertEqual(req["headers"]["Access-Token"], "sim-test-api-key")
-            s.mock.wait_for_request("/images/seven.bmp", timeout_s=120)
+            s.mock.wait_for_request(info["path"], timeout_s=120)  # the OG's BMP, a PNG elsewhere
             st = s.wait(state="deep_sleep", timeout_s=120)["status"]
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 300, delta=15)
             self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
-            self.assertTrue(s.compare_screen(reference, tolerance=64, max_ratio=0)["match"])
+            if DEVICE.size == (800, 480):  # other panels get it scaled to fit
+                self.assertTrue(s.compare_screen(reference, tolerance=64, max_ratio=0)["match"])
 
             # Switch the image and wake the device: the next request fetches it.
             cursor = s.mock.state()["total_requests"]
-            s.mock.add_image("eight", png_gray(big_number("8")))
+            eight = s.mock.add_image("eight", png_gray(big_number("8")))
             s.mock.display(image="eight")
             s.wake()
-            s.mock.wait_for_request("/images/eight.bmp", after=cursor, timeout_s=120)
+            s.mock.wait_for_request(eight["path"], after=cursor, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
             self.assertTrue(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0)["match"])
 

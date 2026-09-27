@@ -3,7 +3,7 @@ error log (/api/log) when submitting fails."""
 
 import unittest
 
-from support import MockTrmnl, ProvisionedDevice, big_number, close_fixtures, fixture, sim
+from support import MockTrmnl, ProvisionedDevice, big_number, close_fixtures, device_image, fixture, sim
 
 from devices import ANY
 
@@ -51,22 +51,23 @@ class Redirects(Case):
 
     def test_image_redirect(self):
         m = dev().mock
-        seven = m.set_image("seven", big_number("7"))
-        m.images["moved"] = m.images["seven"]
+        path, seven = device_image(m, "seven", big_number("7"))
+        key = path[len("/images/"):].removesuffix(".bmp")  # seven (BMP) or seven.png
+        m.images[key.replace("seven", "moved")] = m.images[key]
         m.display = {"image": "seven", "refresh_rate": 300}
-        m.set_fault("/images/seven.bmp", redirect="/images/moved.bmp", times=1)
+        m.set_fault(path, redirect=path.replace("seven", "moved"), times=1)
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=15)
-            self.assertIn("/images/moved.bmp", self.refresh(s))
+            self.assertIn(path.replace("seven", "moved"), self.refresh(s))
             self.assertTrue(s.compare_screen(seven, tolerance=64, max_ratio=0)["match"])
 
 
 class NoContentLength(Case):
     def test_chunked_image(self):
         m = dev().mock
-        eight = m.set_image("eight", big_number("8"))
+        path, eight = device_image(m, "eight", big_number("8"))
         m.display = {"image": "eight", "refresh_rate": 300}
-        m.set_fault("/images/eight.bmp", chunked=True)
+        m.set_fault(path, chunked=True)
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=15)
             self.refresh(s)
@@ -74,9 +75,10 @@ class NoContentLength(Case):
 
     def test_chunked_image_cut_short_is_not_shown(self):
         m = dev().mock
-        m.set_image("nine", big_number("9"))
+        path, _ = device_image(m, "nine", big_number("9"))
+        size = len(m.images[path[len("/images/"):].removesuffix(".bmp")])
         m.display = {"image": "nine", "refresh_rate": 300}
-        m.set_fault("/images/nine.bmp", chunked=True, truncate=10000)
+        m.set_fault(path, chunked=True, truncate=min(10000, size // 2))
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=15)
             screen = s.screenshot()
@@ -87,7 +89,7 @@ class NoContentLength(Case):
         dev().mock.set_fault("/api/display", chunked=True)
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=15)
-            self.assertIn("/images/default.bmp", self.refresh(s))
+            self.assertIn(dev().mock.image_path("default"), self.refresh(s))
 
 
 class ErrorLog(Case):
