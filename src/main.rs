@@ -120,7 +120,7 @@ struct Cli {
     /// Environment sensor on the I2C header of an SPI-panel board (repeatable): scd41, aht20.
     #[arg(long, value_enum)]
     sensor: Vec<board::spi_epd::Sensor>,
-    /// The board, as the firmware's DEVICE_MODEL (e.g. og, xteink_x4, reterminal_e1001; x for
+    /// The board, as the firmware's DEVICE_MODEL (e.g. og, xteink_x4, reterminal_e1001, m5_papers3; x for
     /// the TRMNL X) or PlatformIO environment. Default: from the build directory's name.
     #[arg(long)]
     board: Option<String>,
@@ -204,10 +204,16 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
+    let parallel_spec = board::parallel_byod::find(cli.board.as_deref().unwrap_or(&env));
     let spi_spec = match &cli.board {
+        _ if parallel_spec.is_some() => None,
         Some(b) if b == "x" => None,
         Some(b) => Some(board::spi_epd::find(b).with_context(|| {
-            let names: Vec<&str> = board::spi_epd::SPECS.iter().map(|s| s.model).collect();
+            let names: Vec<&str> = board::spi_epd::SPECS
+                .iter()
+                .map(|s| s.model)
+                .chain(board::parallel_byod::SPECS.iter().map(|s| s.model))
+                .collect();
             format!("unknown board {b:?} (known: x, {})", names.join(", "))
         })?),
         None => board::spi_epd::find(&env).or_else(|| match fw.chip_id {
@@ -235,6 +241,16 @@ fn main() -> Result<()> {
             let b = board::spi_epd::SpiEpdBoard::new(spec, cli.panel_rev, &cli.sensor);
             let frame = b.panel.frame();
             (Box::new(b), frame, spec.panel.mock_panel())
+        }
+        None if parallel_spec.is_some() => {
+            let spec = parallel_spec.unwrap();
+            if fw.chip_id != firmware::CHIP_ESP32S3 {
+                anyhow::bail!("the {} is an ESP32-S3 board, but the firmware is for another chip", spec.name);
+            }
+            let b = board::parallel_byod::ParallelByodBoard::new(spec);
+            let frame = b.panel.frame();
+            // TODO(mock): 960x540 (the mock serves X-sized 16-gray images)
+            (Box::new(b), frame, mock_trmnl::Panel::X)
         }
         None => {
             if fw.chip_id != firmware::CHIP_ESP32S3 {
