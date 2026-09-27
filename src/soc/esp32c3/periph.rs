@@ -2,6 +2,7 @@
 //! register file (so unmodelled registers read back what was written); the
 //! models below add side effects and status bits on top.
 
+use crate::soc::Console;
 use super::bus::{C3Bus, MMU_ENTRIES, MMU_TABLE, PERIPH_BASE, PERIPH_SIZE};
 use super::crypto::{AES, GDMA, RSA};
 use crate::periph::i2c::I2c;
@@ -152,6 +153,8 @@ pub struct Periph {
     pub gpio_in: u32,
     pub gpio_status: u32,
     pub uart_out: Vec<u8>,
+    /// Merges UART0 and USB serial/JTAG output into `uart_out` (see [`Console`]).
+    console: Console,
     uart_raw: [u32; 2],
     pub reset_request: Option<ResetRequest>,
     pub reset_reason: ResetReason,
@@ -183,6 +186,7 @@ impl Periph {
             gpio_in: 0,
             gpio_status: 0,
             uart_out: Vec::new(),
+            console: Console::default(),
             uart_raw: [0; 2],
             reset_request: None,
             reset_reason: ResetReason::PowerOn,
@@ -373,7 +377,7 @@ impl C3Bus {
             // ---- SHA ----
             _ if (SHA_BASE..SHA_BASE + 0x100).contains(&a) => self.p.sha.read(a - SHA_BASE),
 
-            // ---- USB serial/JTAG: always ready, output discarded ----
+            // ---- USB serial/JTAG: always ready ----
             _ if a == USB_JTAG + 0x04 => stored & !1 | 2,
             _ if a == USB_JTAG + 0x08 => stored | 1 << 1 | 1 << 3, // int raw: in empty
 
@@ -413,12 +417,14 @@ impl C3Bus {
         match a {
             UART0 | UART1 => {
                 if a == UART0 {
-                    self.p.uart_out.push(v as u8);
+                    self.p.console.push(0, v as u8, &mut self.p.uart_out);
                 }
                 let u = (a == UART1) as usize;
                 self.p.uart_raw[u] |= 1 << 14; // TX_DONE
                 self.irq_dirty = true;
             }
+            // USB serial/JTAG EP1: the console of builds with USB CDC on boot (XIAO ESP32-C3)
+            _ if a == USB_JTAG => self.p.console.push(1, v as u8, &mut self.p.uart_out),
             _ if a == UART0 + 0x10 || a == UART1 + 0x10 => {
                 let u = (a == UART1 + 0x10) as usize;
                 self.p.uart_raw[u] &= !v;
