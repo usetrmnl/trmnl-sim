@@ -161,6 +161,8 @@ pub struct Periph {
     rtc_time_latched: u64,
     pub rtc_slow_hz: u64,
     pub mac: [u8; 6],
+    /// Die temperature read by the on-chip sensor (TSENS), °C.
+    pub chip_temp_c: f32,
     rng: u64,
     /// Log of unmodelled register accesses (first touch only).
     seen: std::collections::HashSet<u32>,
@@ -189,6 +191,7 @@ impl Periph {
             rtc_time_latched: 0,
             rtc_slow_hz: 136_000,
             mac: [0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2b],
+            chip_temp_c: 25.0,
             rng: 0x2545_f491_4f6c_dd1d,
             seen: Default::default(),
         }
@@ -337,6 +340,14 @@ impl C3Bus {
                 let full_scale_mv = [950, 1250, 1750, 2500][atten as usize];
                 let mv = if ch < 5 { self.board.adc_millivolts(ch as u8) } else { 0 };
                 (mv * 4095 / full_scale_mv).min(4095)
+            }
+
+            // TSENS_OUT for the -10..80 °C range (DAC offset 0), which IDF settles on there:
+            // celsius = 0.4386 * out - 20.52, truncated to whole degrees: round up so it reads
+            // chip_temp_c
+            _ if a == SARADC + 0x58 => {
+                let out = ((self.p.chip_temp_c + 20.52) / 0.4386).ceil().clamp(0.0, 255.0) as u32;
+                stored & !0xff | out
             }
 
             // ---- crypto ----

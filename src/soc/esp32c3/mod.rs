@@ -721,6 +721,7 @@ impl Machine for Esp32c3 {
     }
 
     fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String> {
+        self.bus.p.chip_temp_c = faults.chip_temp_c.unwrap_or(25.0);
         crate::faults::apply(faults, &mut self.bus.flash, &mut self.hle.wifi, self.bus.board.as_mut())
     }
 

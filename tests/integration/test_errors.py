@@ -198,25 +198,54 @@ class SetupErrors(unittest.TestCase):
 
 
 class FactoryQa(unittest.TestCase):
-    @unittest.expectedFailure
-    def test_qa_runs_when_the_qa_network_is_in_range(self):
-        # startQA() calls pins_init() before display_init(); pins_init reads
-        # pDevice->interrupt_pin while pDevice is still NULL (hw_config_init hasn't run), so
-        # a fresh OG near a "TRMNL_QA" network crashes, and keeps crashing on every boot since
-        # the test never gets marked as passed.
-        nets = [{"ssid": "TRMNL_QA", "rssi": -40}, {"ssid": "TRMNL-Sim"}]
-        with sim(erase=True, networks=nets, extra_args=("--offline",)) as s:
-            deadline = time.time() + 240
-            while time.time() < deadline:
-                st = s.status()
-                self.assertEqual(st["boot_count"], 1, "the device crashed")
-                if any("QA Test Passed" in line for line in s.console(max(0, st["console_total"] - 50))):
-                    break
-                time.sleep(0.5)
-            else:
-                self.fail("QA never finished")
-            s.press(200)  # "Long press the button to continue" (it takes a short one)
-            s.wait(portal=True, timeout_s=120)
+    """A fresh OG near a "TRMNL_QA" network runs the factory test: 7 s of CPU and radio load,
+    comparing the chip temperature (and battery voltage) before and after."""
+
+    NETS = [{"ssid": "TRMNL_QA", "rssi": -40}, {"ssid": "TRMNL-Sim"}]
+
+    def start_qa(self, **kw):
+        s = sim(erase=True, networks=self.NETS, extra_args=("--offline",), **kw)
+        try:
+            s.wait(console=r"Stress test started", timeout_s=30)
+        except BaseException:
+            s.close()
+            raise
+        return s
+
+    def finish_qa(self, s):
+        s.wait(console=r"QA Test Passed", timeout_s=30)
+        s.wait(display_idle=True, timeout_s=30)
+        self.assertEqual(s.status()["boot_count"], 1, "the device crashed")
+
+    def test_qa_passes_and_the_button_continues_to_setup(self):
+        with self.start_qa() as s:
+            self.finish_qa(s)
+            s.assert_screen(GOLDEN / "qa_pass.png", region=(300, 200, 200, 70))
+            # "Initial temperature: 25.0877 C, Final temperature: 25.0877 C  Diff: 0.0000 C".
+            # (The voltage line above it reads 5.41 V for a 4.1 V battery: measureVoltageAverage()
+            # scales the raw ADC value as if 4095 were 3.3 V; at 11 dB the C3 tops out at 2.5 V.)
+            s.assert_screen(GOLDEN / "qa_temperatures.png", region=(60, 352, 680, 26))
+            s.press(200)  # "press button to clear screen" (a short press)
+            s.wait(console=r"painting screen white", timeout_s=30)
+            s.wait(portal=True, timeout_s=90)
+            s.power_cycle()  # passed: not run again
+            s.wait(portal=True, timeout_s=90)
+            self.assertEqual(sum("Stress test started" in line for line in s.console(0)), 1)
+
+    def test_qa_fails_when_the_chip_heats_up(self):
+        with self.start_qa() as s:
+            s.set_faults(chip_temp_c=30)  # 5 °C warmer after the load: 3 °C is the limit
+            self.finish_qa(s)
+            s.assert_screen(GOLDEN / "qa_fail.png", region=(300, 200, 200, 70))
+            # "... Final temperature: 30.0000 C  Diff: 5.0000 C" and "QA failed, please use
+            # another board and put in failure pile for investigation"
+            s.assert_screen(GOLDEN / "qa_fail_details.png", region=(40, 352, 720, 58))
+
+    def test_button_stops_qa(self):
+        with self.start_qa() as s:
+            s.press(200)
+            s.wait(console=r"QA test stopped by user", timeout_s=30)
+            s.wait(portal=True, timeout_s=90)  # carries on as a normal first boot
 
 
 if __name__ == "__main__":

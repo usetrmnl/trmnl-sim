@@ -131,6 +131,7 @@ client (`sim.set_faults(...)`) have the full set:
 | Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held low; X: the PMIC never reports power good |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands (its ROM loader still works) |
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: the modem answers ERROR to AT commands starting with one of these |
+| Chip temperature | `{"chip_temp_c": 60}` | OG/BWRY: the ESP32-C3's on-chip sensor reads this die temperature instead of 25 °C |
 | Fuel gauge | `{"gauge_reset": true}` | X: the BQ27427 has a power-on reset (once, when set, as when the battery is disconnected): factory data memory, ITPOR set |
 | Touch bar | `{"touch_bar": "reset"}` | X: the IQS323 resets on its own (once, when set; config lost, SHOW_RESET), `"lockup"`: its lock-up check register stops reading 0xEE, `"ati_error"`: ATI_ERROR until the next re-ATI |
 

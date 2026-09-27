@@ -12,7 +12,8 @@
 //!  "modem_unresponsive": true,
 //!  "modem_at_errors": ["AT+CWMODE", "AT+HTTPCHEAD"],
 //!  "touch_bar": "reset" | "lockup" | "ati_error",
-//!  "gauge_reset": true}
+//!  "gauge_reset": true,
+//!  "chip_temp_c": 60}
 //! ```
 //!
 //! A POSTed object is merged into the current faults: keys that are left out keep their
@@ -64,6 +65,12 @@ pub fn merge_faults(base: &Faults, v: &Value) -> Result<Faults, String> {
                 }
             }
             "gauge_reset" => f.gauge_reset = flag(v, k)?,
+            "chip_temp_c" => {
+                f.chip_temp_c = match v {
+                    Value::Null => None,
+                    _ => Some(v.as_f64().ok_or("chip_temp_c: a number (°C)")? as f32),
+                }
+            }
             _ => return Err(format!("unknown fault {k:?}")),
         }
     }
@@ -188,6 +195,7 @@ pub fn faults_json(f: &Faults) -> Value {
         "modem_at_errors": f.modem_at_errors,
         "touch_bar": f.touch_bar.map(|t| t.name()),
         "gauge_reset": f.gauge_reset,
+        "chip_temp_c": f.chip_temp_c,
     })
 }
 
