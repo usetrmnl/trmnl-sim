@@ -29,6 +29,15 @@ C5_AP_NAME = ("WifiCaptive.cpp:27-30 takes the AP name from bytes 3-5 of the C5'
 # then waits for another press with no timeout: the device stays awake until pressed again.
 XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
                   "for a new press forever (no timeout): a button wake never reaches the server")
+# Firmware (bb_epaper) bug on the Waveshare 3.97": EP397_800x480 starts the RAM Y counter at 0
+# instead of 479, so every picture lands one row too high, its top row at the bottom (see
+# test_byod_ssd.Waveshare397); its BMPs also hit the SSD16xx partial refresh bug.
+WAVESHARE_ROW = ("bb_epaper EP397_800x480 init sets the RAM Y counter to 0 while counting down from 479: "
+                 "every screen is one row too high (see test_byod_ssd.Waveshare397)")
+# Firmware bug on the gen-2 BWRY: its env defines BOARD_TRMNL_GEN2 but not BOARD_TRMNL_4CLR, so
+# images take the 1-bit two-plane path the BWRY panel misreads (see test_og_gen2.OgGen2Bwry).
+GEN2_BWRY_IMAGES = ("trmnl_gen2_4clr lacks BOARD_TRMNL_4CLR, so display.cpp's 4-color image path isn't compiled: "
+                    "images come out half drawn in the wrong inks (see test_og_gen2.OgGen2Bwry)")
 KNOWN_FAILURES: dict[str, dict[str, str]] = {
     "CrowPanel42": {
         "FreshDevice.test_setup_screen": SMALL_PANEL,
@@ -54,6 +63,13 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
     },
     "seeed_xiao_esp32c3": {
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": XIAO_C3_BUTTON,
+    },
+    "WAVESHARE_397": {
+        "FreshDevice.test_setup_screen": WAVESHARE_ROW,
+        "FreshDevice.test_setup_screen_names_the_access_point": WAVESHARE_ROW,
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps": WAVESHARE_ROW,
+        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
+        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
     },
 }
 

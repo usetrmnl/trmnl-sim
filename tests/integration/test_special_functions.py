@@ -35,6 +35,15 @@ BMP_NOT_CACHED = ("sleep: status=false/HTTPS_SUCCESS takes the cached-image path
 # then waits for another press with no timeout: the device stays awake until pressed again.
 XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
                   "for a new press forever (no timeout): a button wake never reaches the server")
+# Firmware (bb_epaper) bug on the Waveshare 3.97": EP397_800x480 starts the RAM Y counter at 0
+# instead of 479, so every picture lands one row too high, its top row at the bottom (see
+# test_byod_ssd.Waveshare397); its BMPs also hit the SSD16xx partial refresh bug.
+WAVESHARE_ROW = ("bb_epaper EP397_800x480 init sets the RAM Y counter to 0 while counting down from 479: "
+                 "every screen is one row too high (see test_byod_ssd.Waveshare397)")
+# Firmware bug on the gen-2 BWRY: its env defines BOARD_TRMNL_GEN2 but not BOARD_TRMNL_4CLR, so
+# images take the 1-bit two-plane path the BWRY panel misreads (see test_og_gen2.OgGen2Bwry).
+GEN2_BWRY_IMAGES = ("trmnl_gen2_4clr lacks BOARD_TRMNL_4CLR, so display.cpp's 4-color image path isn't compiled: "
+                    "images come out half drawn in the wrong inks (see test_og_gen2.OgGen2Bwry)")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
@@ -83,6 +92,22 @@ KNOWN_FAILURES = {
         "Identify": XIAO_C3_BUTTON,
         "Buttons.test_double_click_runs_the_special_function": XIAO_C3_BUTTON,
         "Buttons.test_short_tap_is_a_plain_button_wake": XIAO_C3_BUTTON,
+    },
+    "WAVESHARE_397": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": WAVESHARE_ROW,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": WAVESHARE_ROW,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": WAVESHARE_ROW,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": WAVESHARE_ROW,
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "trmnl_gen2_4clr": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": GEN2_BWRY_IMAGES,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": GEN2_BWRY_IMAGES,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": GEN2_BWRY_IMAGES,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": GEN2_BWRY_IMAGES,
+    },
+    "m5_paper_mono": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
     },
 }
 for _d in DEVICES.values():
