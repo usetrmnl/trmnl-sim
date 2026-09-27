@@ -249,8 +249,11 @@ fn main() -> Result<()> {
             }
             let b = board::parallel_byod::ParallelByodBoard::new(spec);
             let frame = b.panel.frame();
-            // TODO(mock): 960x540 (the mock serves X-sized 16-gray images)
-            (Box::new(b), frame, mock_trmnl::Panel::X)
+            let (w, h) = {
+                let f = frame.lock();
+                (f.width, f.height)
+            };
+            (Box::new(b), frame, mock_trmnl::Panel::new(mock_trmnl::Inks::Gray16, w as u32, h as u32))
         }
         None => {
             if fw.chip_id != firmware::CHIP_ESP32S3 {
