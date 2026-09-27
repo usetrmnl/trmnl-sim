@@ -7,7 +7,7 @@ e-paper display and the device's controls (button or touch bar, battery, dock), 
 an HTTP control API that drives the device from automated integration tests, locally
 or in GitHub Actions.
 
-Supported devices, picked automatically from the build:
+Supported devices, picked from the build directory's name (the PlatformIO env) or `--board`:
 
 | PlatformIO env | Device | Chip | Display | Controls |
 |---|---|---|---|---|
@@ -15,6 +15,35 @@ Supported devices, picked automatically from the build:
 | `trmnl_4clr` | TRMNL BWRY | ESP32-C3 (RISC-V) | 7.5" 800×480 black/white/yellow/red (GDEM075F52) | button |
 | `TRMNL_X` | TRMNL X | ESP32-S3 (dual-core Xtensa LX7) + ESP32-C5 modem | 10.3" 1872×1404 parallel panel, 16 grays | touch bar (left/center/right), magnetic dock |
 | `seeed_reTerminal_E1002` | Seeed reTerminal E1002 | ESP32-S3 (XIAO, 8 MB octal PSRAM) | 7.3" 800×480 Spectra 6: black/white/yellow/red/blue/green (GDEP073E01) over SPI | button |
+
+BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEVICE_MODEL`):
+
+| PlatformIO env | `--board` | Device | Chip | Display | Battery |
+|---|---|---|---|---|---|
+| `seeed_xiao_esp32c3` | `seeed_esp32c3` | XIAO ESP32-C3 + 7.5" panel | ESP32-C3 | 7.5" 800×480 UC8179 | none wired |
+| `seeed_xiao_esp32s3` ¹ | `seeed_esp32s3` | XIAO ESP32-S3 + 7.5" panel | ESP32-S3 | 7.5" 800×480 UC8179 | none wired |
+| `TRMNL_7inch5_OG_DIY_Kit` | `xiao_epaper_display` | TRMNL 7.5" DIY Kit | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
+| `TRMNL_7inch5_OG_DIY_Kit_3CLR` | `xiao_epaper_3clr` | TRMNL 7.5" BWR DIY Kit | ESP32-S3 | 7.5" 800×480 black/white/red UC8179 (two planes) | ADC, switched divider |
+| `TRMNL_7inch5_OG_DIY_Kit_6CLR` | `xiao_epaper_6clr` | TRMNL 7.3" Spectra 6 DIY Kit | ESP32-S3 | 7.3" 800×480 Spectra 6 | ADC, switched divider |
+| `TRMNL_4inch26_DIY_Kit` | `xiao_epaper_mini` | TRMNL 4.26" DIY Kit | ESP32-S3 | 4.26" 800×480 SSD1677 | ADC, switched divider |
+| `seeed_reTerminal_E1001` | `reterminal_e1001` | Seeed reTerminal E1001 | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
+| `seeed_reTerminal_E1004` | `reterminal_e1004` | Seeed reTerminal E1004 | ESP32-S3 | 13.3" 1200×1600 Spectra 6, two controllers (CS/CS2) | ADC, switched divider |
+| `seeed_sticky` | `seeed_sticky` | Seeed Sticky | ESP32-S3 | 3.97" 800×480 SSD1677, switched supply | BQ27220 |
+| `xteink_x4` | `xteink_x4` | Xteink X4 | ESP32-C3 | 4.26" 800×480 SSD1677 | (not read) |
+| `xteink_x3` | `xteink_x3` | Xteink X3 | ESP32-C3 | 3.68" 792×528 UC81xx | BQ27220 |
+| `WAVESHARE_397` | `waveshare_397` | Waveshare ESP32-S3 3.97" | ESP32-S3 | 3.97" 800×480 SSD1677 | AXP2101 |
+| `CrowPanel42` ¹ | `crowpanel42` | Elecrow CrowPanel 4.2" | ESP32-S3 | 4.2" 400×300 SSD1683, switched supply | none (4.2 V) |
+| `m5_paper_mono` | `m5_paper_mono` | M5Paper Mono | ESP32-S3 | 800×480 SSD1677; supply and RST on an M5IOE1 expander | none (4.2 V) |
+| `m5_paper_color` | `m5_paper_color` | M5Paper Color | ESP32-S3 | 4" 400×600 Spectra 6; supply from the PY32 PMIC | none (4.2 V) |
+| `TRMNL_X_PAPERS3` | `m5_papers3` | M5Stack PaperS3 | ESP32-S3 | 4.7" 960×540 parallel (ED047TC1), 16 grays | ADC |
+| `TRMNL_X_LILYGO_T5PRO` | `lilygo_t5pro` | LilyGo T5 4.7" S3 Pro | ESP32-S3 | 4.7" 960×540 parallel, EPDiy V7 (TCA9535 + TPS65185) | BQ27220 |
+| `trmnl_steam` | `trmnl_steam` | TRMNL Steam | ESP32-C3 | 5.83" 648×480 UC81xx | ADC |
+
+¹ main's `platformio.ini` can't build these envs: `seeed_xiao_esp32s3` lacks `framework = arduino`
+and `CrowPanel42` lacks `lib_deps` (build them from a copy of the ini with those added, and a
+separate `[platformio] build_dir`: a different project config makes pio wipe `.pio/build`).
+Boards with ESP32 (classic) or ESP32-C5 chips (`waveshare`, `esp32dev`, `sensoria_c5`,
+`esp32-c5-devkitc-1`, `trmnl_gen2`) need a CPU/SoC model the simulator doesn't have.
 
 ![setup screen as rendered by the simulator](tests/integration/golden/setup_screen.png)
 
@@ -52,6 +81,39 @@ firmware's `reterminal_e1002` row (SCK 7, MOSI 9, CS 10, RST 12, DC 11, BUSY 13)
 | Button | GPIO3 with pull-up, as on the OG |
 | Battery | ADC on GPIO1 behind the ½ divider, connected only while the firmware drives GPIO21 high |
 | Firmware | Arduino 2.0.17 on prebuilt ESP-IDF 4.4 libraries (unlike the X's IDF 5.5): PSRAM, the WiFi glue's zero-copy transmit and the setup portal all work |
+
+**BYOD boards.** SPI-panel boards are one data-driven board (`board/spi_epd.rs`), a row
+per firmware `device_list[]` entry: pins (from `device_list[]`, or bb_epaper's `begin()` for
+boards whose wiring is built into it), battery (ADC divider with optional enable pin,
+BQ27220 fuel gauge, AXP2101 PMIC, or none), panel supply switching (a GPIO, the M5Paper
+Color's PY32, the M5Paper Mono's M5IOE1 expander: an unpowered panel ignores its inputs and
+loses its RAM) and the panel:
+
+| Controller | How |
+|---|---|
+| UC81xx | The OG's UC8179 model at any size (648×480, 792×528, 400×600, 600×1600 halves), with a per-panel particle response fitted to bb_epaper's 4-gray waveforms; black/white/red panels keep two 1-bit planes (`DTM1` black/white, `DTM2` red) and flash through black/white/red during their ~16 s refresh |
+| SSD16xx (SSD1677, SSD1683) | RAM windows and address counters, data entry modes, the new/old image planes, `0x22`/`0x20` update sequences with the built-in full/fast/partial waveforms and custom 4-gray LUTs (`0x32`), differential partial refreshes, deep sleep, BUSY active high |
+| Two controllers (E1004) | Each half's UC81xx gets the commands sent while its chip select is low; BUSY while either is busy |
+| Parallel (PaperS3, T5 Pro) | The X's parallel panel model at 960×540 on an 8-bit LCD_CAM bus: the PaperS3 powers the panel from GPIOs, the T5 Pro through a TCA9535 + TPS65185 like the X |
+
+Firmware bugs these boards show (each is an expected-failure test):
+- `trmnl_steam` reboots forever: its `device_list[]` row is inside `#ifdef CMD_CS1_CS2`,
+  which its bb_epaper version doesn't define, so `pDevice` stays NULL.
+- A panel-sized flip of an uncompressed BMP overruns the download buffer on panels that
+  aren't 800×480 (the X3 and E1004 crash; the M5Paper Color shows garbage).
+- `dpList[]` holds bb_epaper *product* ids for the boards brought up with `begin()`, which
+  `setPanelType()` reads as panel types: 1-bit images never show on the CrowPanel and the
+  M5Paper Mono (their 4-gray images do).
+- SSD16xx boards: BMP/Group5 images update only the new-image RAM and then refresh
+  differentially against a stale old-image RAM, so the old picture stays up.
+- The Waveshare 3.97" picture is one row too high (bb_epaper 2.1.9 starts RAM Y at 0 while
+  counting down from 479); the Sticky's 4-gray LUT is overwritten by the built-in one (0x22
+  0xD7), so it shows black and white only.
+- The BWR DIY kit has no black/white/red image path: 2-bit color PNGs go through the 4-gray
+  planes and land in the wrong inks.
+- The Xteink X4 reports 0 V (`batt_pin` 0xff although `PIN_BATTERY` is 0).
+- On 960 px parallel panels the setup screen's instructions overflow the width; the
+  CrowPanel's 800×480 layouts don't fit 400×300.
 
 **TRMNL X** (`TRMNL_X`):
 
@@ -231,7 +293,8 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--memcheck-suppress F,..` | Tolerate known memory bugs: ignore violations with one of these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
-| `--sensor NAME` | Environment sensor on the TRMNL OG's I2C header (repeatable): `scd41` (CO2, 0x62), `aht20` (temperature/humidity, 0x38) |
+| `--board NAME` | The board, as the firmware's `DEVICE_MODEL` (`og`, `xteink_x4`, `m5_papers3`, ... ; `x` for the TRMNL X) or PlatformIO env. Default: the build directory's name, else what the firmware links (OG / BWRY / reTerminal E1002 / X) |
+| `--sensor NAME` | Environment sensor on an SPI-panel board's I2C header (repeatable): `scd41` (CO2, 0x62), `aht20` (temperature/humidity, 0x38) |
 | `--wifi-networks JSON` | Access points in range of the device's own radio, replacing the defaults, e.g. `'[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'` (keys: `ssid`, `password` (null: any), `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
 
@@ -321,6 +384,17 @@ divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with an
 alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
 and a save point keeping the color image.
 
+For the BYOD boards ([test_byod_uc8179.py](tests/integration/test_byod_uc8179.py),
+[test_byod_uc81xx.py](tests/integration/test_byod_uc81xx.py),
+[test_byod_ssd.py](tests/integration/test_byod_ssd.py),
+[test_byod_m5.py](tests/integration/test_byod_m5.py),
+[test_byod_parallel.py](tests/integration/test_byod_parallel.py); a class per board, skipped
+if its env isn't built): every board onboards through the portal and is checked for its
+`Model`/`Width`/`Height`/`Battery-Voltage` headers and a served image shown exactly
+([support_byod.py](tests/integration/support_byod.py)); plus per board 4-gray and 16-gray
+images, partial refreshes, button wake, battery from the gauge or PMIC, colors, each E1004
+controller's half, and the firmware bugs listed [above](#what-is-simulated).
+
 For the TRMNL X ([test_trmnl_x.py](tests/integration/test_trmnl_x.py); skipped if there is
 no `TRMNL_X` build):
 
@@ -355,6 +429,7 @@ unresponsive modem.
 | `TRMNL_BWRY_BUILD` | TRMNL BWRY build dir (default `../trmnl-firmware/.pio/build/trmnl_4clr`) |
 | `TRMNL_X_BUILD` | TRMNL X build dir (default `../trmnl-firmware/.pio/build/TRMNL_X`) |
 | `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
+| `TRMNL_FIRMWARE_BUILDS` | Where the BYOD boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
@@ -594,9 +669,11 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 │  ├─ esp32c3/         memory map, peripherals, crypto/GDMA, boot flow, interrupt routing
 │  └─ esp32s3/         the same for the dual-core S3, plus PSRAM, LCD_CAM, USB console
 ├─ periph/             IP blocks shared by chips (SYSTIMER, I2C engine, SHA, AES/RSA math)
-├─ board/              what's wired to the pins (trmnl_og.rs, trmnl_x.rs); Board trait
-├─ devices/            UC8179 (B/W and 4-color) and parallel EPD panels, SPI NOR flash, ESP-AT modem,
-│                      I2C chips (TCA9535, TPS65185, IQS323, BQ27427)
+├─ board/              what's wired to the pins (spi_epd.rs: OG, BWRY and SPI-panel BYOD boards;
+│                      trmnl_x.rs; parallel_byod.rs: PaperS3, T5 Pro); Board trait
+├─ devices/            e-paper controllers (UC8179/UC81xx, SSD16xx, dual-CS, parallel), SPI NOR flash,
+│                      ESP-AT modem, I2C chips (TCA9535, TPS65185, IQS323, BQ27427, BQ27220, AXP2101,
+│                      M5Stack PY32 and M5IOE1)
 ├─ coverage/           executed-instruction bitmaps, DWARF line mapping, lcov output
 ├─ hle/                ESP-IDF function replacements by ELF symbol (WiFi driver, sleep,
 │                      ADC), ISA-neutral; hooks can call back into guest code or wrap it
@@ -610,8 +687,8 @@ crates/
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```
 
-**Chips and boards.** The build's image header names the chip (C3 or S3), and the
-board follows from the chip. A core implements `GuestCpu`; the Xtensa windowed ABI
+**Chips and boards.** The build's image header names the chip (C3 or S3); the board comes
+from `--board` or the build directory's name, else from the chip and the firmware's symbols. A core implements `GuestCpu`; the Xtensa windowed ABI
 lives behind `arg`, `return_from_hook`, `alloc_scratch` and `begin_call`, so the
 IDF-level HLE (WiFi, sleep, ADC) is the same code on both chips. The WiFi model
 handles the struct layouts of both IDF 4.4 and 5.5. A new board is a `Board`
@@ -624,7 +701,8 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
 
 ## Limitations
 
-- TRMNL OG, BWRY and X only. Other envs need their panel and board wiring.
+- ESP32-C3 and ESP32-S3 boards only (no classic ESP32 or ESP32-C5 builds). BYOD boards
+  model what the firmware uses: no SD cards, touch panels, power-hold latches or charging.
 - No 802.11 emulation: WiFi is modelled at the ESP-IDF driver API. Signal strength,
   roaming and power-save behaviour are canned.
 - TRMNL OG: no sensors on the I2C bus (all addresses NACK). No USB data, no serial
