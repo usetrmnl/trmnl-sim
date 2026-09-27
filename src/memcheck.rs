@@ -249,9 +249,9 @@ pub struct Bindings {
 }
 
 /// Where FreeRTOS keeps the running task of `core`: `pxCurrentTCBs[core]` (IDF 5) or
-/// `pxCurrentTCB` (IDF 4.4, single core).
+/// `pxCurrentTCB[core]` (IDF 4.4: an array of one on single-core chips).
 pub fn current_tcb_addr(syms: &Symbols, core: usize) -> Option<u32> {
-    syms.addr("pxCurrentTCBs").map(|a| a + 4 * core as u32).or_else(|| syms.addr("pxCurrentTCB"))
+    syms.addr("pxCurrentTCBs").or_else(|| syms.addr("pxCurrentTCB")).map(|a| a + 4 * core as u32)
 }
 
 /// A linear piece of the guest address space covered by the shadow.
