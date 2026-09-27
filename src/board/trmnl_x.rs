@@ -283,6 +283,11 @@ impl Board for TrmnlX {
             Some(sim_api::TouchBarFault::AtiError) => iqs.inject_ati_error(now),
             _ => {}
         }
+        if faults.gauge_reset
+            && let Some(bq) = self.i2c.device_mut::<Bq27427>()
+        {
+            bq.por();
+        }
         self.modem.set_net_faults(crate::faults::net_faults(&faults.net));
     }
 

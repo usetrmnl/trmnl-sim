@@ -166,6 +166,10 @@ pub struct Faults {
     pub modem_at_errors: Vec<String>,
     /// The TRMNL X touch controller (IQS323) misbehaves.
     pub touch_bar: Option<TouchBarFault>,
+    /// The TRMNL X fuel gauge (BQ27427) has a power-on reset, once, when the fault is set
+    /// (as when the battery is disconnected): its data memory is back to factory defaults
+    /// and it reports ITPOR.
+    pub gauge_reset: bool,
 }
 
 /// How the IQS323 misbehaves (`Faults::touch_bar`).
@@ -257,6 +261,9 @@ impl Faults {
         }
         if self.modem_unresponsive {
             v.push("modem unresponsive".into());
+        }
+        if self.gauge_reset {
+            v.push("fuel gauge reset".into());
         }
         if v.is_empty() { "none".into() } else { v.join(", ") }
     }

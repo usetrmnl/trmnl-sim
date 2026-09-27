@@ -1,6 +1,6 @@
-"""Fault injection on the TRMNL X: a missing fuel gauge, a panel whose PMIC never powers up, a
-modem that stops answering, downloads cut on the 5 GHz (modem) path, and power loss while
-the firmware writes NVS."""
+"""Fault injection on the TRMNL X: a missing fuel gauge or one that loses its configuration,
+a panel whose PMIC never powers up, a modem that stops answering, downloads cut on the
+5 GHz (modem) path, and power loss while the firmware writes NVS."""
 
 import unittest
 
@@ -59,6 +59,23 @@ class FaultsX(unittest.TestCase):
         with dev.boot(faults={"i2c_absent": [TOUCH_BAR]}) as s:
             dev.mock.wait_for_request("/api/display", timeout_s=15)
             self.assertLess(s.status()["boot_count"], 3)
+
+    def test_fuel_gauge_loses_its_configuration(self):
+        # A power-on reset (battery disconnected) puts the gauge back on factory data memory
+        # with ITPOR set; the next wake has to write the golden file again.
+        with dev.boot_asleep() as s:
+            s.wait(state="deep_sleep", timeout_s=15)
+            s.set_faults(gauge_reset=True)
+            s.set_faults(gauge_reset=None)
+            n = len(dev.mock.requests)
+            s.wake()
+            h = dev.mock.wait_for_request("/api/display", after=n, timeout_s=30).headers
+            s.wait(state="deep_sleep", timeout_s=30)
+        # Readable again (an unconfigured gauge is reported as -1), with the golden file's
+        # 6000 mAh design capacity rather than the factory 1340 mAh.
+        self.assertEqual((h["Gauge-SOC"], h["Gauge-Capacity"]), ("83", "4980/6000"))
+        # The factory calibration inverts the current; the firmware flips CC Gain's sign back.
+        self.assertEqual(h["Battery-Current"], "-50")
 
     def touch_bar_fault(self, kind: str):
         """Asleep, the touch controller starts misbehaving; wake by a tap, then by the timer

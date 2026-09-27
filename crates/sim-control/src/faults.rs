@@ -11,7 +11,8 @@
 //!  "panel_busy_stuck": true,
 //!  "modem_unresponsive": true,
 //!  "modem_at_errors": ["AT+CWMODE", "AT+HTTPCHEAD"],
-//!  "touch_bar": "reset" | "lockup" | "ati_error"}
+//!  "touch_bar": "reset" | "lockup" | "ati_error",
+//!  "gauge_reset": true}
 //! ```
 //!
 //! A POSTed object is merged into the current faults: keys that are left out keep their
@@ -62,6 +63,7 @@ pub fn merge_faults(base: &Faults, v: &Value) -> Result<Faults, String> {
                     _ => return Err("touch_bar: a string".into()),
                 }
             }
+            "gauge_reset" => f.gauge_reset = flag(v, k)?,
             _ => return Err(format!("unknown fault {k:?}")),
         }
     }
@@ -185,6 +187,7 @@ pub fn faults_json(f: &Faults) -> Value {
         "modem_unresponsive": f.modem_unresponsive,
         "modem_at_errors": f.modem_at_errors,
         "touch_bar": f.touch_bar.map(|t| t.name()),
+        "gauge_reset": f.gauge_reset,
     })
 }
 

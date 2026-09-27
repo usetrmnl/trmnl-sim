@@ -364,6 +364,7 @@ class Simulator:
             modem_unresponsive: bool
             modem_at_errors: ["AT+CWMODE", ...] (TRMNL X: answer ERROR to these commands)
             touch_bar: "reset" | "lockup" | "ati_error" (TRMNL X IQS323)
+            gauge_reset: True (TRMNL X BQ27427 power-on reset, once, when set)
         """
         return self._post("/faults", {**(faults or {}), **kw})
 

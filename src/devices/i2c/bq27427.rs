@@ -175,6 +175,14 @@ impl Bq27427 {
         let mut state = [0u8; 32];
         state[6..8].copy_from_slice(&1340u16.to_be_bytes()); // Design Capacity
         self.blocks.insert((CLASS_STATE, 0), state);
+        // Calibration as read from real silicon: CC Cal Temp 3023, CC Gain -0.338979 and
+        // CC Delta -404418.0 (Xemics floats). The negative gain is TI's inverted-current
+        // calibration, which the firmware flips (CC Gain's sign, byte 5 bit 7).
+        let mut cc_cal = [0u8; 32];
+        cc_cal[2..4].copy_from_slice(&3023u16.to_be_bytes());
+        cc_cal[4..8].copy_from_slice(&[0x7f, 0xad, 0x8e, 0xa8]);
+        cc_cal[8..12].copy_from_slice(&[0x93, 0xc5, 0x78, 0x40]);
+        self.blocks.insert((CLASS_CC_CAL, 0), cc_cal);
         self.itpor = true;
         self.cfgupmode = false;
     }
@@ -272,7 +280,10 @@ impl Bq27427 {
     }
 
     fn current(&self) -> i16 {
-        self.current_ma.unwrap_or(if self.charging { if self.soc >= 100 { 0 } else { 500 } } else { -50 })
+        let ma = self.current_ma.unwrap_or(if self.charging { if self.soc >= 100 { 0 } else { 500 } } else { -50 });
+        // A negative CC Gain (the factory calibration) inverts the measured current.
+        let inverted = self.blocks.get(&(CLASS_CC_CAL, 0)).is_some_and(|b| b[5] & 0x80 != 0);
+        if inverted { ma.saturating_neg() } else { ma }
     }
 
     fn full_capacity(&self) -> u16 {
@@ -740,6 +751,18 @@ mod tests {
             self.i2c_write_bytes(0, &[0x42, 0x00]);
             true
         }
+        /// changeCurrentPolarity(): writeExtendedData(CC_CAL, 5, [byte ^ 0x80]).
+        fn change_current_polarity(&mut self) {
+            let b = self.read_extended_data(CLASS_CC_CAL, 5) ^ 0x80;
+            self.i2c_write_bytes(0, &[0x13, 0x00]); // enterConfig
+            self.i2c_write_bytes(EXT_CONTROL, &[0]);
+            self.i2c_write_bytes(EXT_DATACLASS, &[CLASS_CC_CAL]);
+            self.i2c_write_bytes(EXT_DATABLOCK, &[0]);
+            self.i2c_write_bytes(EXT_BLOCKDATA + 5, &[b]);
+            let sum = self.i2c_read_bytes(EXT_BLOCKDATA, 32).iter().fold(0u8, |a, &b| a.wrapping_add(b));
+            self.i2c_write_bytes(EXT_CHECKSUM, &[255 - sum]);
+            self.i2c_write_bytes(0, &[0x42, 0x00]); // exitConfig
+        }
         /// connectAndConfigure(); returns (initialized, configured).
         fn connect_and_configure(&mut self, one_cell: bool) -> (bool, bool) {
             let alive = self.read_control_word(CTL_DEVICE_TYPE) == DEVICE_TYPE;
@@ -750,6 +773,9 @@ mod tests {
                     self.flags() & FLAG_ITPOR != 0 || self.design_energy_scale() != expected || self.current_polarity();
                 if needs {
                     configured = self.apply_golden_file(!one_cell);
+                    if self.current_polarity() {
+                        self.change_current_polarity();
+                    }
                 }
             }
             (alive && self.flags() & FLAG_ITPOR == 0, configured)
@@ -818,7 +844,9 @@ mod tests {
             let mut lib = Lib { bus: &mut bus, now: 0 };
             assert_ne!(lib.flags() & FLAG_ITPOR, 0);
             assert_eq!(lib.connect_and_configure(cells == 1), (true, true), "cells={cells}");
-            let expected_blocks = GOLDEN_BLOCKS.iter().filter(|g| g.cells.applies(cells == 2)).count() as u32;
+            // the factory calibration's inverted current sign is flipped (one more block commit)
+            assert!(!lib.current_polarity());
+            let expected_blocks = GOLDEN_BLOCKS.iter().filter(|g| g.cells.applies(cells == 2)).count() as u32 + 1;
             assert_eq!(bq(&mut bus).block_commits, expected_blocks);
             for g in GOLDEN_BLOCKS.iter().filter(|g| g.cells.applies(cells == 2)) {
                 assert_eq!(bq(&mut bus).block(g.class, g.block), Some(&g.data));
