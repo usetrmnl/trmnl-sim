@@ -74,6 +74,20 @@ class RefreshCycle(unittest.TestCase):
                 self.assertIn(h, req.headers)
             self.assertEqual((req.headers["Width"], req.headers["Height"]), ("800", "480"))
             self.assertEqual(req.headers["RSSI"], "-54")
+            # read from the UC8179 by bit-banging its REV command (the simulator's default)
+            self.assertEqual(req.headers["Panel-Rev"], "0a0c1b2c")
+            s.wait(state="deep_sleep", timeout_s=90)
+
+    def test_reports_the_panel_revision_it_reads(self):
+        with dev.boot(extra_args=("--panel-rev", "0x00c0ffee")) as s:
+            req = dev.mock.wait_for_request("/api/display", timeout_s=90)
+            self.assertEqual(req.headers["Panel-Rev"], "00c0ffee")
+            s.wait(state="deep_sleep", timeout_s=90)
+
+    def test_omits_the_panel_revision_when_it_reads_zero(self):
+        with dev.boot(extra_args=("--panel-rev", "0")) as s:
+            req = dev.mock.wait_for_request("/api/display", timeout_s=90)
+            self.assertNotIn("Panel-Rev", req.headers)
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_credentials_survive_power_cycle(self):

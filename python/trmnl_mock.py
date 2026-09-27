@@ -96,11 +96,19 @@ def png_rgb(color: Callable[[int, int], tuple], width: int = 800, height: int = 
     return _png(struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0), raw)
 
 
-def png_palette(color: Callable[[int, int], tuple], palette: list, width: int = 800, height: int = 480) -> bytes:
-    """An indexed PNG (as TRMNL serves color images), 2 bits per pixel for up to 4 colors,
-    else 4; `color(x, y)` must return one of the `palette` colors."""
+def png_rgba(color: Callable[[int, int], tuple], width: int = 800, height: int = 480) -> bytes:
+    """A truecolor PNG with an (opaque) alpha channel; `color(x, y)` returns (r, g, b)."""
+    raw = b"".join(b"\x00" + bytes(c for x in range(width) for c in (*color(x, y), 255)) for y in range(height))
+    return _png(struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0), raw)
+
+
+def png_palette(color: Callable[[int, int], tuple], palette: list, width: int = 800, height: int = 480,
+                bits: Optional[int] = None) -> bytes:
+    """An indexed PNG (as TRMNL serves color images), by default 2 bits per pixel for up
+    to 4 colors, else 4; `color(x, y)` must return one of the `palette` colors."""
     index = {c: i for i, c in enumerate(palette)}
-    bits = 2 if len(palette) <= 4 else 4
+    bits = bits or (2 if len(palette) <= 4 else 4)
+    assert bits in (1, 2, 4, 8) and len(palette) <= 1 << bits
     per_byte = 8 // bits
     rows = []
     for y in range(height):

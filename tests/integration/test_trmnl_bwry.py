@@ -32,6 +32,8 @@ class Bwry(unittest.TestCase):
             self.assertEqual(s.status()["board"]["name"], "TRMNL BWRY")
             req = dev.mock.wait_for_request("/api/display", timeout_s=120)
             self.assertEqual(req.headers["Model"], "og_4clr")
+            # the REV read is only known to be safe on the black and white panel
+            self.assertNotIn("Panel-Rev", req.headers)
             self.assertEqual((req.headers["Width"], req.headers["Height"]), ("800", "480"))
             s.wait(state="deep_sleep", timeout_s=120)
 

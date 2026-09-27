@@ -46,6 +46,7 @@ class Onboarding(unittest.TestCase):
             setup = mock.wait_for_request("/api/setup", timeout_s=60)
             self.assertEqual(setup.headers["ID"], TEST_MAC)
             self.assertEqual(setup.headers["Model"], "og")
+            self.assertEqual(setup.headers["Panel-Rev"], "0a0c1b2c")
             display = mock.wait_for_request("/api/display", timeout_s=60)
             self.assertEqual(display.headers["Access-Token"], mock.api_key)
             self.assertEqual(display.headers["Update-Source"], "powercycle")

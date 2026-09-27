@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 from support import E1002_BUILD, GOLDEN, ProvisionedDevice, close_fixtures, fixture, sim
-from trmnl_mock import SPECTRA6_RGB, expected_spectra6, png_rgb, spectra_bars
+from trmnl_mock import (SPECTRA6_RGB, expected_spectra6, png_image, png_palette, png_rgb, png_rgba,
+                        spectra_bars)
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -46,6 +47,7 @@ class Identity(Case):
             s.wake()
             req = dev().mock.wait_for_request("/api/display", timeout_s=30)
             self.assertEqual(req.headers["Model"], "reterminal_e1002")
+            self.assertNotIn("Panel-Rev", req.headers)  # not read on Spectra panels
             self.assertEqual((req.headers["Width"], req.headers["Height"]), ("800", "480"))
             # 4.1 V through the divider, read while the firmware switches it on (GPIO21)
             self.assertAlmostEqual(float(req.headers["Battery-Voltage"]), 4.1, delta=0.05)
@@ -86,6 +88,70 @@ class Colors(Case):
             t0 = s.status()["sim_time_s"]
             st = s.wait(state="deep_sleep", timeout_s=60)["status"]
             self.assertGreater(st["sim_time_s"] - t0, 18)  # the Spectra 6 update alone is ~19 s
+
+
+def hues(x: int, y: int) -> tuple:
+    """Colors between the inks: a red-to-blue sweep over the top half, green-to-yellow below."""
+    t = x * 255 // 799
+    return (t, 128, 255 - t) if y < 240 else (t, 200, 40)
+
+
+class PngFormats(Case):
+    """Every pixel format png_draw_6clr decodes, reduced to the nearest ink."""
+
+    def show(self, name: str, data: bytes, expected: bytes):
+        dev().mock.set_file(f"/img/{name}.png", "image/png", data)
+        dev().mock.display = {"image_url": f"{dev().mock.device_url}/img/{name}.png",
+                              "filename": f"plugin-{name}-1", "refresh_rate": 300}
+        with dev().boot_asleep() as s:
+            s.wait(state="deep_sleep", timeout_s=30)
+            self.refresh(s, f"/img/{name}.png")
+            result = s.compare_screen(expected, tolerance=16, max_ratio=0)
+            self.assertTrue(result["match"], result)
+
+    def gray(self, bits: int, expand):
+        # the firmware widens gray samples its own way: 1-bit white is 0x80, 2-bit tops out at 0xc0
+        top = (1 << bits) - 1
+
+        def level(x, y):
+            return (x * (top + 1) // 800 + y // 120) % (top + 1)
+
+        self.show(f"gray{bits}", png_image(level, 800, 480, bits),
+                  expected_spectra6(lambda x, y: (expand(level(x, y)),) * 3))
+
+    def test_1bit_gray(self):
+        self.gray(1, lambda v: v << 7)
+
+    def test_2bit_gray(self):
+        self.gray(2, lambda v: v << 6)
+
+    def test_4bit_gray(self):
+        self.gray(4, lambda v: v * 17)
+
+    def test_8bit_gray(self):
+        self.gray(8, lambda v: v)
+
+    def indexed(self, bits: int):
+        palette = [hues(x * 800 >> bits, (x & 1) * 240) for x in range(1 << bits)]
+        palette = list(dict.fromkeys(palette))  # PLTE entries must be distinct for the index map
+
+        def color(x, y):
+            return palette[(x * len(palette) // 800 + y // 120) % len(palette)]
+
+        self.show(f"pal{bits}", png_palette(color, palette, bits=bits),
+                  expected_spectra6(color))
+
+    def test_1bit_palette(self):
+        self.indexed(1)
+
+    def test_2bit_palette(self):
+        self.indexed(2)
+
+    def test_8bit_palette(self):
+        self.indexed(8)
+
+    def test_truecolor_with_alpha(self):
+        self.show("rgba", png_rgba(hues), expected_spectra6(hues))
 
 
 class Setup(unittest.TestCase):

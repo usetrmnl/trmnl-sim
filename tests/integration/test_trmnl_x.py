@@ -92,6 +92,7 @@ class Provisioned(ProvisionedCase):
                 self.assertIn(h, req.headers)
             self.assertEqual((req.headers["Width"], req.headers["Height"]), ("1872", "1404"))
             self.assertEqual(req.headers["Model"], "x")
+            self.assertNotIn("Panel-Rev", req.headers)  # FastEPD panels aren't read
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_1bit_png_is_rendered_exactly(self):
@@ -192,6 +193,26 @@ class TouchAndDock(ProvisionedCase):
             req = dev().mock.wait_for_request("/api/display", after=n, timeout_s=120)
             self.assertEqual((req.headers["USB-Connected"], req.headers["Battery-Charging"]), ("true", "1"))
             s.wait(state="deep_sleep", timeout_s=120)
+
+    def test_reports_the_fuel_gauge_next_to_its_voltage_estimate(self):
+        # Production X builds estimate the charge from the voltage (BYPASS_BQ27427_SOC) and
+        # send the gauge's own readings in the Gauge-* headers for comparison. At 4.06 V the
+        # estimate sits on its 100 % plateau; the simulated gauge says 88 %.
+        with dev().boot_asleep() as s:
+            s.wait(state="deep_sleep", timeout_s=120)
+            s.set_battery(4060)
+            n = len(dev().mock.requests)
+            s.wake()
+            h = dev().mock.wait_for_request("/api/display", after=n, timeout_s=120).headers
+            s.wait(state="deep_sleep", timeout_s=120)
+        self.assertAlmostEqual(float(h["Battery-Voltage"]), 4.06, delta=0.05)
+        self.assertEqual(h["Battery-Count"], "1")
+        # the voltage estimate, with a nominal 6000 mAh per cell and no state of health
+        self.assertEqual((h["Percent-Charged"], h["Battery-Capacity"], h["Battery-Health"]),
+                         ("100", "6000/6000", "-1"))
+        # the gauge's own view
+        self.assertEqual((h["Gauge-SOC"], h["Gauge-Capacity"], h["Gauge-Health"]), ("88", "5280/6000", "100"))
+        self.assertEqual((h["Battery-Current"], h["Battery-Temp"]), ("-50", "25.00"))  # discharging
 
 
 class Onboarding(unittest.TestCase):
