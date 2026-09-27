@@ -8,7 +8,7 @@ import time
 import unittest
 from urllib.parse import urlparse
 
-from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, needs, sim
+from support import ProvisionedDevice, close_fixtures, device_mock, fixture, needs, sim
 
 from devices import ANY
 
@@ -145,46 +145,46 @@ class JoinOptions(unittest.TestCase):
         self.assertEqual(code, 200, data)
 
     def test_static_ip(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="192.168.4.50", gateway="192.168.4.1",
                       subnet="255.255.255.0", dns1="1.1.1.1", dns2="8.8.8.8")
             s.wait_for_console(r"Static IP configured", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_static_ip_with_defaults(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="192.168.4.50")
             s.wait_for_console(r"Static IP configured", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_invalid_static_ip_falls_back_to_dhcp(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="not-an-ip")
             s.wait_for_console(r"Invalid static IP address", timeout_s=90)
             mock.wait_for_request("/api/setup", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_wpa2_enterprise(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True, identity="alice@example.com", username="alice")
             s.wait_for_console(r"WPA2 Enterprise", timeout_s=90)
             mock.wait_for_request("/api/setup", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_wpa2_enterprise_identity_only(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True, identity="alice@example.com", pswd="")
             s.wait_for_console(r"WPA2 Enterprise", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_wpa2_enterprise_without_identity_fails(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True)
             s.wait_for_console(r"requires an identity", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_ntp_server_and_hostname_are_saved(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, ntpServer1="time.example.com", hostname="kitchen-trmnl")
             s.wait_for_console(r"Saved NTP server: time.example.com", timeout_s=60)
             s.wait_for_console(r"Saved hostname: kitchen-trmnl", timeout_s=60)

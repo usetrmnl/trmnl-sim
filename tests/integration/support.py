@@ -97,6 +97,19 @@ def device_number(text: str, device: Device | None = None):
     return lambda x, y: number(x + dx, y + dy)
 
 
+def device_mock(tls: bool = False, device: Device | None = None) -> MockTrmnl:
+    """A MockTrmnl whose default screen is what the TRMNL server would send `device` (the one
+    under test): the OG's 800x480 BMP, else a 1-bit PNG of the panel's size (as
+    ProvisionedDevice serves). (Same as main's device_mock.)"""
+    d = device or DEVICE
+    mock = MockTrmnl(tls=tls)
+    if not d.default_bmp:
+        w, h = d.size
+        number = device_number("0", device=d)
+        mock.images["default.png"] = png_image(lambda x, y: 0 if number(x, y) else 1, w, h, bits=1)
+    return mock
+
+
 def device_golden(name: str, device: Device | None = None) -> Path:
     """The golden screenshot `name` for `device` (the one under test): its own in
     golden/<env>/ if it has that directory, else the OG's in golden/ for other 800x480
@@ -295,4 +308,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "device_number", "device_golden", "assert_golden", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "device_number", "device_golden", "assert_golden", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]

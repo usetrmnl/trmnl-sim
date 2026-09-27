@@ -2,7 +2,7 @@
 
 import unittest
 
-from support import DEVICE, TEST_MAC, MockTrmnl, assert_golden, sim
+from support import DEVICE, TEST_MAC, assert_golden, device_mock, sim
 
 from devices import ANY
 
@@ -71,6 +71,12 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": WAVESHARE_ROW,
         "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
         "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
+    },
+    "m5_paper_color": {
+        "FreshDevice.test_setup_screen FreshDevice.test_setup_screen_names_the_access_point PortalTimeout.test_unattended_portal_times_out_and_sleeps Onboarding.test_unknown_network_shows_wifi_error_and_sleeps Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": SMALL_PANEL,
+    },
+    "TRMNL_X_LILYGO_T5PRO": {
+        "FreshDevice.test_setup_screen FreshDevice.test_setup_screen_names_the_access_point PortalTimeout.test_unattended_portal_times_out_and_sleeps Onboarding.test_unknown_network_shows_wifi_error_and_sleeps Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
     },
 }
 
@@ -144,7 +150,7 @@ class PortalTimeout(unittest.TestCase):
 
 class Onboarding(unittest.TestCase):
     def test_onboarding_registers_with_server(self):
-        with MockTrmnl() as mock, sim(erase=True, extra_args=("--offline",)) as s:
+        with device_mock() as mock, sim(erase=True, extra_args=("--offline",)) as s:
             s.wait(portal=True, timeout_s=90)
             s.portal_connect("TRMNL-Sim", "any-password", server=mock.device_url)
             s.wait(wifi_connected=True, timeout_s=60)
