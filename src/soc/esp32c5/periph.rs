@@ -38,6 +38,7 @@ pub const I2C0: u32 = 0x6000_4000;
 pub const TIMG0: u32 = 0x6000_8000;
 pub const TIMG1: u32 = 0x6000_9000;
 pub const SYSTIMER: u32 = 0x6000_A000;
+pub const APB_SARADC: u32 = 0x6000_E000;
 pub const USB_JTAG: u32 = 0x6000_F000;
 pub const INTMTX: u32 = 0x6001_0000;
 pub const PARL_IO: u32 = 0x6001_5000;
@@ -462,6 +463,14 @@ impl C5Bus {
                 // XTAL cycles counted during `max` slow clock cycles
                 let v = max as u64 * XTAL_HZ / self.p.rtc_slow_hz;
                 (v as u32) << 7
+            }
+
+            // ---- APB_SARADC: the temperature sensor ----
+            // TSENS_OUT for the -10..80 °C range (DAC offset 0, where IDF starts): celsius =
+            // 0.4386 * out - 20.52, truncated to whole degrees: round up so it reads chip_temp_c
+            _ if a == APB_SARADC + 0x58 => {
+                let out = ((self.p.chip_temp_c + 20.52) / 0.4386).ceil().clamp(0.0, 255.0) as u32;
+                stored & !0xff | out
             }
 
             // ---- SYSTIMER ----
