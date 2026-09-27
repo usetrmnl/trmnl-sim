@@ -4,7 +4,7 @@ double click (or a 1-5 s press) of the button runs it on the next wake. Also the
 
 import unittest
 
-from support import ProvisionedDevice, big_number, close_fixtures, device_image, fixture, needs
+from support import ProvisionedDevice, big_number, close_fixtures, device_image, fixture, needs, slow
 
 from devices import ANY
 
@@ -227,6 +227,7 @@ class ApiStatus(Case):
             dev().mock.wait_for_request("/api/display", timeout_s=90)
             s.wait(portal=True, min_boots=2, timeout_s=120)
 
+    @slow("the wiper runs 100 full refreshes; about 3.5 minutes on the TRMNL X")
     def test_screen_wiper_clears_then_shows_the_next_item(self):
         path, four = device_image(dev().mock, "four", big_number("4"))
         dev().mock.display_queue = [{"image": "default", "filename": "screen_wiper.png", "refresh_rate": 300}]
@@ -236,6 +237,7 @@ class ApiStatus(Case):
             s.wait(state="deep_sleep", timeout_s=600)
             self.assertTrue(s.compare_screen(four, tolerance=64, max_ratio=0)["match"])
 
+    @slow("the wiper runs 100 full refreshes; about 3.5 minutes on the TRMNL X")
     def test_screen_wiper_is_only_run_once_per_wake(self):
         dev().mock.display = {"image": "default", "filename": "screen_wiper.png", "refresh_rate": 300}
         with dev().boot() as s:

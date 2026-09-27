@@ -53,6 +53,18 @@ def needs(*features: str):
     return unittest.skipIf(bool(missing), f"{DEVICE.name} has no {', '.join(missing)}")
 
 
+# TRMNL_SIM_SLOW=1 (bin/spec --slow): also run the tests marked @slow.
+SLOW = os.environ.get("TRMNL_SIM_SLOW") == "1"
+
+
+def slow(why: str):
+    """Skip a test (or class) that is known to be slow unless TRMNL_SIM_SLOW=1
+    (bin/spec --slow); `why` says what takes the time."""
+    import unittest
+
+    return unittest.skipUnless(SLOW, f"slow ({why}); bin/spec --slow runs it")
+
+
 def only_on(*envs: str, why: str):
     """Skip a test (or class) unless the device under test is one of these environments;
     `why` says what makes it specific to them."""
@@ -338,4 +350,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden"]
+__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden"]

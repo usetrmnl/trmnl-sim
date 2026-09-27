@@ -392,7 +392,8 @@ How much runs:
 | `bin/spec --exhaustive` | the general tests in full on every device |
 | `bin/spec <env>` | everything for one device: its own tests and all the general tests |
 
-`--dry-run` prints the test groups a command would run.
+`--dry-run` prints the test groups a command would run. Tests marked `@slow` (support.py;
+e.g. the screen wiper, 100 full refreshes) are skipped unless `--slow` is given.
 
 To test one device, name its PlatformIO environment (`bin/spec` is the same script):
 

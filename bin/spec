@@ -6,6 +6,7 @@
 #   bin/spec --comprehensive      # the general tests in full on one device per family too
 #   bin/spec --exhaustive         # the general tests in full on every device (slow)
 #   bin/spec --dry-run [...]      # print what would run
+#   bin/spec --slow [...]         # also the tests marked @slow (e.g. the screen wiper)
 #   bin/spec -j 1                 # one module at a time (-j N: at most N at once)
 #   bin/spec --no-cache           # redo the factory flow and onboarding (as CI does)
 #   bin/spec test_trmnl_x         # a module, class or test (unittest selectors)

@@ -115,7 +115,7 @@ class XModemLimits(Case):
 
 class XJpeg(Case):
     def test_jpeg_is_dithered_to_16_grays(self):
-        with self.show("five.jpg", (DATA / "five_1872x1404.jpg").read_bytes(), "image/jpeg") as s:
+        with self.show("five.jpg", (DATA / "x_five_1872x1404.jpg").read_bytes(), "image/jpeg") as s:
             result = s.compare_screen(expected_gray(levels(0, 1, "5"), W, H, 1), tolerance=96, max_ratio=0.05)
             self.assertTrue(result["match"], result)
 

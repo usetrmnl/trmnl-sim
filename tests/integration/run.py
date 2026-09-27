@@ -9,6 +9,7 @@
     python3 run.py --comprehensive  # also the full general suite on a device per family
     python3 run.py --exhaustive     # the full general suite on every device
     python3 run.py --dry-run ...    # print what would run
+    python3 run.py --slow ...       # also the tests marked @slow (support.slow)
 
 With no selectors, every device's own tests run, the general tests (ENV = ANY) in full on the
 TRMNL OG, and devices.SMOKE (one general test per area) on every other device.
@@ -214,6 +215,8 @@ def parse_args(argv: list[str]) -> tuple[int, list[str], list[str]]:
             jobs = int(a[2:])
         elif a.startswith("--jobs="):
             jobs = int(a.split("=", 1)[1])
+        elif a == "--slow":
+            os.environ["TRMNL_SIM_SLOW"] = "1"  # read by support.slow, here and in workers
         elif a == "--no-cache":
             os.environ["TRMNL_SPEC_NO_CACHE"] = "1"  # read by setup_cache, here and in workers
         elif a.startswith("-"):
