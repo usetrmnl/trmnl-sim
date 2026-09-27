@@ -469,7 +469,7 @@ unresponsive modem.
 | `TRMNL_BWRY_BUILD` | TRMNL BWRY build dir (default `../trmnl-firmware/.pio/build/trmnl_4clr`) |
 | `TRMNL_X_BUILD` | TRMNL X build dir (default `../trmnl-firmware/.pio/build/TRMNL_X`) |
 | `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
-| `TRMNL_FIRMWARE_BUILDS` | Where the BYOD boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
+| `TRMNL_FIRMWARE_BUILDS` | Where the BYOD and gen-2 boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
