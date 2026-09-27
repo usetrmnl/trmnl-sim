@@ -1,10 +1,13 @@
-"""Fault injection on the TRMNL OG: server errors, broken downloads, bad networks (DNS failure,
-an access point without internet, slow and lossy links), power loss in the middle of flash
-writes, and a stuck panel. The device must cope: sleep, retry later, and keep booting."""
+"""Fault injection on the device under test: server errors, broken downloads, bad networks
+(DNS failure, an access point without internet, slow and lossy links), power loss in the
+middle of flash writes, and a stuck panel. The device must cope: sleep, retry later, and keep
+booting. The image it is served is the one its server would send (see support.device_image)."""
 
 import unittest
 
-from support import BUILD, DEVICE, ProvisionedDevice, big_number, close_fixtures, device_image, fixture, image_size
+from support import (BUILD, DEVICE, GEN2_NTP_HANG_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, SSD16XX_BMP_BUG,
+                     ProvisionedDevice, boot_slot, close_fixtures, device_image, fixture, image_size, ota_slot_label,
+                     panel_number, partition_table)
 
 from devices import ANY
 
@@ -23,6 +26,28 @@ class NamedServerDevice(ProvisionedDevice):
     SIM_ARGS = ("--offline", "--dns", f"{HOST}=10.0.2.2")
 
 
+# The tests that check the device shows the served image once the fault is gone.
+SHOWS_THE_IMAGE = [
+    "ServerErrors.test_http_500_from_api_display_is_retried_then_sleeps",
+    "ServerErrors.test_malformed_json_is_rejected",
+    "BrokenDownloads.test_truncated_image_is_not_shown",
+    "BrokenDownloads.test_connection_reset_mid_download",
+    "BrokenDownloads.test_slow_high_latency_link_still_works",
+    "BrokenDownloads.test_lossy_link_still_works",
+    "BadNetworks.test_access_point_without_internet",
+    "BadNetworks.test_dns_failure",
+    "PowerLoss.test_power_loss_during_nvs_writes_then_boots",
+    "PowerLoss.test_power_loss_while_the_bootloader_writes_otadata",
+]
+NO_INTERNET = ["BadNetworks.test_access_point_without_internet", "BadNetworks.test_dns_failure"]
+
+KNOWN_FAILURES = {
+    "xteink_x4": dict.fromkeys(SHOWS_THE_IMAGE, SSD16XX_BMP_BUG),
+    "CrowPanel42": dict.fromkeys(SHOWS_THE_IMAGE, ONE_BIT_PNG_PANEL_TYPE_BUG),
+    "trmnl_gen2": dict.fromkeys(NO_INTERNET, GEN2_NTP_HANG_BUG),
+    "trmnl_gen2_4clr": dict.fromkeys(NO_INTERNET, GEN2_NTP_HANG_BUG),
+}
+
 dev = fixture(ProvisionedDevice)
 named = fixture(NamedServerDevice)
 
@@ -31,14 +56,40 @@ def tearDownModule():
     close_fixtures()
 
 
+def one_with_noise():
+    """The test image: a big "1" over a strip of noise along the bottom, so that even as a PNG
+    (which compresses the rest to nothing) the file is a few KB: download faults cut it part
+    of the way through, after the /api/display response."""
+    w, h = DEVICE.size
+    number, strip = panel_number("1"), h - h // 6
+
+    def pixel(x, y):
+        if y >= strip:
+            n = (x * 374761393 + y * 668265263) & 0xFFFFFFFF
+            n = (n ^ n >> 13) * 1274126177 & 0xFFFFFFFF
+            return (n ^ n >> 16) & 1 == 1
+        return number(x, y)
+
+    return pixel
+
+
+def serve_one(mock) -> tuple[str, bytes]:
+    """Serve the test image ("1") as the current screen; returns its path and the screenshot
+    it should give."""
+    path, expected = device_image(mock, "one", one_with_noise())
+    mock.display = {"image": "one", "refresh_rate": 300}
+    return path, expected
+
+
 class FaultCase(unittest.TestCase):
     def setUp(self):
         dev().mock.requests.clear()
         dev().mock.display_queue.clear()
         dev().mock.clear_faults()
-        self.path, self.expected = device_image(dev().mock, "one", big_number("1"))
+        self.path, self.expected = serve_one(dev().mock)
+        # the image file's size: download faults cut it part of the way through (the OG's
+        # 48 KB BMP at 10 and 20 KB)
         self.size = image_size(dev().mock, self.path)
-        dev().mock.display = {"image": "one", "refresh_rate": 300}
 
     def assert_shows_image_next_time(self, s, mock=None):
         """After the fault is gone, the next wake fetches and shows the image."""
@@ -74,7 +125,7 @@ class ServerErrors(FaultCase):
 
 class BrokenDownloads(FaultCase):
     def test_truncated_image_is_not_shown(self):
-        dev().mock.set_fault("/images/*", truncate=min(10_000, self.size // 2))
+        dev().mock.set_fault("/images/*", truncate=min(10_000, self.size // 4))
         with dev().boot() as s:
             s.wait(console=r"incomplete download", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
@@ -110,22 +161,20 @@ class BadNetworks(FaultCase):
         with dev().boot(faults={"net": {"no_internet": True}}) as s:
             st = s.wait(wifi_connected=True, timeout_s=60)["status"]
             self.assertEqual(st["ip"], "10.0.2.15", "DHCP still works")
-            s.wait(state="deep_sleep", timeout_s=240)
+            s.wait(state="deep_sleep", timeout_s=90)
             self.assertEqual(dev().mock.requests, [])
             self.assert_shows_image_next_time(s)
 
     def test_dns_failure(self):
-        named().mock.requests.clear()
         named().mock.display_queue.clear()
-        named().mock.clear_faults()
-        device_image(named().mock, "one", big_number("1"))
-        named().mock.display = {"image": "one", "refresh_rate": 300}
+        serve_one(named().mock)
         for fault in ("servfail", "timeout"):
+            named().mock.requests.clear()
+            named().mock.clear_faults()
             with self.subTest(fault), named().boot(faults={"net": {"dns": fault}}) as s:
-                s.wait(state="deep_sleep", timeout_s=240)
+                s.wait(state="deep_sleep", timeout_s=90)
                 self.assertEqual(named().mock.requests, [])
                 self.assert_shows_image_next_time(s, named().mock)
-                named().mock.requests.clear()
 
 
 class PowerLoss(FaultCase):
@@ -163,9 +212,14 @@ class PowerLoss(FaultCase):
                                              "cut": "torn"}}) as s:
             dev().mock.wait_for_request("/firmware.bin", timeout_s=120)
             c = s.wait_for_console(r"\[sim\] power lost: program #200", timeout_s=120)
-            s.wait(console=rf"Loaded app from partition at offset {DEVICE.app_slot:#x}", timeout_s=60)
+            flash = s.flash.read_bytes()
+            self.assertIn(f"partition {ota_slot_label(flash, 1)}", c)
+            if s.wait(console=r"2nd stage bootloader|BL init success", timeout_s=60)["line"]["text"].count("bootloader"):
+                # the bootloader logs (not in the ESP32-S3's Arduino 2 builds): from the old slot
+                old = next(p for p in partition_table(flash) if p["label"] == ota_slot_label(flash, 0))
+                s.wait(console=rf"Loaded app from partition at offset {old['offset']:#x}\b", timeout_s=60)
             s.wait(state="deep_sleep", timeout_s=120)
-            self.assertIn("app1", c)
+        self.assertEqual(boot_slot(s.flash.read_bytes()), ota_slot_label(flash, 0), "otadata still boots the old slot")
 
 
 class Peripherals(FaultCase):

@@ -137,6 +137,48 @@ def image_size(mock: MockTrmnl, path: str) -> int:
     return len(mock.images[path[len("/images/"):].removesuffix(".bmp")])
 
 
+def partition_table(flash: bytes) -> list[dict]:
+    """The partitions in a flash image (the table at 0x8000): label, type, subtype, offset,
+    size."""
+    import struct
+
+    parts = []
+    for off in range(0x8000, 0x9000, 32):
+        magic, ptype, subtype, start, size, label = struct.unpack_from("<HBBII16s", flash, off)
+        if magic != 0x50AA:
+            break
+        parts.append({"label": label.split(b"\0")[0].decode(), "type": ptype, "subtype": subtype,
+                      "offset": start, "size": size})
+    return parts
+
+
+def ota_slot_label(flash: bytes, n: int) -> str:
+    """The label of app slot ota_`n` in a flash image's partition table."""
+    return next(p["label"] for p in partition_table(flash) if p["type"] == 0 and p["subtype"] == 0x10 + n)
+
+
+def boot_slot(flash: bytes) -> str:
+    """The label of the app partition the bootloader boots from a flash image, from otadata
+    the way the IDF bootloader reads it: the valid entry with the highest sequence number
+    picks slot (seq - 1) mod the number of slots; none valid, the factory app or ota_0."""
+    import struct
+    import zlib
+
+    parts = partition_table(flash)
+    apps = sorted((p for p in parts if p["type"] == 0 and 0x10 <= p["subtype"] < 0x20), key=lambda p: p["subtype"])
+    factory = [p for p in parts if p["type"] == 0 and p["subtype"] == 0]
+    otadata = next(p for p in parts if p["type"] == 1 and p["subtype"] == 0)
+    seqs = []
+    for sector in (0, 0x1000):
+        seq, _, state, crc = struct.unpack_from("<I20sII", flash, otadata["offset"] + sector)
+        # ESP_OTA_IMG_INVALID (3) / ABORTED (4) entries don't count
+        if seq != 0xFFFFFFFF and crc == zlib.crc32(struct.pack("<I", seq), 0xFFFFFFFF) and state not in (3, 4):
+            seqs.append(seq)
+    if not seqs:
+        return (factory or apps)[0]["label"]
+    return apps[(max(seqs) - 1) % len(apps)]["label"]
+
+
 def require_build(build: Path):
     """Skip the calling module (from setUpModule) when `build` hasn't been built."""
     import unittest
@@ -203,6 +245,25 @@ KNOWN_MEMORY_BUGS = (
     # Content-Length (the built-in mock server does).
     "_ZNK16HttpRetryRequest12bodyAsStringEv",
 )
+
+
+# Firmware bugs that keep general tests from passing on some devices, for the modules'
+# KNOWN_FAILURES (each has a device-specific test of its own too).
+SSD16XX_BMP_BUG = (
+    "firmware: display_show_image() sends a 1-bit BMP to the SSD16xx's new-image RAM only "
+    "(src/display.cpp:1947 writePlane()) and asks for a partial refresh (display.cpp:1949); a "
+    "partial refresh is differential against the old-image RAM, which after the full or fast "
+    "refresh at boot doesn't hold what's on screen, so the BMP never appears "
+    "(test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh)")
+ONE_BIT_PNG_PANEL_TYPE_BUG = (
+    "firmware: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) for 1-bit PNGs "
+    "(src/display.cpp:1764) on boards brought up with bbep.begin(<product>), passing a product "
+    "number as a panel type: the image is drawn for another panel and never shows "
+    "(test_byod_ssd.CrowPanel42.test_shows_the_served_image)")
+GEN2_NTP_HANG_BUG = (
+    "firmware: ClockGen2::waitForSync() (src/misc/clock/clock_gen2.cpp:9) loops until the clock "
+    "reads 2020 or later, with no timeout: without an NTP server (no internet, no DNS) the "
+    "device never gets past the time sync and never sleeps")
 
 
 def _current_test_id() -> str:
@@ -350,4 +411,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden"]
+__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden", "partition_table", "ota_slot_label", "boot_slot", "SSD16XX_BMP_BUG", "ONE_BIT_PNG_PANEL_TYPE_BUG", "GEN2_NTP_HANG_BUG"]
