@@ -112,7 +112,10 @@ pub struct WifiState {
     rx: VecDeque<(usize, Vec<u8>)>,
     net: VirtualNet,
     ap_client: Option<ApClient>,
+    /// The host client's join is scheduled (AP_STACONNECTED posted)...
     ap_client_joined: bool,
+    /// ...and delivered: only then does it send frames.
+    ap_client_associated: bool,
     /// The host "browser client" stays off the soft-AP (`set_portal_client(false)`), so an
     /// unattended portal can run ahead of wall-clock time in turbo mode.
     portal_client_away: bool,
@@ -160,6 +163,7 @@ impl WifiState {
             net: VirtualNet::new(NetConfig::default()),
             ap_client: None,
             ap_client_joined: false,
+            ap_client_associated: false,
             portal_client_away: false,
             scan_results: Vec::new(),
             stats: WifiStats::default(),
@@ -412,7 +416,9 @@ impl WifiState {
                 self.rx.push_back((0, f));
             }
         }
-        if let Some(c) = &mut self.ap_client {
+        // A station sends nothing before it has associated (AP_STACONNECTED): frames the
+        // host client queued meanwhile wait until it (re)joins the soft-AP.
+        if let Some(c) = self.ap_client.as_mut().filter(|_| self.ap_client_associated) {
             for f in c.poll() {
                 self.rx.push_back((1, f));
             }
@@ -444,10 +450,15 @@ impl WifiState {
                     Err(err) => log::error!("captive portal forward: {err}"),
                 }
                 self.ap_client_joined = false;
+                self.ap_client_associated = false;
             }
+            EV_AP_STACONNECTED => self.ap_client_associated = self.ap_client_joined,
+            EV_AP_STADISCONNECTED => self.ap_client_associated = false,
             EV_AP_STOP => {
                 self.ap_client = None;
                 self.ap_client_joined = false;
+                self.ap_client_associated = false;
+                self.rx.retain(|(ifx, _)| *ifx != 1);
                 self.events.retain(|e| e.id != EV_AP_STACONNECTED);
             }
             _ => {}
@@ -629,6 +640,8 @@ fn stop(c: &mut HleCtx) -> Flow {
             events.push((EV_AP_STOP, vec![]));
             w.ap_client = None;
             w.ap_client_joined = false;
+            w.ap_client_associated = false;
+            w.rx.retain(|(ifx, _)| *ifx != 1);
         }
         w.connecting = false;
         w.events.retain(|e| e.id != EV_STA_CONNECTED && e.id != EV_AP_STACONNECTED);

@@ -32,7 +32,18 @@ class Device:
     battery_v: float | None = 4.1
     """Battery-Voltage it reports at the simulator's default 4.1 V battery (None: varies)."""
     button: bool = True
-    """Has a button the simulator can press (and that wakes it from deep sleep)."""
+    """Has a button the simulator can press (and that wakes it from deep sleep): `press()`
+    wakes it, a 5 s press forgets WiFi. On the X, its touch bar equivalents (support_x.XSim)."""
+    double_click: bool = True
+    """A double click (or a 1-5 s press) runs the special function the server assigned."""
+    soft_reset_press: bool = True
+    """A 15 s press forgets the device (soft reset)."""
+    press_source: str = "button"
+    """The Update-Source of a wake by `press()`."""
+    shipment: bool = False
+    """Goes through the X's factory flow: modem flashing, then shipment mode until docked
+    (and back to shipment mode when the setup portal times out); the general tests start
+    it from its unboxed state (support_x.unboxed)."""
     panel_rev: bool = False
     """Reads the panel revision (Panel-Rev header)."""
     general: str | None = None
@@ -48,8 +59,8 @@ class Device:
 _DEVICES = [
     Device("trmnl", "og", "TRMNL OG", chip="esp32c3", panel_rev=True),
     Device("trmnl_4clr", "og_4clr", "TRMNL BWRY", inks="bwry", chip="esp32c3"),
-    Device("TRMNL_X", "x", "TRMNL X", size=(1872, 1404), inks="gray16", battery_v=None, button=False,
-           general="onboarding goes through the factory flow and shipment mode; see test_trmnl_x"),
+    Device("TRMNL_X", "x", "TRMNL X", size=(1872, 1404), inks="gray16", battery_v=None, double_click=False,
+           soft_reset_press=False, press_source="EXT0", shipment=True),
     Device("seeed_reTerminal_E1002", "reterminal_e1002", "reTerminal E1002", inks="spectra6"),
     Device("seeed_xiao_esp32c3", "seeed_esp32c3", "XIAO ESP32-C3 + 7.5\" panel", chip="esp32c3", battery_v=0.0),
     Device("seeed_xiao_esp32s3", "seeed_esp32s3", "XIAO ESP32-S3 + 7.5\" panel", battery_v=0.0),

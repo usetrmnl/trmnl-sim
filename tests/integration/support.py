@@ -61,6 +61,14 @@ def only_on(*envs: str, why: str):
     return unittest.skipUnless(DEVICE.env in envs, f"only on {', '.join(envs)}: {why}")
 
 
+def skip_if(feature: str, why: str):
+    """Skip a test (or class) on devices that have this `Device` feature, e.g.
+    @skip_if("shipment", why="the X goes back to shipment mode instead")."""
+    import unittest
+
+    return unittest.skipIf(bool(getattr(DEVICE, feature)), f"not on {DEVICE.name}: {why}")
+
+
 def device_image(mock: MockTrmnl, name: str, black, device: Device | None = None) -> tuple[str, bytes]:
     """Serve a black-and-white image the way the TRMNL server would for `device` (the one
     under test): an 800x480 1-bit BMP for the OG-size panels, else a PNG of the panel's size
@@ -90,6 +98,34 @@ def require_build(build: Path):
     if not (build / "firmware.elf").exists():
         raise unittest.SkipTest(f"no {build.name} build at {build} (pio run -e {build.name})")
 GOLDEN = HERE / "golden"
+# The golden screenshots of devices other than the TRMNL OG (whose goldens and regions the
+# tests name): golden/<env>/<name>, compared in the region given here ({env: {name: (x, y,
+# w, h)}}). See `golden`.
+GOLDEN_REGIONS: dict[str, dict[str, tuple[int, int, int, int]]] = {
+    "TRMNL_X": {
+        # all but the "TRMNL firmware <version> (<git hash>)" line
+        "setup_screen_body.png": (0, 64, 1872, 1340),
+        "setup_screen_top_right.png": (640, 0, 1232, 64),
+        # 'Connect your phone or computer to "TRMNL-000001" Wi-Fi'
+        "setup_ssid_line.png": (400, 1236, 1072, 48),
+        # "Can't establish WiFi connection. Will keep trying." (the X's font has the apostrophe)
+        "wifi_failed_message.png": (480, 1160, 912, 48),
+    },
+}
+
+
+def golden(name: str, region: tuple[int, int, int, int]) -> tuple[Path, tuple[int, int, int, int]]:
+    """The golden screenshot `name` and the region to compare it in, for the device under
+    test: the OG's (golden/<name>, `region`), or the device's own from GOLDEN_REGIONS. A
+    device without one skips the test. Use as `s.assert_screen(*golden(name, region))`."""
+    import unittest
+
+    if DEVICE.env == "trmnl":
+        return GOLDEN / name, region
+    own = GOLDEN_REGIONS.get(DEVICE.env, {}).get(name)
+    if own is None:
+        raise unittest.SkipTest(f"no {name} golden for {DEVICE.name}")
+    return GOLDEN / DEVICE.env / name, own
 TEST_MAC = "7C:DF:A1:00:00:01"
 NETWORK = os.environ.get("TRMNL_SIM_NETWORK") == "1"
 # Turbo (network-aware fast-forward) unless TRMNL_SIM_REALTIME=1.
@@ -135,12 +171,29 @@ def _current_test_id() -> str:
     return "sim"
 
 
+def device_of(build: Path) -> Device | None:
+    """The device a build is for (None: unknown)."""
+    build = Path(build)
+    if build == BUILD:
+        return DEVICE
+    return by_build_name(build.name) or next((d for d in DEVICES.values() if build_for_env(d.env) == build), None)
+
+
 def sim(build: Path = BUILD, **kw) -> Simulator:
+    """A simulator of `build` (default: the device under test's). A device that doesn't get
+    from an erased flash to its setup portal on its own (the X: factory flow, shipment
+    mode, dock) boots its "unboxed" state for `erase=True` instead, and a device without a
+    button maps presses to its equivalent (see support_x.XSim)."""
     kw.setdefault("name", _current_test_id())
     kw.setdefault("mac", TEST_MAC)
     kw.setdefault("turbo", TURBO)
     kw.setdefault("memcheck", MEMCHECK)
     kw.setdefault("memcheck_suppress", KNOWN_MEMORY_BUGS)
+    d = device_of(build)
+    if d is not None and d.env == "TRMNL_X":
+        import support_x
+
+        return support_x.general_sim(build, **kw)
     return Simulator(build, **kw)
 
 
@@ -189,7 +242,7 @@ class ProvisionedDevice:
         OG's 800x480 BMP; default, what the build's device takes (see Device.default_bmp)."""
         build = build or BUILD
         if panel_size is ...:
-            d = by_build_name(build.name)
+            d = device_of(build)
             panel_size = None if d is None or d.default_bmp else d.size
         self.build = build
         self.panel_size = panel_size
@@ -249,4 +302,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
+__all__ = ["BUILD", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "skip_if", "device_image", "BUILDS", "build_of", "build_for_env", "device_of", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "GOLDEN_REGIONS", "golden", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator"]
