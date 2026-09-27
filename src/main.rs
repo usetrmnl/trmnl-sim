@@ -257,8 +257,13 @@ fn main() -> Result<()> {
         }
         None if parallel_spec.is_some() => {
             let spec = parallel_spec.unwrap();
-            if fw.chip_id != firmware::CHIP_ESP32S3 {
-                anyhow::bail!("the {} is an ESP32-S3 board, but the firmware is for another chip", spec.name);
+            let chip = match spec.chip {
+                board::spi_epd::Chip::Esp32c3 => firmware::CHIP_ESP32C3,
+                board::spi_epd::Chip::Esp32s3 => firmware::CHIP_ESP32S3,
+                board::spi_epd::Chip::Esp32c5 => firmware::CHIP_ESP32C5,
+            };
+            if chip != fw.chip_id {
+                anyhow::bail!("the {} is a {:?} board, but the firmware is for another chip", spec.name, spec.chip);
             }
             let b = board::parallel_byod::ParallelByodBoard::new(spec);
             let frame = b.panel.frame();

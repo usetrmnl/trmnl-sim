@@ -119,6 +119,32 @@ impl C5Bus {
         }
     }
 
+    // ---- PARLIO TX -------------------------------------------------------------------------------
+
+    /// TX_START rose: send the DMA chain's data out of the parallel bus (to the board, e.g. an
+    /// e-paper panel's source drivers), then raise TX_EOF. The transfer takes microseconds
+    /// of guest time; it is reported done right away.
+    pub fn parlio_tx_start(&mut self, now: u64) {
+        const PARL_IO: u32 = 0x6001_5000;
+        const PERI_PARLIO: u32 = 9;
+        if let Some(ch) = self.dma_channel_for(PERI_PARLIO, true) {
+            let data = self.dma_gather(ch);
+            // EOF from the programmed bit length (TX_EOF_GEN_SEL = 0), else the DMA chain's end
+            let n = if self.p.store_get(PARL_IO + 0x18) & 1 << 13 == 0 {
+                let bits = ((self.p.store_get(PARL_IO + 0x10) >> 9) & 0x7ffff) as usize;
+                data.len().min(bits / 8)
+            } else {
+                data.len()
+            };
+            self.board.lcd_transfer(now, &data[..n]);
+        } else {
+            log::warn!("PARLIO TX started without a DMA channel");
+        }
+        let raw = self.p.store_get(PARL_IO + 0x2C);
+        self.p.store_set(PARL_IO + 0x2C, raw | 1 << 2); // TX_EOF
+        self.irq_dirty = true;
+    }
+
     // ---- AES ---------------------------------------------------------------------------------
 
     pub fn aes_trigger(&mut self) {

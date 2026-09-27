@@ -36,6 +36,9 @@ pub const MMU_SPIRAM: u32 = 1 << 9;
 pub const MMU_VALID: u32 = 1 << 10;
 /// The XTAL the chip boots on (the C5's is 48 MHz).
 pub const XTAL_HZ: u64 = 48_000_000;
+/// Quad PSRAM on the module (ESP32-C5-WROOM-1 N16R8 / N8R4 carry 8 or 4 MB); only builds
+/// with CONFIG_SPIRAM probe it.
+pub const PSRAM_SIZE: usize = 8 << 20;
 
 pub struct C5Bus {
     pub clock: Clock,
@@ -43,6 +46,7 @@ pub struct C5Bus {
     pub sram: Box<[u8]>,
     pub lp: Box<[u8]>,
     pub flash: SpiFlash,
+    pub psram: Box<[u8]>,
     pub mmu: [u32; MMU_ENTRIES],
     pub p: Periph,
     pub board: Box<dyn Board>,
@@ -64,6 +68,7 @@ impl C5Bus {
             sram: vec![0u8; SRAM_SIZE].into_boxed_slice(),
             lp: vec![0u8; LP_SIZE].into_boxed_slice(),
             flash,
+            psram: vec![0u8; PSRAM_SIZE].into_boxed_slice(),
             mmu: [0; MMU_ENTRIES],
             p: Periph::new(),
             board,
@@ -79,15 +84,15 @@ impl C5Bus {
         self.clock.ns()
     }
 
-    /// Translate a cache virtual address to a flash offset (PSRAM pages aren't backed).
+    /// Translate a cache virtual address: (PSRAM page, offset in flash or PSRAM).
     #[inline]
-    fn mmu_translate(&self, addr: u32) -> Option<usize> {
+    fn mmu_translate(&self, addr: u32) -> Option<(bool, usize)> {
         let off = addr - EXT_BASE;
         let e = self.mmu[(off >> 16) as usize];
-        if e & MMU_VALID == 0 || e & MMU_SPIRAM != 0 {
+        if e & MMU_VALID == 0 {
             return None;
         }
-        Some((((e & MMU_PAGE_MASK) << 16) | (off & 0xffff)) as usize)
+        Some((e & MMU_SPIRAM != 0, (((e & MMU_PAGE_MASK) << 16) | (off & 0xffff)) as usize))
     }
 
     /// Resolve an address to host memory (for plain loads/stores).
@@ -104,11 +109,12 @@ impl C5Bus {
                 None
             }
             0x42 | 0x43 => {
-                let f = self.mmu_translate(addr)?;
-                if f + len > self.flash.data.len() || (addr & 0xffff) as usize + len > 0x1_0000 {
+                let (psram, f) = self.mmu_translate(addr)?;
+                let m: &[u8] = if psram { &self.psram } else { &self.flash.data };
+                if f + len > m.len() || (addr & 0xffff) as usize + len > 0x1_0000 {
                     return None;
                 }
-                Some((&self.flash.data[..], f))
+                Some((m, f))
             }
             0x50 => {
                 let o = (addr - LP_BASE) as usize;
@@ -129,6 +135,13 @@ impl C5Bus {
                 let o = (addr.wrapping_sub(LP_BASE)) as usize;
                 (o + len <= LP_SIZE).then_some((&mut self.lp[..], o))
             }
+            // PSRAM through the cache (flash pages are read-only)
+            0x42 | 0x43 => match self.mmu_translate(addr)? {
+                (true, o) if o + len <= self.psram.len() && (addr & 0xffff) as usize + len <= 0x1_0000 => {
+                    Some((&mut self.psram[..], o))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }

@@ -12,10 +12,15 @@
 //!   EPDiy V7 wiring, the same power path as the X: a TCA9535/PCA9535 expander (0x20: OE,
 //!   GMOD, TPS PWRUP / VCOM_CTRL / WAKEUP, PWR_GOOD) and a TPS65185 PMIC (0x68) on I2C
 //!   SDA 39 / SCL 40, plus a BQ27220 fuel gauge (0x55) there. Button on GPIO0.
+//! * Sensoria C5 (`sensoria_c5`, `BB_PANEL_SENSORIA_C5`): an ESP32-C5 feeding a 1280x720 panel
+//!   over PARLIO (8-bit bus). A PCA9535 (0x20) on SDA 7 / SCL 6 carries OE, GMOD, the gate
+//!   driver's SPV and the TPS65185's PWRUP / VCOM_CTRL / WAKEUP (pins 0-5, PWR_GOOD on 6);
+//!   the TPS65185 (0x68) is on the same bus. Button on GPIO0; `batt_pin` 0xff (reads 0 V).
 
 use sim_api::BoardInfo;
 
 use super::Board;
+use super::spi_epd::Chip;
 use crate::devices::i2c::I2cBus;
 use crate::devices::i2c::bq27220::Bq27220;
 use crate::devices::i2c::tca9535::{Tca9535, pins};
@@ -30,6 +35,17 @@ pub enum Power {
     Gpio { pwr: u8, oe: u8 },
     /// EPDiy V7: TPS65185 sequenced through a TCA9535 expander on I2C.
     Epdiy,
+    /// Sensoria C5: the same chips, on the expander's port 0 (and SPV there too).
+    Sensoria,
+}
+
+/// The Sensoria's PCA9535 pins (FastEPD `SensoriaEinkPower` / `SensoriaRowControl`).
+mod sensoria {
+    pub const OE: u8 = 0;
+    pub const SPV: u8 = 2;
+    pub const PWRUP: u8 = 3;
+    pub const WAKEUP: u8 = 5;
+    pub const PWR_GOOD: u8 = 6;
 }
 
 /// How the firmware measures the battery (`batt_type`).
@@ -39,6 +55,8 @@ pub enum Battery {
     Adc { pin: u8 },
     /// A BQ27220 fuel gauge on the I2C bus (0x55).
     Bq27220,
+    /// `BATT_ADC` with no ADC pin (`batt_pin` 0xff): reads as 0 V.
+    Unwired,
 }
 
 /// One supported board.
@@ -50,6 +68,7 @@ pub struct ParallelSpec {
     pub envs: &'static [&'static str],
     /// Shown in front-ends; also identifies the board in save points.
     pub name: &'static str,
+    pub chip: Chip,
     pub geometry: PanelGeometry,
     /// Gate driver start pulse, clock and source-driver latch GPIOs (FastEPD ioSPV/ioCKV/ioLE).
     pub spv: u8,
@@ -59,16 +78,16 @@ pub struct ParallelSpec {
     /// Active-low wake button (`interrupt_pin`), if the firmware has one.
     pub button: Option<u8>,
     pub battery: Battery,
+    /// The expander/PMIC bus (SDA, SCL), which idles high.
+    pub i2c: Option<(u8, u8)>,
 }
-
-const GPIO_SDA: u8 = 39;
-const GPIO_SCL: u8 = 40;
 
 pub static SPECS: &[ParallelSpec] = &[
     ParallelSpec {
         model: "m5_papers3",
         envs: &["TRMNL_X_PAPERS3"],
         name: "M5Stack PaperS3",
+        chip: Chip::Esp32s3,
         geometry: PanelGeometry::ED047TC1,
         spv: 17,
         ckv: 18,
@@ -76,11 +95,13 @@ pub static SPECS: &[ParallelSpec] = &[
         power: Power::Gpio { pwr: 46, oe: 45 },
         button: None,
         battery: Battery::Adc { pin: 3 },
+        i2c: None,
     },
     ParallelSpec {
         model: "lilygo_t5pro",
         envs: &["TRMNL_X_LILYGO_T5PRO"],
         name: "LilyGo T5 4.7\" S3 Pro",
+        chip: Chip::Esp32s3,
         geometry: PanelGeometry::ED047TC1,
         spv: 45,
         ckv: 48,
@@ -88,6 +109,21 @@ pub static SPECS: &[ParallelSpec] = &[
         power: Power::Epdiy,
         button: Some(0),
         battery: Battery::Bq27220,
+        i2c: Some((39, 40)),
+    },
+    ParallelSpec {
+        model: "sensoria_c5",
+        envs: &["TRMNL_X_SENSORIAC5"],
+        name: "Sensoria C5",
+        chip: Chip::Esp32c5,
+        geometry: PanelGeometry::SENSORIA_C5,
+        spv: 0xff, // on the expander
+        ckv: 5,
+        le: 2,
+        power: Power::Sensoria,
+        button: Some(0),
+        battery: Battery::Unwired,
+        i2c: Some((7, 6)),
     },
 ];
 
@@ -126,9 +162,18 @@ impl ParallelByodBoard {
     /// The I2C chips as they come out of power-on.
     fn new_i2c(spec: &ParallelSpec) -> I2cBus {
         let mut i2c = I2cBus::new();
-        if spec.power == Power::Epdiy {
-            i2c.add(Box::new(Tca9535::new()));
-            i2c.add(Box::new(Tps65185::new()));
+        match spec.power {
+            Power::Epdiy => {
+                i2c.add(Box::new(Tca9535::new()));
+                i2c.add(Box::new(Tps65185::new()));
+            }
+            Power::Sensoria => {
+                let mut tca = Tca9535::new();
+                tca.auto_pwr_good = false; // PWR_GOOD comes from the TPS65185 (pin 6)
+                i2c.add(Box::new(tca));
+                i2c.add(Box::new(Tps65185::new()));
+            }
+            Power::Gpio { .. } => {}
         }
         if spec.battery == Battery::Bq27220 {
             i2c.add(Box::new(Bq27220::new()));
@@ -163,7 +208,40 @@ impl ParallelByodBoard {
                 self.panel.set_power(now, rails);
                 self.panel.set_output_enable(now, oe);
             }
+            Power::Sensoria => {
+                let Some(tca) = self.i2c.device_mut::<Tca9535>() else { return };
+                let _ = tca.take_output_changes();
+                let (wakeup, pwrup, oe) = (
+                    tca.driven_high(sensoria::WAKEUP),
+                    tca.driven_high(sensoria::PWRUP),
+                    tca.driven_high(sensoria::OE),
+                );
+                let tps = self.i2c.device_mut::<Tps65185>().expect("tps65185");
+                tps.set_pins(now, wakeup, pwrup);
+                let (rails, good) = (tps.rails_on(now), tps.pwr_good(now));
+                let tca = self.i2c.device_mut::<Tca9535>().expect("tca9535");
+                tca.set_input(sensoria::PWR_GOOD, good);
+                self.panel.set_power(now, rails);
+                self.panel.set_output_enable(now, oe);
+                self.drive_rows(now);
+            }
         }
+    }
+
+    /// The gate driver's SPV/CKV and the source driver's LE, from the GPIOs (and, on the
+    /// Sensoria, SPV from the expander). Released lines idle high (as on the X).
+    fn drive_rows(&mut self, now: u64) {
+        let (out, oe) = (self.out, self.oe);
+        let level = |pin: u8| pin >= 64 || oe >> pin & 1 == 0 || out >> pin & 1 != 0;
+        let s = self.spec;
+        let spv = match s.power {
+            Power::Sensoria => self
+                .i2c
+                .device_mut::<Tca9535>()
+                .is_none_or(|t| !t.is_output(sensoria::SPV) || t.driven_high(sensoria::SPV)),
+            _ => level(s.spv),
+        };
+        self.panel.set_row_pins(now, spv, level(s.ckv), level(s.le));
     }
 }
 
@@ -172,10 +250,7 @@ impl Board for ParallelByodBoard {
         self.last_now = now;
         self.out = out;
         self.oe = oe;
-        // Row control lines idle high when released (as on the X).
-        let level = |pin: u8| oe >> pin & 1 == 0 || out >> pin & 1 != 0;
-        let s = self.spec;
-        self.panel.set_row_pins(now, level(s.spv), level(s.ckv), level(s.le));
+        self.drive_rows(now);
         self.sync_power(now);
     }
 
@@ -187,10 +262,10 @@ impl Board for ParallelByodBoard {
                 lv |= 1 << b;
             }
         }
-        if self.spec.power == Power::Epdiy {
+        if let Some((sda, scl)) = self.spec.i2c {
             // I2C pull-ups
-            mask |= 1 << GPIO_SDA | 1 << GPIO_SCL;
-            lv |= 1 << GPIO_SDA | 1 << GPIO_SCL;
+            mask |= 1 << sda | 1 << scl;
+            lv |= 1 << sda | 1 << scl;
         }
         (lv, mask)
     }
@@ -314,6 +389,36 @@ impl Board for ParallelByodBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sensoria C5: FastEPD's SensoriaEinkPower raises OE, GMOD, WAKEUP, PWRUP and VCOM on
+    /// the PCA9535's port 0, then spins on PWR_GOOD (pin 6), which follows the TPS65185.
+    #[test]
+    fn sensoria_power_comes_through_port_0_and_pwr_good_follows_the_pmic() {
+        let mut b = ParallelByodBoard::new(find("sensoria_c5").unwrap());
+        let wr = |b: &mut ParallelByodBoard, t: u64, bytes: &[u8]| {
+            assert!(b.i2c_start(t, 0, 0x20, false));
+            for &x in bytes {
+                assert!(b.i2c_write(t, 0, x));
+            }
+            b.i2c_stop(t, 0);
+        };
+        let pwr_good = |b: &mut ParallelByodBoard, t: u64| {
+            assert!(b.i2c_start(t, 0, 0x20, false));
+            b.i2c_write(t, 0, 0); // input port 0
+            assert!(b.i2c_start(t, 0, 0x20, true));
+            let v = b.i2c_read(t, 0, false);
+            b.i2c_stop(t, 0);
+            v >> 6 & 1 != 0
+        };
+        wr(&mut b, 0, &[6, 0xc0]); // pins 0-5 outputs
+        wr(&mut b, 0, &[2, 0b0011_1111]); // OE, GMOD, SPV, PWRUP, VCOM, WAKEUP
+        assert!(!pwr_good(&mut b, 1));
+        b.update(5_000_000);
+        assert!(b.panel.stats().powered && b.panel.stats().output_enabled);
+        assert!(pwr_good(&mut b, 5_000_001));
+        assert_eq!(b.adc_millivolts(3), 0, "no battery divider");
+        assert_eq!(b.gpio_in(0).0 >> 7 & 1, 1, "SDA pulled up");
+    }
 
     #[test]
     fn models_and_envs_resolve() {

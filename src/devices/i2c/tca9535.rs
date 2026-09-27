@@ -159,7 +159,7 @@ impl Tca9535 {
         self.set_input(pins::CHG_STAT, !charging);
     }
 
-    fn is_output(&self, pin: u8) -> bool {
+    pub fn is_output(&self, pin: u8) -> bool {
         self.config[(pin >> 3) as usize] >> (pin & 7) & 1 == 0
     }
 

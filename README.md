@@ -40,15 +40,14 @@ BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEV
 | `TRMNL_X_PAPERS3` | `m5_papers3` | M5Stack PaperS3 | ESP32-S3 | 4.7" 960×540 parallel (ED047TC1), 16 grays | ADC |
 | `TRMNL_X_LILYGO_T5PRO` | `lilygo_t5pro` | LilyGo T5 4.7" S3 Pro | ESP32-S3 | 4.7" 960×540 parallel, EPDiy V7 (TCA9535 + TPS65185) | BQ27220 |
 | `trmnl_steam` | `trmnl_steam` | TRMNL Steam | ESP32-C3 | 5.83" 648×480 UC81xx | ADC |
+| `TRMNL_X_SENSORIAC5` | `sensoria_c5` | Sensoria C5 | ESP32-C5 (8 MB quad PSRAM) | 1280×720 parallel over PARLIO, 16 grays (PCA9535 + TPS65185) | (not read) |
 
 ¹ main's `platformio.ini` can't build these envs: `seeed_xiao_esp32s3` lacks `framework = arduino`
 and `CrowPanel42` lacks `lib_deps` (build them from a copy of the ini with those added, and a
 separate `[platformio] build_dir`: a different project config makes pio wipe `.pio/build`).
 Boards with an ESP32 (classic) chip (`waveshare`, `esp32dev`) need a CPU/SoC model the
-simulator doesn't have. Of the other ESP32-C5 envs, `TRMNL_X_SENSORIAC5` (`sensoria_c5`, a
-FastEPD parallel panel on the C5's PARLIO, with quad PSRAM) needs PSRAM and PARLIO models, and
-`esp32-c5-devkitc-1` doesn't build (no platform override, so PlatformIO's espressif32 6.x
-doesn't know the board) and has no `DEVICE_MODEL`.
+simulator doesn't have. The `esp32-c5-devkitc-1` env doesn't build (no platform override, so
+PlatformIO's espressif32 6.x doesn't know the board) and has no `DEVICE_MODEL`.
 
 ![setup screen as rendered by the simulator](tests/integration/golden/setup_screen.png)
 
@@ -84,7 +83,7 @@ MOSI 1, CS 4, RST 2, DC 5, BUSY 0, button GPIO 3).
 |---|---|
 | CPU | RV32IMAC interpreter with the C5's CLIC (hardware-vectored interrupts through `mtvt`, `mintthresh`/`mintstatus` levels, nesting), at the firmware's clock (240 MHz) |
 | Boot | The production-silicon (v1.x) mask ROM, `esp32c5_rev100_rom.elf`, and the 2nd-stage bootloader from flash offset 0x2000 |
-| Peripherals | ESP32-C5 memory map (384 KB HP SRAM, 16 KB LP SRAM kept in deep sleep), 8 or 16 MB flash through SPI_MEM and the 512-entry cache MMU (with the boot-time MSPI timing tuning), interrupt matrix + CLIC, PCR clocks and resets, the low-power domain (PMU wake causes, LP_CLKRST reset causes, LP_TIMER, LP_AON), SYSTIMER, TIMG calibration, GPIO/IO_MUX (29 pins), regi2c analog registers, UART0 and the USB serial/JTAG console (merged: IDF logs to both, a line is shown once), I2C, GPSPI2, eFuse (MAC, chip v1.0, block v0.2), RNG |
+| Peripherals | ESP32-C5 memory map (384 KB HP SRAM, 16 KB LP SRAM kept in deep sleep), 8 or 16 MB flash and 8 MB quad PSRAM (AP Memory; probed on SPI1's CS1 by builds with `CONFIG_SPIRAM`) through SPI_MEM and the 512-entry cache MMU (with the boot-time MSPI timing tuning), PARLIO TX, interrupt matrix + CLIC, PCR clocks and resets, the low-power domain (PMU wake causes, LP_CLKRST reset causes, LP_TIMER, LP_AON), SYSTIMER, TIMG calibration, GPIO/IO_MUX (29 pins), regi2c analog registers, UART0 and the USB serial/JTAG console (merged: IDF logs to both, a line is shown once), I2C, GPSPI2, eFuse (MAC, chip v1.0, block v0.2), RNG |
 | Crypto | SHA (incl. SHA-384/512), AES and AES-GCM over the AHB DMA, RSA/MPI, and the ECC (point multiplication and verification, Jacobian and modular modes; P-192/256/384) and ECDSA (signature verification) accelerators, so TLS runs on them as on the chip |
 | WiFi | Dual band: besides **TRMNL-Sim** and **Neighbors WiFi**, **TRMNL-Sim-5G** (channel 36, −48 dBm, any password) joins on the C5's own radio (`WiFi-Band: 5`) |
 | Battery | BQ27427 fuel gauge on I2C (SDA 23 / SCL 10; BWRY: 11 / 12); the firmware reads its voltage |
@@ -114,7 +113,7 @@ loses its RAM) and the panel:
 | UC81xx | The OG's UC8179 model at any size (648×480, 792×528, 400×600, 600×1600 halves), with a per-panel particle response fitted to bb_epaper's 4-gray waveforms; black/white/red panels keep two 1-bit planes (`DTM1` black/white, `DTM2` red) and flash through black/white/red during their ~16 s refresh |
 | SSD16xx (SSD1677, SSD1683) | RAM windows and address counters, data entry modes, the new/old image planes, `0x22`/`0x20` update sequences with the built-in full/fast/partial waveforms and custom 4-gray LUTs (`0x32`), differential partial refreshes, deep sleep, BUSY active high |
 | Two controllers (E1004) | Each half's UC81xx gets the commands sent while its chip select is low; BUSY while either is busy |
-| Parallel (PaperS3, T5 Pro) | The X's parallel panel model at 960×540 on an 8-bit LCD_CAM bus: the PaperS3 powers the panel from GPIOs, the T5 Pro through a TCA9535 + TPS65185 like the X |
+| Parallel (PaperS3, T5 Pro, Sensoria C5) | The X's parallel panel model at 960×540 on an 8-bit LCD_CAM bus: the PaperS3 powers the panel from GPIOs, the T5 Pro through a TCA9535 + TPS65185 like the X. The Sensoria C5's 1280×720 panel gets its rows over the C5's PARLIO (fed by the AHB DMA) and its power and SPV through a PCA9535's port 0 |
 
 Firmware bugs these boards show (each is an expected-failure test):
 - `trmnl_steam` reboots forever: its `device_list[]` row is inside `#ifdef CMD_CS1_CS2`,
@@ -137,6 +136,9 @@ Firmware bugs these boards show (each is an expected-failure test):
   the panel reads as 2 bits per pixel, so only the top half changes, in the wrong inks.
 - On 960 px parallel panels the setup screen's instructions overflow the width; the
   CrowPanel's 800×480 layouts don't fit 400×300.
+- The Sensoria C5 never sleeps: FastEPD (8dc8c74) enables its PARLIO TX unit and on the way
+  to deep sleep deletes it without disabling it; IDF 5.5 refuses (`ESP_ERR_INVALID_STATE`) and
+  `ESP_ERROR_CHECK` aborts, so it reboots after every refresh.
 
 **TRMNL X** (`TRMNL_X`):
 
@@ -423,6 +425,10 @@ fuel gauge's voltage, `USB-Connected`/`Battery-Charging` from the charger lines,
 button wake, deep-sleep and power-off save points, onboarding on 5 GHz with the C5's own
 radio (`WiFi-Band`), HTTPS on the crypto accelerators, and memcheck and coverage runs; the
 BWRY's colors and the long refresh (its image bug is an expected failure).
+
+For the Sensoria C5 ([test_byod_parallel.py](tests/integration/test_byod_parallel.py)): the
+setup screen, onboarding and a 16-gray ramp on its 1280×720 panel, and its reboot on the
+way to sleep (an expected failure, see above).
 
 For the BYOD boards ([test_byod_uc8179.py](tests/integration/test_byod_uc8179.py),
 [test_byod_uc81xx.py](tests/integration/test_byod_uc81xx.py),
@@ -746,9 +752,10 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
 - ESP32-C3, ESP32-S3 and ESP32-C5 boards only (no classic ESP32). BYOD boards model what the
   firmware uses: no SD cards, touch panels or power-hold latches; charging only where the
   firmware reads a charger (TRMNL X, gen-2 OG).
-- ESP32-C5: no PSRAM, PARLIO, ADC or LP core models yet (the gen-2 OG builds don't use
-  them); the ECDSA accelerator verifies signatures but can't sign or export keys (those use
-  eFuse keys). WiFi 6 / 802.11ax details and BLE aren't modelled.
+- ESP32-C5: no ADC (the SAR ADC is HLE'd through Arduino's `analogRead*`), LP core or PARLIO
+  RX models; PARLIO TX sends whole DMA chains at once. The ECDSA accelerator verifies
+  signatures but can't sign or export keys (those use eFuse keys). WiFi 6 / 802.11ax details
+  and BLE aren't modelled.
 - No 802.11 emulation: WiFi is modelled at the ESP-IDF driver API. Signal strength,
   roaming and power-save behaviour are canned.
 - TRMNL OG: no sensors on the I2C bus (all addresses NACK). No USB data, no serial

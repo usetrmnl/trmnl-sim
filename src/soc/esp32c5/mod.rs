@@ -458,6 +458,7 @@ impl Esp32c5 {
         self.bus.clock.set_base(now);
         self.bus.p.systimer.reset_counters(now);
         self.bus.sram.fill(0);
+        self.bus.psram.fill(0);
         if power_on {
             self.bus.lp.fill(0);
         }

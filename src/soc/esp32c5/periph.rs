@@ -18,6 +18,7 @@ pub mod src {
     pub const UART1: usize = 48;
     pub const USB_JTAG: usize = 54;
     pub const I2C_EXT0: usize = 56;
+    pub const PARL_IO_TX: usize = 67;
     pub const SYSTIMER_TARGET0: usize = 61;
     pub const DMA_IN_CH0: usize = 71;
     pub const DMA_OUT_CH0: usize = 74;
@@ -39,6 +40,7 @@ pub const TIMG1: u32 = 0x6000_9000;
 pub const SYSTIMER: u32 = 0x6000_A000;
 pub const USB_JTAG: u32 = 0x6000_F000;
 pub const INTMTX: u32 = 0x6001_0000;
+pub const PARL_IO: u32 = 0x6001_5000;
 pub const SPI2: u32 = 0x6008_1000;
 pub const SHA_BASE: u32 = 0x6008_9000;
 pub const IO_MUX: u32 = 0x6009_0000;
@@ -514,6 +516,10 @@ impl C5Bus {
             _ if a == USB_JTAG + 0x0C => self.usb_raw() & self.p.store_get(USB_JTAG + 0x10),
             _ if a == USB_JTAG + 0x24 => ((now / 1_000_000) & 0x7ff) as u32, // SOF frame number (1 kHz)
 
+            // ---- PARLIO: TX always ready, INT_ST = RAW & ENA ----
+            _ if a == PARL_IO + 0x24 => stored | 1 << 31,
+            _ if a == PARL_IO + 0x30 => self.p.store_get(PARL_IO + 0x2C) & self.p.store_get(PARL_IO + 0x28),
+
             // ---- interrupt matrix ----
             _ if (INTMTX..INTMTX + 0x800).contains(&a) => self.p.intc.read_map(a - INTMTX).unwrap_or(stored),
 
@@ -539,7 +545,11 @@ impl C5Bus {
             return;
         }
         let now = self.clock.ns();
+        let parlio_start = a == PARL_IO + 0x14 && v & 1 << 31 != 0 && self.p.store_get(a) & 1 << 31 == 0;
         self.p.store_set(a, v);
+        if parlio_start {
+            self.parlio_tx_start(now);
+        }
         match a {
             UART0 | UART1 => {
                 if a == UART0 {
@@ -705,6 +715,14 @@ impl C5Bus {
             }
             _ if a == USB_JTAG + 0x10 => self.irq_dirty = true,
 
+            // PARLIO (TX_START's rising edge is handled above)
+            _ if a == PARL_IO + 0x34 => {
+                let raw = self.p.store_get(PARL_IO + 0x2C);
+                self.p.store_set(PARL_IO + 0x2C, raw & !v);
+                self.irq_dirty = true;
+            }
+            _ if a == PARL_IO + 0x28 => self.irq_dirty = true,
+
             // cross-core (FreeRTOS yield) interrupts
             _ if (INTPRI + 0x90..=INTPRI + 0x9C).contains(&a) => {
                 let n = ((a - INTPRI - 0x90) / 4) as usize;
@@ -776,6 +794,7 @@ impl C5Bus {
             set(src::DMA_OUT_CH0 + ch as usize, o != 0);
         }
         set(src::I2C_EXT0, self.p.i2c.raw & self.p.store_get(I2C0 + 0x28) != 0);
+        set(src::PARL_IO_TX, self.p.store_get(PARL_IO + 0x2C) & self.p.store_get(PARL_IO + 0x28) != 0);
         self.p.intc.sources = s;
     }
 
@@ -911,8 +930,41 @@ impl C5Bus {
 
     // ---- SPI_MEM1: flash controller --------------------------------------------------------------
 
+    /// A user command on SPI1 with CS1 selected (MISC: CS0_DIS set, CS1_DIS clear): the
+    /// quad PSRAM (an AP Memory 64 Mbit part, as on the ESP32-C5-WROOM-1 N16R8).
+    fn psram_command(&mut self) {
+        const SPI1: u32 = SPIMEM1;
+        let user = self.p.store_get(SPI1 + 0x18);
+        let opcode = (self.p.store_get(SPI1 + 0x20) & 0xff) as u8;
+        let addr = (self.p.store_get(SPI1 + 0x04) & 0xff_ffff) as usize;
+        let bytes =
+            |reg: u32, on: bool| if on { ((self.p.store_get(reg) & 0x3ff) as usize + 1).div_ceil(8) } else { 0 };
+        let mosi_n = bytes(SPI1 + 0x24, user & 1 << 27 != 0).min(64);
+        let miso_n = bytes(SPI1 + 0x28, user & 1 << 28 != 0).min(64);
+        let mosi: Vec<u8> =
+            (0..mosi_n).map(|i| (self.p.store_get(SPI1 + 0x58 + 4 * (i as u32 / 4)) >> (8 * (i % 4))) as u8).collect();
+        let size = self.psram.len();
+        let rx: Vec<u8> = match opcode {
+            // MFID (AP), KGD, EID[47:40] = density 2 (64 Mbit) | EID[41] (not 2T mode)
+            0x9f => [0x0d, 0x5d, 0x42, 0x11, 0x22, 0x33].iter().copied().cycle().take(miso_n).collect(),
+            0x02 | 0x38 => {
+                for (i, b) in mosi.iter().enumerate() {
+                    self.psram[(addr + i) % size] = *b;
+                }
+                Vec::new()
+            }
+            0x03 | 0x0b | 0xeb => (0..miso_n).map(|i| self.psram[(addr + i) % size]).collect(),
+            _ => vec![0; miso_n], // reset, QPI enter/exit, wrap length
+        };
+        log::trace!("psram cmd {opcode:#04x} addr {addr:#x} mosi {mosi_n} miso {miso_n}");
+        self.spi1_fill(&rx);
+    }
+
     fn spi1_command(&mut self, cmd: u32) {
         const SPI1: u32 = SPIMEM1;
+        if cmd & 1 << 18 != 0 && self.p.store_get(SPI1 + 0x34) & 3 == 1 {
+            return self.psram_command();
+        }
         log::trace!(
             "spi1 cmd {cmd:#x} addr {:#x} user {:#x} user2 {:#x}",
             self.p.store_get(SPI1 + 4),
@@ -990,7 +1042,7 @@ impl C5Bus {
 
     /// Whether flash data is sampled correctly with the current MSPI input timing (DIN mode
     /// and number, SPI1's extra dummy cycles). IDF sweeps the timing configs of its 80 MHz
-    /// table at boot and wants a window of 3 to 6 working ones (MSPI_TIMING_FLASH_CONSECUTIVE_
+    /// table at boot and wants a window of 3 to 4 or 6 working ones (MSPI_TIMING_FLASH_CONSECUTIVE_
     /// LEN_MAX) around the default, as on real silicon; outside the table all timings work.
     fn mspi_samples_well(&self) -> bool {
         const TABLE_80M: [(u32, u32, u32); 14] = [
@@ -1012,7 +1064,7 @@ impl C5Bus {
         let cali = self.p.store_get(SPIMEM1 + 0x180);
         let dummy = if cali & 2 != 0 { (cali >> 2) & 7 } else { 0 };
         let t = (self.p.store_get(SPIMEM0 + 0x184) & 7, self.p.store_get(SPIMEM0 + 0x188) & 3, dummy);
-        TABLE_80M.iter().position(|c| *c == t).is_none_or(|i| (2..=6).contains(&i))
+        TABLE_80M.iter().position(|c| *c == t).is_none_or(|i| (3..=6).contains(&i))
     }
 
     fn spi1_fill(&mut self, rx: &[u8]) {
