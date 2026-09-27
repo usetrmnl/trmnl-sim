@@ -4,7 +4,7 @@ double click (or a 1-5 s press) of the button runs it on the next wake. Also the
 
 import unittest
 
-from support import ProvisionedDevice, big_number, close_fixtures, fixture
+from support import ProvisionedDevice, big_number, close_fixtures, device_image, fixture, needs
 
 from devices import ANY
 
@@ -44,6 +44,7 @@ class Case(unittest.TestCase):
         return req
 
 
+@needs("double_click")  # runs the special function
 class SpecialFunctions(Case):
     def test_identify_shows_the_identify_image(self):
         seven = dev().mock.set_image("seven", big_number("7"))
@@ -140,6 +141,7 @@ class SpecialFunctions(Case):
             self.assertEqual(st["boot_count"], 1, "the device restarted (crashed)")
 
 
+@needs("double_click")  # runs the special function
 class Identify(Case):
     def test_identify_with_the_empty_state_image(self):
         with dev().boot() as s:
@@ -226,11 +228,11 @@ class ApiStatus(Case):
             s.wait(portal=True, min_boots=2, timeout_s=120)
 
     def test_screen_wiper_clears_then_shows_the_next_item(self):
-        four = dev().mock.set_image("four", big_number("4"))
+        path, four = device_image(dev().mock, "four", big_number("4"))
         dev().mock.display_queue = [{"image": "default", "filename": "screen_wiper.png", "refresh_rate": 300}]
         dev().mock.display = {"image": "four", "refresh_rate": 300}
         with dev().boot() as s:
-            dev().mock.wait_for_request("/images/four.bmp", timeout_s=600)
+            dev().mock.wait_for_request(path, timeout_s=600)
             s.wait(state="deep_sleep", timeout_s=600)
             self.assertTrue(s.compare_screen(four, tolerance=64, max_ratio=0)["match"])
 
@@ -242,6 +244,7 @@ class ApiStatus(Case):
 
 
 class Buttons(Case):
+    @needs("double_click")
     def test_double_click_runs_the_special_function(self):
         with dev().boot() as s:
             self.assign(s, "sleep")
@@ -262,6 +265,7 @@ class Buttons(Case):
             self.assertIsNone(req.headers.get("special_function"))
             s.wait(state="deep_sleep", timeout_s=90)
 
+    @needs("double_click")  # the OG reads a press in the double-click window after the waking tap
     def test_tap_then_long_press_resets_wifi(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
@@ -269,6 +273,7 @@ class Buttons(Case):
             s.press(6000)
             s.wait(portal=True, timeout_s=120)
 
+    @needs("soft_reset_press")
     def test_very_long_press_is_a_soft_reset(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)

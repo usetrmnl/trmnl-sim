@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support import BUILD, BWRY_BUILD, ProvisionedDevice, Simulator, big_number, sim
+from support import BUILD, BWRY_BUILD, DEVICE, ProvisionedDevice, Simulator, big_number, device_image, sim
 from trmnl_sim import SimError
 
 from devices import ANY
@@ -18,19 +18,21 @@ tmp: Path
 saved: Path  # deep sleep, showing `seven`, taken in setUpModule
 seven: bytes
 saved_status: dict
+saved_screen: bytes  # the screen when `saved` was taken (a gray panel's differs from `seven` a little)
 
 
 def setUpModule():
-    global dev, tmp, saved, seven, saved_status
+    global dev, tmp, saved, seven, saved_status, saved_screen
     dev = ProvisionedDevice()
     tmp = Path(tempfile.mkdtemp(prefix="trmnl-savepoints-"))
     saved = tmp / "asleep.trmnlsave"
-    seven = dev.mock.set_image("seven", big_number("7"))
+    path, seven = device_image(dev.mock, "seven", big_number("7"))
     dev.mock.display = {"image": "seven", "refresh_rate": 300}
     with dev.boot() as s:
-        dev.mock.wait_for_request("/images/seven.bmp", timeout_s=120)
+        dev.mock.wait_for_request(path, timeout_s=120)
         saved_status = s.wait(state="deep_sleep", timeout_s=120)["status"]
         assert s.compare_screen(seven)["match"]
+        saved_screen = s.screenshot()
         info = s.save_point(saved, label="asleep showing 7")
         assert info["deep_sleep"] and info["label"] == "asleep showing 7", info
 
@@ -44,7 +46,7 @@ class SavePoints(unittest.TestCase):
     def setUp(self):
         dev.mock.requests.clear()
         dev.mock.display_queue.clear()
-        self.eight = dev.mock.set_image("eight", big_number("8"))
+        self.eight_path, self.eight = device_image(dev.mock, "eight", big_number("8"))
         dev.mock.display = {"image": "eight", "refresh_rate": 300}
 
     def restored(self) -> Simulator:
@@ -57,7 +59,7 @@ class SavePoints(unittest.TestCase):
             self.assertEqual(st["display_refreshes"], saved_status["display_refreshes"])
             self.assertAlmostEqual(st["wake_at_s"], saved_status["wake_at_s"], places=3)
             self.assertGreaterEqual(st["sim_time_s"], saved_status["sim_time_s"])
-            self.assertTrue(s.compare_screen(seven, tolerance=0, max_ratio=0)["match"])
+            self.assertTrue(s.compare_screen(saved_screen, tolerance=0, max_ratio=0)["match"])
             s.wait_for_console(r"restored save point \"asleep showing 7\": deep sleep, wakes in")
             self.assertEqual(dev.mock.requests, [])
 
@@ -78,7 +80,7 @@ class SavePoints(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=30)
             s.press(150)
             req = dev.mock.wait_for_request("/api/display", timeout_s=120)
-            self.assertEqual(req.headers["Update-Source"], "button")
+            self.assertEqual(req.headers["Update-Source"], DEVICE.press_source)
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_in_memory_slot_goes_back_in_time(self):
@@ -87,13 +89,13 @@ class SavePoints(unittest.TestCase):
             slot = s.save_point()
             self.assertEqual([p["id"] for p in s.save_points()], [slot["id"]])
             s.wake()
-            dev.mock.wait_for_request("/images/eight.bmp", timeout_s=120)
+            dev.mock.wait_for_request(self.eight_path, timeout_s=120)
             st = s.wait(state="deep_sleep", timeout_s=120)["status"]
             self.assertTrue(s.compare_screen(self.eight)["match"])
             info = s.restore(id=slot["id"])
             self.assertEqual(info["label"], slot["label"])
             back = s.wait(state="deep_sleep", timeout_s=30)["status"]
-            self.assertTrue(s.compare_screen(seven, tolerance=0, max_ratio=0)["match"])
+            self.assertTrue(s.compare_screen(saved_screen, tolerance=0, max_ratio=0)["match"])
             self.assertEqual(back["boot_count"], st["boot_count"] - 1)
             self.assertLess(back["sim_time_s"], st["sim_time_s"])
 

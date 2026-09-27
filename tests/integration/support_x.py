@@ -128,7 +128,10 @@ class XSim(Simulator):
             self.touch_up("center")
 
     def reset_wifi_gesture(self) -> None:
-        """Forget WiFi and open the setup portal: both edges, then a middle hold."""
+        """Forget WiFi and open the setup portal: both edges, then a middle hold. The X reads
+        the gesture when it wakes, so it waits for the device to be asleep first."""
+        if self.status()["state"] != "deep_sleep":
+            self.wait(state="deep_sleep", timeout_s=120, settle_ms=200)
         ask_to_reset_wifi(self, self.status()["console_total"])
         self.touch("center", 1500)
 
