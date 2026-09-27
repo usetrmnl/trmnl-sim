@@ -1,8 +1,11 @@
 """BYOD boards with other UltraChip UC81xx panels: the 7.5" black/white/red TRMNL DIY kit,
 the TRMNL Steam (5.83" 648x480) and the Xteink X3 (3.68" 792x528, BQ27220 fuel gauge)."""
 
+import tempfile
 import unittest
+from pathlib import Path
 
+from support import build_of, sim
 from support_byod import ByodBoard
 from trmnl_mock import bwr_bars, expected_gray, png_image
 
@@ -44,8 +47,9 @@ class DiyKitBwr(ByodBoard, unittest.TestCase):
     @unittest.expectedFailure
     def test_4_gray_png_is_shown_in_black_and_white(self):
         # Firmware bug (as above): a 4-gray PNG goes down the 4-gray path, whose plane 0/1
-        # split lands in DTM1 (black/white) and DTM2 (red) of this panel. The least it
-        # should do is threshold the grays to black and white.
+        # split lands in DTM1 (black/white) and DTM2 (red) of this panel: black and dark
+        # gray come out red, light gray white and white black. The least it should do is
+        # threshold the grays to black and white.
         def level(x, y):
             return min(3, x * 4 // 800)
 
@@ -61,11 +65,48 @@ class DiyKitBwr(ByodBoard, unittest.TestCase):
             self.assertTrue(result["match"], result)
 
 
+def boots_to_the_portal(env: str, timeout_s: float = 30) -> bool:
+    """Does a factory-fresh device come up with its captive portal?"""
+    with tempfile.TemporaryDirectory() as tmp:
+        with sim(build_of(env), flash=Path(tmp) / "flash.bin", erase=True, extra_args=("--offline",)) as s:
+            try:
+                s.wait(portal=True, timeout_s=timeout_s)
+                return True
+            except Exception:
+                return False
+
+
+# Firmware bug: the trmnl_steam row of device_list[] (and EP583_648x480 in dpList) sits
+# inside `#ifdef CMD_CS1_CS2`, which the bb_epaper this env pins (9181692) doesn't define.
+# hw_config_init() doesn't find DEVICE_MODEL, logs the NULL name with %s (strlen(NULL):
+# load access fault) and pDevice stays NULL; the device panics and reboots endlessly
+# before bringing up the portal.
+STEAM_BUG = "firmware bug: no trmnl_steam row in device_list[] with this env's bb_epaper (boot loop)"
+
+
+class TrmnlSteamBoots(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not (build_of("trmnl_steam") / "firmware.elf").exists():
+            raise unittest.SkipTest("no trmnl_steam build")
+
+    @unittest.expectedFailure
+    def test_comes_up_with_the_portal(self):
+        self.assertTrue(boots_to_the_portal("trmnl_steam"), STEAM_BUG)
+
+
 class TrmnlSteam(ByodBoard, unittest.TestCase):
     ENV = "trmnl_steam"
     NAME = "TRMNL Steam"
     MODEL = "trmnl_steam"
     SIZE = (648, 480)
+
+    @classmethod
+    def setUpClass(cls):
+        # The shared tests run once the firmware gets past the bug above.
+        if (build_of(cls.ENV) / "firmware.elf").exists() and not boots_to_the_portal(cls.ENV):
+            raise unittest.SkipTest(STEAM_BUG)
+        super().setUpClass()
 
 
 class XteinkX3(ByodBoard, unittest.TestCase):
