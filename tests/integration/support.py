@@ -132,16 +132,20 @@ class ProvisionedDevice:
         self.build = build
         inputs = {"build": setup_cache.build_id(build), "memcheck": MEMCHECK, "turbo": TURBO, "args": self.SIM_ARGS, "host": self.DEVICE_HOST}
         self.cache, meta = setup_cache.entry(f"{self.NAME}-{build.name}", inputs, self._onboard)
-        self.mock = MockTrmnl()
-        self.mock.device_host = self.DEVICE_HOST
-        self.mock.display = {"image": "default", "refresh_rate": 300}
+        self.mock = self.new_mock()
         self.host_ports = {meta["port"]: self.mock.port}
         self.dir = Path(tempfile.mkdtemp(prefix="trmnl-provisioned-"))
 
+    def new_mock(self) -> MockTrmnl:
+        """A mock server for this device (onboarding and tests): serving images/default
+        and a 300 s refresh rate. Subclasses change what it serves."""
+        mock = MockTrmnl()
+        mock.device_host = self.DEVICE_HOST
+        mock.display = {"image": "default", "refresh_rate": 300}
+        return mock
+
     def _onboard(self, out: Path) -> dict:
-        with MockTrmnl() as mock:
-            mock.device_host = self.DEVICE_HOST
-            mock.display = {"image": "default", "refresh_rate": 300}
+        with self.new_mock() as mock:
             with sim(self.build, flash=out / "flash.bin", erase=True, extra_args=self.SIM_ARGS, name=f"{self.NAME}-setup") as s:
                 s.wait(portal=True, timeout_s=90)
                 s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)

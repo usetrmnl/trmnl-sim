@@ -24,6 +24,7 @@ pub mod bq27427;
 pub mod env_sensors;
 pub mod iqs323;
 pub mod m5_py32;
+pub mod m5ioe1;
 pub mod tca9535;
 pub mod tps65185;
 

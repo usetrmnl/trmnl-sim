@@ -14,8 +14,32 @@ checks what the device reports and what it shows. Classes whose build is missing
 
 import unittest
 
-from support import ProvisionedDevice, build_of
+from support import MockTrmnl, ProvisionedDevice, build_of
 from trmnl_mock import (big_number, checkerboard, png_image, expected_gray, spectra_bars, color_bars)
+
+
+class PanelSizedDefault(ProvisionedDevice):
+    """A provisioned device whose server's default screen is a PNG the panel's size and
+    kind instead of the 800x480 BMP (see ByodBoard.PNG_DEFAULT)."""
+
+    NAME = "provisioned-png-default"
+
+    def __init__(self, build, size: tuple[int, int], inks: str):
+        self.size, self.inks = size, inks
+        super().__init__(build)
+
+    def new_mock(self) -> MockTrmnl:
+        mock = super().new_mock()
+        w, h = self.size
+        if self.inks == "spectra6":
+            mock.set_spectra6_png("default", spectra_bars, w, h)
+        elif self.inks == "bwry":
+            mock.set_color_png("default", color_bars, w, h)
+        else:
+            number = big_number("0", scale=max(4, h // 30))
+            mock.images["default.png"] = png_image(lambda x, y: 0 if number(x, y) else 1, w, h, bits=1)
+            mock._stamp("default")
+        return mock
 
 
 class ByodBoard:
@@ -27,6 +51,9 @@ class ByodBoard:
     SIZE       the panel's (width, height) as the device reports it
     BATTERY_V  expected Battery-Voltage header at the default 4.1 V battery (None: don't check)
     INKS       "mono", "bwry" or "spectra6": what the panel shows
+    PNG_DEFAULT  serve a panel-sized PNG as the server's default screen (onboarding and
+               setUp) instead of the 800x480 1-bit BMP, for panels whose firmware can't
+               take that BMP
     """
 
     ENV: str
@@ -35,6 +62,7 @@ class ByodBoard:
     SIZE: tuple[int, int] = (800, 480)
     BATTERY_V: float | None = 4.1
     INKS = "mono"
+    PNG_DEFAULT = False
 
     dev: ProvisionedDevice
 
@@ -43,7 +71,7 @@ class ByodBoard:
         build = build_of(cls.ENV)
         if not (build / "firmware.elf").exists():
             raise unittest.SkipTest(f"no {cls.ENV} build at {build} (pio run -e {cls.ENV})")
-        cls.dev = ProvisionedDevice(build)
+        cls.dev = PanelSizedDefault(build, cls.SIZE, cls.INKS) if cls.PNG_DEFAULT else ProvisionedDevice(build)
 
     @classmethod
     def tearDownClass(cls):
