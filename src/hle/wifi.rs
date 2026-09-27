@@ -17,6 +17,7 @@ use crate::firmware::Symbols;
 
 const ESP_OK: u32 = 0;
 const ESP_ERR_WIFI_NOT_INIT: u32 = 0x3000 + 1;
+const ESP_ERR_WIFI_NOT_STARTED: u32 = 0x3000 + 2;
 const ESP_ERR_WIFI_NOT_STOPPED: u32 = 0x3000 + 4;
 const ESP_ERR_WIFI_NOT_CONNECT: u32 = 0x3000 + 15;
 const ESP_ERR_INVALID_ARG: u32 = 0x102;
@@ -757,6 +758,10 @@ fn connect(c: &mut HleCtx) -> Flow {
     }
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
+    if !w.started {
+        // like the real driver (initialized but stopped)
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_STARTED));
+    }
     if w.connected.is_none() && !w.connecting {
         let ssid = w.sta_ssid();
         c.env.console(&format!("wifi: connecting to \"{ssid}\""));
@@ -771,6 +776,9 @@ fn disconnect(c: &mut HleCtx) -> Flow {
     }
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
+    if !w.started {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_STARTED));
+    }
     w.events.retain(|e| e.id != EV_STA_CONNECTED);
     w.connecting = false;
     if let Some(i) = w.connected {
