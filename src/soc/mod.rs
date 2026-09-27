@@ -3,6 +3,7 @@
 //! the runner drives.
 
 pub mod esp32c3;
+pub mod esp32c5;
 pub mod esp32s3;
 
 use crate::board::Board;

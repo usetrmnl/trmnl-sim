@@ -118,7 +118,7 @@ pub struct Firmware {
     pub symbols: Symbols,
     /// (flash offset, bytes) images to write into flash, like `esptool write_flash`.
     pub images: Vec<(u32, Vec<u8>)>,
-    /// ESP image header chip id (5 = ESP32-C3, 9 = ESP32-S3).
+    /// ESP image header chip id (5 = ESP32-C3, 9 = ESP32-S3, 23 = ESP32-C5).
     pub chip_id: u16,
     /// Flash size in bytes, from the bootloader image header.
     pub flash_size: usize,
@@ -126,6 +126,15 @@ pub struct Firmware {
 
 pub const CHIP_ESP32C3: u16 = 5;
 pub const CHIP_ESP32S3: u16 = 9;
+pub const CHIP_ESP32C5: u16 = 23;
+
+/// Where the chip's ROM looks for the 2nd-stage bootloader in flash.
+pub fn bootloader_offset(chip_id: u16) -> u32 {
+    match chip_id {
+        CHIP_ESP32C5 => 0x2000,
+        _ => 0,
+    }
+}
 
 /// Offset of the first app partition (factory, else ota_0) in a partition table image.
 fn table_app_offset(table: &[u8]) -> Option<u32> {
@@ -175,7 +184,9 @@ impl Firmware {
         if parts.iter().all(|n| dir.join(n).exists()) {
             let table = std::fs::read(dir.join("partitions.bin"))?;
             let app_off = table_app_offset(&table).context("partitions.bin has no app partition")?;
-            images.push((0x0, std::fs::read(dir.join("bootloader.bin"))?));
+            let boot = std::fs::read(dir.join("bootloader.bin"))?;
+            let chip = boot.get(12..14).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+            images.push((bootloader_offset(chip), boot));
             images.push((0x8000, table.clone()));
             images.push((app_off, std::fs::read(dir.join("firmware.bin"))?));
             // Filesystem image (fonts, assets; on TRMNL X also the modem firmware)
@@ -186,11 +197,19 @@ impl Firmware {
                 }
             }
         } else if merged.exists() {
-            images.push((0, std::fs::read(&merged)?));
+            let data = std::fs::read(&merged)?;
+            // A merged image starts at 0 even where the bootloader lives at 0x2000 (ESP32-C5).
+            if data.first() != Some(&0xE9) && data.get(0x2000) != Some(&0xE9) {
+                bail!("{}: no bootloader image at 0 or 0x2000", merged.display());
+            }
+            images.push((0, data));
         } else {
             bail!("{} has no bootloader.bin/partitions.bin/firmware.bin or merged_firmware.bin", dir.display());
         }
-        let boot = image_at(&images, 0).context("no bootloader image")?;
+        let boot = image_at(&images, 0)
+            .filter(|b| b.first() == Some(&0xE9))
+            .or_else(|| image_at(&images, 0x2000))
+            .context("no bootloader image")?;
         let flash_size = match boot.get(3).map(|b| b >> 4) {
             Some(0) => 1 << 20,
             Some(1) => 2 << 20,
@@ -378,9 +397,38 @@ pub fn parse_image(flash: &[u8], off: usize) -> Result<(u32, Segments)> {
     Ok((entry, segs))
 }
 
-/// Locate the ROM ELF shipped with PlatformIO's tool-esp-rom-elfs.
+/// Directories searched for ROM ELFs, in order: the simulator checkout's `rom/` (where
+/// `scripts/fetch-rom-elfs.sh` puts Espressif's esp-rom-elfs release), `rom/` next to the
+/// executable, the user cache (`$XDG_CACHE_HOME` or `~/.cache`, `trmnl-sim/rom-elfs`), then
+/// PlatformIO's `tool-esp-rom-elfs` packages (any version).
+pub fn rom_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("rom")];
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        dirs.push(exe_dir.join("rom"));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let cache =
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".cache")));
+    if let Some(c) = cache {
+        dirs.push(c.join("trmnl-sim/rom-elfs"));
+    }
+    if let Some(h) = home {
+        let pkgs = h.join(".platformio/packages");
+        dirs.push(pkgs.join("tool-esp-rom-elfs"));
+        if let Ok(rd) = std::fs::read_dir(&pkgs) {
+            let mut more: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("tool-esp-rom-elfs@")))
+                .collect();
+            more.sort();
+            dirs.extend(more);
+        }
+    }
+    dirs
+}
+
+/// Locate a ROM ELF (e.g. `esp32c3_rev3_rom.elf`) in [`rom_search_dirs`].
 pub fn find_rom_elf(name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let p = Path::new(&home).join(".platformio/packages/tool-esp-rom-elfs").join(name);
-    p.exists().then_some(p)
+    rom_search_dirs().into_iter().map(|d| d.join(name)).find(|p| p.exists())
 }

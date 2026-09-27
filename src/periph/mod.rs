@@ -2,6 +2,7 @@
 //! modules (which own the register maps and wiring).
 
 pub mod crypto_math;
+pub mod ec;
 pub mod i2c;
 pub mod sha;
 pub mod systimer;

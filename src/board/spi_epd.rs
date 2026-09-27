@@ -10,6 +10,7 @@ use crate::devices::epd::SpiEpd;
 use crate::devices::i2c::I2cBus;
 use crate::devices::i2c::axp2101::Axp2101;
 use crate::devices::i2c::bq27220::Bq27220;
+use crate::devices::i2c::bq27427::Bq27427;
 use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
 use crate::devices::i2c::m5_py32::M5Py32;
 use crate::devices::i2c::m5ioe1::M5Ioe1;
@@ -22,6 +23,7 @@ use crate::savepoint::{StateReader, StateWriter};
 pub enum Chip {
     Esp32c3,
     Esp32s3,
+    Esp32c5,
 }
 
 /// The panel's serial interface and the button, as `device_list[]` (or, for boards whose
@@ -52,6 +54,21 @@ pub enum Battery {
     Bq27220,
     /// An X-Powers AXP2101 PMIC on I2C (0x34).
     Axp2101,
+    /// A TI BQ27427 fuel gauge on I2C (0x55), as on the TRMNL X.
+    Bq27427,
+}
+
+/// A charger whose status lines the firmware reads, so USB power can be simulated (the
+/// window's and control API's dock switch plugs the USB cable in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Charger {
+    None,
+    /// TI BQ25616 with its open-drain PG (power good: USB present) and STAT (charging)
+    /// outputs, active low, on these GPIOs.
+    Bq25616 {
+        pg: u8,
+        stat: u8,
+    },
 }
 
 /// The e-paper panel (and its controller).
@@ -178,10 +195,13 @@ pub struct BoardSpec {
     pub chip: Chip,
     pub pins: Pins,
     pub battery: Battery,
+    pub charger: Charger,
     pub panel: Panel,
 }
 
 const OG_PINS: Pins = Pins { sck: 7, mosi: 8, cs: 6, rst: 10, dc: 5, busy: 4, button: 2 };
+/// The gen-2 OG (ESP32-C5); its fuel gauge is on SDA 23 / SCL 10 (BWRY: 11 / 12).
+const GEN2_PINS: Pins = Pins { sck: 6, mosi: 1, cs: 4, rst: 2, dc: 5, busy: 0, button: 3 };
 const RETERMINAL_PINS: Pins = Pins { sck: 7, mosi: 9, cs: 10, rst: 12, dc: 11, busy: 13, button: 3 };
 const XIAO_EPAPER_PINS: Pins = Pins { sck: 7, mosi: 9, cs: 44, rst: 38, dc: 10, busy: 4, button: 5 };
 
@@ -194,6 +214,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32c3,
         pins: OG_PINS,
         battery: Battery::Adc { pin: 3, enable: None },
+        charger: Charger::None,
         panel: Panel::Uc8179,
     },
     BoardSpec {
@@ -203,6 +224,27 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32c3,
         pins: OG_PINS,
         battery: Battery::Adc { pin: 3, enable: None },
+        charger: Charger::None,
+        panel: Panel::Uc8179Bwry,
+    },
+    BoardSpec {
+        model: "og_gen2",
+        envs: &["trmnl_gen2"],
+        name: "TRMNL OG gen 2",
+        chip: Chip::Esp32c5,
+        pins: GEN2_PINS,
+        battery: Battery::Bq27427,
+        charger: Charger::Bq25616 { pg: 25, stat: 24 },
+        panel: Panel::Uc8179,
+    },
+    BoardSpec {
+        model: "og_gen2_4clr",
+        envs: &["trmnl_gen2_4clr"],
+        name: "TRMNL BWRY gen 2",
+        chip: Chip::Esp32c5,
+        pins: GEN2_PINS,
+        battery: Battery::Bq27427,
+        charger: Charger::Bq25616 { pg: 25, stat: 24 },
         panel: Panel::Uc8179Bwry,
     },
     BoardSpec {
@@ -212,6 +254,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32c3,
         pins: Pins { sck: 8, mosi: 10, cs: 3, rst: 2, dc: 5, busy: 4, button: 9 },
         battery: Battery::Unwired,
+        charger: Charger::None,
         panel: Panel::Uc8179,
     },
     BoardSpec {
@@ -221,6 +264,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: Pins { sck: 7, mosi: 9, cs: 2, rst: 1, dc: 4, busy: 3, button: 0 },
         battery: Battery::Unwired,
+        charger: Charger::None,
         panel: Panel::Uc8179,
     },
     BoardSpec {
@@ -230,6 +274,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: XIAO_EPAPER_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(6) },
+        charger: Charger::None,
         panel: Panel::Uc8179,
     },
     BoardSpec {
@@ -239,6 +284,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: XIAO_EPAPER_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(6) },
+        charger: Charger::None,
         panel: Panel::Uc8179Bwr,
     },
     BoardSpec {
@@ -248,6 +294,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: XIAO_EPAPER_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(6) },
+        charger: Charger::None,
         panel: Panel::Uc8179Spectra6,
     },
     BoardSpec {
@@ -257,6 +304,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: RETERMINAL_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(21) },
+        charger: Charger::None,
         panel: Panel::Uc8179,
     },
     BoardSpec {
@@ -266,6 +314,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: RETERMINAL_PINS,
         battery: Battery::Adc { pin: 1, enable: Some(21) },
+        charger: Charger::None,
         panel: Panel::Uc8179Spectra6,
     },
     BoardSpec {
@@ -277,6 +326,7 @@ pub static SPECS: &[BoardSpec] = &[
         // The LiPo's divider is on GPIO0 (config.h PIN_BATTERY), but device_list[] has
         // batt_pin 0xff: the firmware never reads it and reports 0 V.
         battery: Battery::Adc { pin: 0, enable: None },
+        charger: Charger::None,
         panel: Panel::Ssd1677Ep426,
     },
     BoardSpec {
@@ -286,6 +336,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: Pins { button: 2, ..XIAO_EPAPER_PINS },
         battery: Battery::Adc { pin: 1, enable: Some(6) },
+        charger: Charger::None,
         panel: Panel::Ssd1677Ep426,
     },
     BoardSpec {
@@ -295,6 +346,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: Pins { sck: 11, mosi: 12, cs: 10, rst: 46, dc: 9, busy: 3, button: 0 },
         battery: Battery::Axp2101,
+        charger: Charger::None,
         panel: Panel::Ssd1677Ep397,
     },
     BoardSpec {
@@ -304,6 +356,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32s3,
         pins: Pins { sck: 13, mosi: 14, cs: 15, rst: 17, dc: 16, busy: 18, button: 4 },
         battery: Battery::Bq27220,
+        charger: Charger::None,
         panel: Panel::Ssd1677Ep397Flipped,
     },
     BoardSpec {
@@ -314,6 +367,7 @@ pub static SPECS: &[BoardSpec] = &[
         // Wired as bb_epaper's begin(EPD_CROWPANEL42) has it (device_list[] pins are 0).
         pins: Pins { sck: 12, mosi: 11, cs: 45, rst: 47, dc: 46, busy: 48, button: 2 },
         battery: Battery::None,
+        charger: Charger::None,
         panel: Panel::Ssd1683Ep42b,
     },
     BoardSpec {
@@ -323,6 +377,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32c3,
         pins: OG_PINS,
         battery: Battery::Adc { pin: 3, enable: None },
+        charger: Charger::None,
         panel: Panel::Uc81xx583,
     },
     BoardSpec {
@@ -332,6 +387,7 @@ pub static SPECS: &[BoardSpec] = &[
         chip: Chip::Esp32c3,
         pins: Pins { sck: 8, mosi: 10, cs: 21, rst: 5, dc: 4, busy: 6, button: 3 },
         battery: Battery::Bq27220,
+        charger: Charger::None,
         panel: Panel::Uc81xx368,
     },
     BoardSpec {
@@ -342,6 +398,7 @@ pub static SPECS: &[BoardSpec] = &[
         // bb_epaper's begin(EPD_M5_PAPER_MONO); the panel's RST is on the I/O expander
         pins: Pins { sck: 15, mosi: 14, cs: 16, rst: 0xff, dc: 17, busy: 18, button: 2 },
         battery: Battery::None,
+        charger: Charger::None,
         panel: Panel::M5PaperMono,
     },
     BoardSpec {
@@ -352,6 +409,7 @@ pub static SPECS: &[BoardSpec] = &[
         // bb_epaper's begin(EPD_M5_PAPER_COLOR); device_list has no SPI pins for it
         pins: Pins { sck: 15, mosi: 13, cs: 44, rst: 12, dc: 43, busy: 11, button: 1 },
         battery: Battery::None,
+        charger: Charger::None,
         panel: Panel::M5PaperColor,
     },
     BoardSpec {
@@ -362,6 +420,7 @@ pub static SPECS: &[BoardSpec] = &[
         // bb_epaper's begin(EPD_SEEED_E1004); CS2 (GPIO2) is the panel's
         pins: Pins { sck: 7, mosi: 9, cs: 10, rst: 38, dc: 11, busy: 13, button: 4 },
         battery: Battery::Adc { pin: 1, enable: Some(21) },
+        charger: Charger::None,
         panel: Panel::SeeedE1004,
     },
 ];
@@ -390,6 +449,8 @@ pub struct SpiEpdBoard {
     oe: u64,
     /// The panel's supply is on (see [`EpdPower`]).
     epd_powered: bool,
+    /// USB power plugged in (boards with a [`Charger`]).
+    usb: bool,
 }
 
 impl SpiEpdBoard {
@@ -404,6 +465,7 @@ impl SpiEpdBoard {
         match spec.battery {
             Battery::Bq27220 => _ = i2c.add(Box::new(Bq27220::new())),
             Battery::Axp2101 => _ = i2c.add(Box::new(Axp2101::new())),
+            Battery::Bq27427 => _ = i2c.add(Box::new(Bq27427::new(1))),
             _ => {}
         }
         match spec.panel.power() {
@@ -420,12 +482,19 @@ impl SpiEpdBoard {
             out: 0,
             oe: 0,
             epd_powered: false,
+            usb: false,
         };
+        b.set_battery_mv(b.battery_mv);
         b.epd_powered = b.epd_supply();
         if !b.epd_powered {
             b.panel.set_power(0, false); // until the firmware switches it on
         }
         b
+    }
+
+    /// Charging: on USB power and not yet full.
+    fn charging_now(&self) -> bool {
+        self.usb && self.spec.charger != Charger::None && self.battery_mv < 4150
     }
 
     fn level(&self, pin: u8) -> bool {
@@ -523,6 +592,16 @@ impl Board for SpiEpdBoard {
         if !self.button_down {
             lv |= 1 << p.button;
         }
+        if let Charger::Bq25616 { pg, stat } = self.spec.charger {
+            // open drain, pulled up on the board: low = USB power good / charging
+            mask |= 1 << pg | 1 << stat;
+            if !self.usb {
+                lv |= 1 << pg;
+            }
+            if !self.charging_now() {
+                lv |= 1 << stat;
+            }
+        }
         if let Some(b) = self.panel.mosi_out()
             && self.epd_powered
             && self.oe >> p.mosi & 1 == 0
@@ -562,6 +641,7 @@ impl Board for SpiEpdBoard {
         sim_api::BoardInfo {
             name: self.spec.name.into(),
             has_button: true,
+            has_dock: self.spec.charger != Charger::None,
             has_refresh_flashing: self.panel.is_color(),
             ..Default::default()
         }
@@ -579,15 +659,30 @@ impl Board for SpiEpdBoard {
         self.button_down = down;
     }
 
+    fn set_docked(&mut self, docked: bool) {
+        if self.spec.charger != Charger::None {
+            self.usb = docked;
+            self.set_battery_mv(self.battery_mv);
+        }
+    }
+
+    fn charging(&self) -> bool {
+        self.charging_now()
+    }
+
     fn set_battery_mv(&mut self, mv: u32) {
         self.battery_mv = mv;
         // A rough LiPo curve for the gauges' state of charge: 3.3 V empty .. 4.2 V full.
         let soc = ((mv.clamp(3300, 4200) - 3300) * 100 / 900) as u8;
+        let charging = self.charging_now();
         if let Some(g) = self.i2c.device_mut::<Bq27220>() {
-            g.set_battery(mv as u16, false, soc);
+            g.set_battery(mv as u16, charging, soc);
         }
         if let Some(g) = self.i2c.device_mut::<Axp2101>() {
-            g.set_battery(mv as u16, false, soc);
+            g.set_battery(mv as u16, charging, soc);
+        }
+        if let Some(g) = self.i2c.device_mut::<Bq27427>() {
+            g.set_battery(mv as u16, charging, soc);
         }
     }
 
@@ -603,6 +698,9 @@ impl Board for SpiEpdBoard {
         if powered {
             w.section(|w| self.i2c.save_state_where(w, is_board_chip));
         }
+        if self.spec.charger != Charger::None {
+            w.bool(self.usb);
+        }
     }
 
     fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
@@ -614,6 +712,10 @@ impl Board for SpiEpdBoard {
         r.section(|r| self.panel.restore_state(r, powered))?;
         if powered {
             r.section(|r| self.i2c.restore_state_where(r, is_board_chip))?;
+        }
+        if self.spec.charger != Charger::None {
+            self.usb = r.bool()?;
+            self.set_battery_mv(self.battery_mv);
         }
         self.epd_powered = self.epd_supply();
         Ok(())

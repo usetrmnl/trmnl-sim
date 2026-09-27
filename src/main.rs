@@ -73,7 +73,8 @@ struct Cli {
     /// (repeatable).
     #[arg(long, value_name = "GUEST=HOST", value_parser = parse_host_port)]
     host_port: Vec<(u16, u16)>,
-    /// ESP32-C3 ROM ELF (default: $TRMNL_SIM_ROM or PlatformIO's tool-esp-rom-elfs).
+    /// ROM ELF for the build's chip (default: $TRMNL_SIM_ROM, else the simulator's rom/ directory,
+    /// ~/.cache/trmnl-sim/rom-elfs or PlatformIO's tool-esp-rom-elfs).
     #[arg(long, env = "TRMNL_SIM_ROM")]
     rom: Option<PathBuf>,
     /// Save the e-paper contents as PNG when the run ends.
@@ -169,13 +170,16 @@ fn main() -> Result<()> {
     let rom_name = match fw.chip_id {
         firmware::CHIP_ESP32C3 => soc::esp32c3::ROM_ELF,
         firmware::CHIP_ESP32S3 => soc::esp32s3::ROM_ELF,
-        other => anyhow::bail!("unsupported chip id {other} in the firmware image (supported: ESP32-C3, ESP32-S3)"),
+        firmware::CHIP_ESP32C5 => soc::esp32c5::ROM_ELF,
+        other => {
+            anyhow::bail!("unsupported chip id {other} in the firmware image (supported: ESP32-C3, ESP32-S3, ESP32-C5)")
+        }
     };
     let rom_path = match &cli.rom {
         Some(p) => p.clone(),
         None => firmware::find_rom_elf(rom_name).with_context(|| {
             format!(
-                "{rom_name} not found: pass --rom, set TRMNL_SIM_ROM, or run \
+                "{rom_name} not found: pass --rom, set TRMNL_SIM_ROM, run scripts/fetch-rom-elfs.sh, or \
                  `pio pkg install -g -t platformio/tool-esp-rom-elfs`"
             )
         })?,
@@ -219,6 +223,14 @@ fn main() -> Result<()> {
         None => board::spi_epd::find(&env).or_else(|| match fw.chip_id {
             firmware::CHIP_ESP32C3 if fw.symbols.has_prefix("_Z13png_draw_4clr") => board::spi_epd::find("og_4clr"),
             firmware::CHIP_ESP32C3 => board::spi_epd::find("og"),
+            // ESP32-C5 builds with bb_epaper are the gen-2 OG (the others drive a parallel panel).
+            firmware::CHIP_ESP32C5 if fw.symbols.has_prefix("_Z16bbepSetPanelType") => {
+                if fw.symbols.has_prefix("_Z13png_draw_4clr") {
+                    board::spi_epd::find("og_gen2_4clr")
+                } else {
+                    board::spi_epd::find("og_gen2")
+                }
+            }
             // ESP32-S3 builds with bb_epaper drive an SPI panel, the others FastEPD (the X).
             _ if fw.symbols.has_prefix("_Z16bbepSetPanelType") => {
                 fw.symbols.has_prefix("_Z13png_draw_6clr").then(|| board::spi_epd::find("reterminal_e1002")).flatten()
@@ -234,6 +246,7 @@ fn main() -> Result<()> {
             let chip = match spec.chip {
                 board::spi_epd::Chip::Esp32c3 => firmware::CHIP_ESP32C3,
                 board::spi_epd::Chip::Esp32s3 => firmware::CHIP_ESP32S3,
+                board::spi_epd::Chip::Esp32c5 => firmware::CHIP_ESP32C5,
             };
             if chip != fw.chip_id {
                 anyhow::bail!("the {} is a {:?} board, but the firmware is for another chip", spec.name, spec.chip);
@@ -271,6 +284,18 @@ fn main() -> Result<()> {
     let mut machine: Box<dyn soc::Machine> = match fw.chip_id {
         firmware::CHIP_ESP32S3 => {
             let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, &cli.trace)?;
+            if let Some(mac) = cli.mac {
+                m.set_mac(mac);
+            }
+            m.set_portal_port(cli.portal_port);
+            m.set_net_config(net);
+            if let Some(mode) = memcheck_mode {
+                m.enable_memcheck(mode, cli.memcheck_suppress.clone());
+            }
+            Box::new(m)
+        }
+        firmware::CHIP_ESP32C5 => {
+            let mut m = soc::esp32c5::Esp32c5::new(&rom, flash, board, apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
             }

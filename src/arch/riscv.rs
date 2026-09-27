@@ -1,4 +1,8 @@
-//! RV32IMAC interpreter (machine mode only), as found in the ESP32-C3.
+//! RV32IMAC interpreter (machine mode only), as found in the ESP32-C3 and ESP32-C5.
+//!
+//! With [`Csrs::clic`] set the core follows the RISC-V CLIC as the ESP32-C5 implements it
+//! (standard `mintthresh`/`mintstatus`, `mtvt` hardware vectoring, the previous interrupt
+//! level in `mcause.mpil`); otherwise traps behave as on the C3 (`mtvec` direct/vectored).
 
 use super::{GuestCpu, MemBus, ReturnPatch};
 
@@ -48,6 +52,23 @@ pub struct Csrs {
     pub mpcer: u32,
     pub mpcmr: u32,
     pub other: std::collections::HashMap<u16, u32>,
+    /// CLIC mode (ESP32-C5): the fields below are live.
+    pub clic: bool,
+    /// `mintstatus.mil`: the level of the interrupt being serviced (0 = none).
+    pub mil: u8,
+    /// `mintthresh`: interrupts at or below this level are masked.
+    pub mintthresh: u8,
+    /// `mcause.mpil`: the level before the current trap, restored by `mret`.
+    pub mpil: u8,
+    /// `mtvt`: base of the hardware vector table.
+    pub mtvt: u32,
+}
+
+/// CSR numbers of the CLIC.
+pub mod clic_csr {
+    pub const MTVT: u16 = 0x307;
+    pub const MINTTHRESH: u16 = 0x347;
+    pub const MINTSTATUS: u16 = 0xFB1;
 }
 
 #[derive(Clone)]
@@ -98,11 +119,46 @@ impl Rv32 {
             self.csr.mstatus |= MSTATUS_MPIE;
         }
         self.csr.mstatus |= MSTATUS_MPP;
+        if self.csr.clic {
+            // Exceptions (and non-vectored interrupts) enter at mtvec[31:6]; the level
+            // doesn't change for exceptions.
+            self.csr.mpil = self.csr.mil;
+            self.pc = self.csr.mtvec & !0x3f;
+            self.reservation = None;
+            return;
+        }
         let base = self.csr.mtvec & !3;
         let vectored = self.csr.mtvec & 1 != 0;
         self.pc =
             if vectored && cause & 0x8000_0000 != 0 { base.wrapping_add(4 * (cause & 0x7fff_ffff)) } else { base };
         self.reservation = None;
+    }
+
+    /// CLIC: take interrupt `id` (CLIC numbering, 16 + CPU line) at `level` (the 8-bit
+    /// level from its `clicintctl`). `vector`: the handler address read from the `mtvt`
+    /// table for a hardware-vectored interrupt, `None` to enter at `mtvec`.
+    pub fn take_clic_interrupt(&mut self, id: u32, level: u8, vector: Option<u32>) {
+        let pc = self.pc;
+        self.take_trap(0x8000_0000 | id, 0, pc);
+        self.csr.mil = level;
+        if let Some(v) = vector {
+            self.pc = v & !1;
+        }
+    }
+
+    /// CLIC: the level an interrupt must exceed to be taken now.
+    #[inline]
+    pub fn clic_level(&self) -> u8 {
+        self.csr.mil.max(self.csr.mintthresh)
+    }
+
+    /// `mcause` as read: in CLIC mode it also carries mpil, mpie and mpp.
+    fn mcause(&self) -> u32 {
+        if !self.csr.clic {
+            return self.csr.mcause;
+        }
+        let mpie = (self.csr.mstatus & MSTATUS_MPIE != 0) as u32;
+        (self.csr.mcause & 0x8000_0fff) | (self.csr.mpil as u32) << 16 | mpie << 27 | 3 << 28
     }
 
     pub fn read_csr(&self, n: u16, cycles: u64) -> Option<u32> {
@@ -113,9 +169,12 @@ impl Rv32 {
             0x305 => self.csr.mtvec,
             0x340 => self.csr.mscratch,
             0x341 => self.csr.mepc,
-            0x342 => self.csr.mcause,
+            0x342 => self.mcause(),
             0x343 => self.csr.mtval,
             0x344 => 0, // mip
+            clic_csr::MTVT if self.csr.clic => self.csr.mtvt,
+            clic_csr::MINTTHRESH if self.csr.clic => self.csr.mintthresh as u32,
+            clic_csr::MINTSTATUS if self.csr.clic => (self.csr.mil as u32) << 24,
             0xF11..=0xF13 => 0,
             0xF14 => 0, // mhartid
             0x7E0 | 0x800 => self.csr.mpcer,
@@ -134,8 +193,16 @@ impl Rv32 {
             0x305 => self.csr.mtvec = v,
             0x340 => self.csr.mscratch = v,
             0x341 => self.csr.mepc = v & !1,
+            0x342 if self.csr.clic => {
+                self.csr.mcause = v & 0x8000_0fff;
+                self.csr.mpil = (v >> 16) as u8;
+                self.csr.mstatus = (self.csr.mstatus & !MSTATUS_MPIE) | if v & 1 << 27 != 0 { MSTATUS_MPIE } else { 0 };
+            }
             0x342 => self.csr.mcause = v,
             0x343 => self.csr.mtval = v,
+            clic_csr::MTVT if self.csr.clic => self.csr.mtvt = v & !0x3f,
+            clic_csr::MINTTHRESH if self.csr.clic => self.csr.mintthresh = v as u8,
+            clic_csr::MINTSTATUS if self.csr.clic => {}
             0x7E0 | 0x800 => self.csr.mpcer = v,
             0x7E1 | 0x801 => self.csr.mpcmr = v,
             0x7E2 | 0x802 => self.csr.pccr_base = cycles.wrapping_sub(v as u64),
@@ -392,6 +459,9 @@ impl Rv32 {
                                 self.csr.mstatus |= MSTATUS_MIE;
                             }
                             self.csr.mstatus |= MSTATUS_MPIE;
+                            if self.csr.clic {
+                                self.csr.mil = self.csr.mpil;
+                            }
                             self.pc = self.csr.mepc;
                             return Ok(Step::Ok);
                         }
