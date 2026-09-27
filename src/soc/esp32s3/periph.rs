@@ -171,6 +171,8 @@ pub struct Periph {
     rtc_time_latched: u64,
     pub rtc_slow_hz: u64,
     pub mac: [u8; 6],
+    /// Die temperature read by the on-chip sensor (SENS TSENS), °C.
+    pub chip_temp_c: f32,
     rng: u64,
     /// OPI PSRAM mode registers (MR0..MR8).
     psram_mr: [u8; 9],
@@ -207,6 +209,7 @@ impl Periph {
             rtc_time_latched: 0,
             rtc_slow_hz: 136_000,
             mac: [0xd8, 0x3b, 0xda, 0x5e, 0x1a, 0x2b],
+            chip_temp_c: 25.0,
             rng: 0x9E37_79B9_7F4A_7C15,
             psram_mr: mr,
             seen: Default::default(),
@@ -372,6 +375,13 @@ impl S3Bus {
             _ if a == I2C0 + 0x04 => stored & !(1 << 5 | 1 << 11),
 
             _ if a == RNG => self.p.rand(),
+            // SENS SAR_TCTRL: the temperature sensor is always ready; TSENS_OUT for the -10..80 °C
+            // range (DAC offset 0), as on the C3: celsius = 0.4386 * out - 20.52, truncated to
+            // whole degrees, so round up to read chip_temp_c
+            0x6000_8850 => {
+                let out = ((self.p.chip_temp_c + 20.52) / 0.4386).ceil().clamp(0.0, 255.0) as u32;
+                stored & !0x1ff | 1 << 8 | out
+            }
             // SENS SAR_MEAS1/2_CTRL2: RTC ADC one-shot conversions finish instantly (mid-scale)
             0x6000_880C | 0x6000_8830 => stored & !0xffff | 1 << 16 | 0x800,
             // I2C_MST_ANA_CONF0: BBPLL calibration finishes instantly

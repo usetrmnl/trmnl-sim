@@ -879,11 +879,16 @@ impl Machine for Esp32s3 {
     fn set_wifi_available(&mut self, on: bool) {
         let now = self.bus.now_ns();
         self.hle.wifi.set_available(on, now);
+        self.bus.board.set_wifi_available(on);
     }
 
+    /// The S3's radio only sees the 2.4 GHz access points (channels 1-14); a radio on the
+    /// board (the X's modem) may see them all.
     fn set_wifi_networks(&mut self, networks: &[sim_api::WifiNetwork]) {
         let now = self.bus.now_ns();
-        self.hle.wifi.set_networks(networks, now);
+        let own: Vec<_> = networks.iter().filter(|n| n.channel <= 14).cloned().collect();
+        self.hle.wifi.set_networks(&own, now);
+        self.bus.board.set_wifi_networks(networks);
     }
 
     fn set_portal_client(&mut self, on: bool) {
@@ -987,6 +992,7 @@ impl Machine for Esp32s3 {
     }
 
     fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String> {
+        self.bus.p.chip_temp_c = faults.chip_temp_c.unwrap_or(25.0);
         crate::faults::apply(faults, &mut self.bus.flash, &mut self.hle.wifi, self.bus.board.as_mut())
     }
 

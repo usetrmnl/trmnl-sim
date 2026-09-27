@@ -508,8 +508,15 @@ class Simulator:
                     raise
                 time.sleep(0.5)
 
-    def portal_scan(self) -> dict:
-        code, data = self.portal_request("/scan")
+    def portal_scan(self, timeout_s: float = 30) -> dict:
+        """The setup page's network list; like the page, asks again while the device
+        answers 202 (its first scan is still running)."""
+        deadline = time.time() + timeout_s
+        while True:
+            code, data = self.portal_request("/scan")
+            if code != 202 or time.time() > deadline:
+                break
+            time.sleep(0.5)
         if code != 200:
             raise SimError(f"/scan -> {code}")
         return json.loads(data)

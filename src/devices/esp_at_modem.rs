@@ -417,6 +417,28 @@ impl EspAtModem {
         }
     }
 
+    /// Replace the access points in range. An association with an AP that is gone drops
+    /// (`WIFI DISCONNECT`), as when it goes out of range; ESP-AT reconnects on its own when
+    /// the last joined AP is back.
+    pub fn set_networks(&mut self, networks: Vec<ModemAp>) {
+        self.cfg.networks = networks;
+        if self.mode != Mode::At || !self.ready {
+            return;
+        }
+        match self.connected.clone() {
+            Some(ap) if !self.ap_in_range(&ap) => {
+                self.connected = None;
+                self.conn_gen += 1;
+                self.emit(self.now, b"WIFI DISCONNECT\r\n");
+            }
+            None if self.wifi_available && !matches!(self.op, Op::Busy) && self.reconnect.is_some() => {
+                let conn_gen = self.conn_gen;
+                self.schedule(self.now + self.timing.reconnect_ns, Ev::Reconnect { conn_gen });
+            }
+            _ => {}
+        }
+    }
+
     /// Fault: stop answering AT commands (everything the host sends is ignored; replies
     /// already on their way still arrive). The ROM loader is unaffected.
     /// Fault: answer ERROR to AT commands that start with one of `prefixes`.

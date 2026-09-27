@@ -3,7 +3,7 @@ readings go to the server in the SENSORS header of /api/display."""
 
 import unittest
 
-from support import ProvisionedDevice, close_fixtures, fixture
+from support import ProvisionedDevice, close_fixtures, fixture, needs
 
 from devices import ANY
 
@@ -31,17 +31,20 @@ class Sensors(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=15)
             return req.headers.get("SENSORS", "")
 
+    @needs("sensors")
     def test_scd41_reports_co2_temperature_and_humidity(self):
         header = self.sensor_header("scd41")
         self.assertIn("model=SCD41;kind=carbon_dioxide;value=812;unit=parts_per_million", header)
         self.assertIn("model=SCD41;kind=temperature;value=22.4", header)
         self.assertIn("model=SCD41;kind=humidity;value=44;unit=percent", header)
 
+    @needs("sensors")
     def test_aht20_reports_temperature_and_humidity(self):
         header = self.sensor_header("aht20")
         self.assertIn("make=ASAIR;model=AHT20;kind=temperature;value=22.4", header)
         self.assertIn("model=AHT20;kind=humidity;value=44;unit=percent", header)
 
+    @needs("sensors")
     def test_both_sensors(self):
         header = self.sensor_header("scd41", "aht20")
         self.assertIn("model=SCD41;kind=carbon_dioxide", header)

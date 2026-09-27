@@ -576,6 +576,11 @@ class MockTrmnl:
         self.files[path] = (content_type, data)
         return self.device_url + path
 
+    def image_path(self, name: str) -> str:
+        """The path /api/display sends the device to for image `name` (a PNG if one is
+        registered under that name, else the BMP)."""
+        return f"/images/{name}.{'png' if name + '.png' in self.images else 'bmp'}"
+
     def _respond(self, rec: RecordedRequest) -> tuple[int, str, bytes]:
         js = lambda obj, code=200: (code, "application/json", json.dumps(obj).encode())
         if rec.path == "/api/setup":
@@ -588,8 +593,7 @@ class MockTrmnl:
         if rec.path == "/api/display":
             d = dict(self.display_queue.pop(0) if self.display_queue else self.display)
             image = d.pop("image", "default")
-            ext = "png" if image + ".png" in self.images else "bmp"
-            resp = {"status": 0, "image_url": f"{self.device_url}/images/{image}.{ext}", "filename": self.filenames.get(image, image),
+            resp = {"status": 0, "image_url": self.device_url + self.image_path(image), "filename": self.filenames.get(image, image),
                     "refresh_rate": 900, "update_firmware": False, "firmware_url": None, "reset_firmware": False,
                     "special_function": "sleep"}
             resp.update(d)

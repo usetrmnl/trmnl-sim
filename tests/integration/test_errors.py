@@ -5,7 +5,7 @@ import json
 import time
 import unittest
 
-from support import GOLDEN, MockTrmnl, ProvisionedDevice, close_fixtures, fixture, sim
+from support import GOLDEN, MockTrmnl, ProvisionedDevice, close_fixtures, fixture, golden, sim, skip_if
 
 from devices import ANY
 
@@ -86,7 +86,7 @@ class ErrorScreens(Case):
                               "refresh_rate": 300}
         with self.boot_with_error() as s:
             # "WiFi connected, unable connect to API." and how to retry
-            s.assert_screen(GOLDEN / "api_unable_to_connect.png", region=(200, 320, 400, 64))
+            s.assert_screen(*golden("api_unable_to_connect.png", (200, 320, 400, 64)))
         log = dev().mock.wait_for_request("/api/log", timeout_s=10)
         self.assertIn("HTTPS_UNABLE_TO_CONNECT - Unable to create WiFiClient", log.body.decode())
 
@@ -117,7 +117,7 @@ class Retries(Case):
             dev().mock.clear_faults()
             n = len(dev().mock.requests)
             s.wake()
-            dev().mock.wait_for_request("/images/default.bmp", after=n, timeout_s=90)
+            dev().mock.wait_for_request(dev().mock.image_path("default"), after=n, timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=90)
 
 
@@ -201,6 +201,7 @@ class SetupErrors(unittest.TestCase):
                 self.assertEqual(st["boot_count"], 1)
 
 
+@skip_if("shipment", why="its factory flow flashes the modem and ships; it runs no QA test (main.cpp)")
 class FactoryQa(unittest.TestCase):
     """A fresh OG near a "TRMNL_QA" network runs the factory test: 7 s of CPU and radio load,
     comparing the chip temperature (and battery voltage) before and after."""
