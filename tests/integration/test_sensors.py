@@ -1,5 +1,6 @@
-"""Environment sensors on the TRMNL OG's I2C header (the simulator's --sensor): the
-readings go to the server in the SENSORS header of /api/display."""
+"""Environment sensors on the device's I2C bus (the TRMNL OG's I2C header; the simulator's
+--sensor): the readings go to the server in the SENSORS header of /api/display. Only boards
+with sensor pins in the firmware's device_list[] (Device.sensors) look for them."""
 
 import unittest
 

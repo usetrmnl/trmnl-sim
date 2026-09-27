@@ -20,6 +20,7 @@ const ESP_ERR_WIFI_NOT_INIT: u32 = 0x3000 + 1;
 const ESP_ERR_WIFI_NOT_STARTED: u32 = 0x3000 + 2;
 const ESP_ERR_WIFI_NOT_STOPPED: u32 = 0x3000 + 4;
 const ESP_ERR_WIFI_NOT_CONNECT: u32 = 0x3000 + 15;
+const ESP_ERR_WIFI_MODE: u32 = 0x3000 + 5;
 const ESP_ERR_INVALID_ARG: u32 = 0x102;
 
 /// Entry point of the HLE-driven guest task.
@@ -580,6 +581,10 @@ fn wifi_deinit(c: &mut HleCtx) -> Flow {
     w.connecting = false;
     w.connected = None;
     w.events.clear();
+    // like the real driver (wifi_init.c): the interfaces' receive callbacks go with their
+    // netifs, so a frame for the next soft-AP can't reach the old one's glue
+    w.rxcb = [0; 2];
+    w.rx.clear();
     Flow::Return(Some(ESP_OK))
 }
 
@@ -679,7 +684,9 @@ fn stop(c: &mut HleCtx) -> Flow {
             w.rx.retain(|(ifx, _)| *ifx != 1);
         }
         w.connecting = false;
-        w.events.retain(|e| e.id != EV_STA_CONNECTED && e.id != EV_AP_STACONNECTED);
+        // A connection attempt still under way ends here: its outcome (connected, or a
+        // failure's DISCONNECTED) never comes, or it would reach the netif freed after this.
+        w.events.retain(|e| !matches!(e.id, EV_STA_CONNECTED | EV_STA_DISCONNECTED | EV_AP_STACONNECTED));
     }
     let posted = !events.is_empty();
     post_then(c, events.into(), move |c| {
@@ -761,6 +768,9 @@ fn connect(c: &mut HleCtx) -> Flow {
     if !w.started {
         // like the real driver (initialized but stopped)
         return Flow::Return(Some(ESP_ERR_WIFI_NOT_STARTED));
+    }
+    if w.mode & 1 == 0 {
+        return Flow::Return(Some(ESP_ERR_WIFI_MODE));
     }
     if w.connected.is_none() && !w.connecting {
         let ssid = w.sta_ssid();

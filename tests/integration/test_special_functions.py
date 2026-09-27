@@ -1,14 +1,121 @@
-"""Special functions (TRMNL OG): the server assigns one in an /api/display answer, and a
+"""Special functions (on the device under test): the server assigns one in an /api/display answer, and a
 double click (or a 1-5 s press) of the button runs it on the next wake. Also the
 /api/display status codes and actions around it."""
 
 import unittest
 
-from support import ProvisionedDevice, big_number, close_fixtures, device_image, fixture, needs, slow
+from support import (DEVICES, ProvisionedDevice, big_number, close_fixtures, device_image, device_number, fixture, needs, slow)
 
 from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
+
+# Firmware bug on the SSD16xx boards: display_show_image() (display.cpp:1947) sends a 1-bit
+# BMP with bbep.writePlane(), which without a second plane writes only the new-image RAM
+# (0x24), and asks for a partial refresh, which drives only the pixels differing from the
+# "old" RAM (0x26); that holds an earlier picture (or its inverse after a fast refresh), so
+# the BMP comes out as a mix of the two. See test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh.
+SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) (display.cpp:1764) with the "
+                 "bb_epaper product number the panel was begun with, selecting a 2.9\" 128x296 panel: 1-bit PNGs "
+                 "never show (see test_byod_ssd.CrowPanel42)")
+# Firmware bug: classify_button_presses() (button.cpp:62-92) times a press from when it starts
+# reading the button, not from the wake. If the first click is still held then (the firmware
+# took longer to boot than usual) but released within 50 ms, it is NoAction and the second
+# click is never waited for.
+SLOW_BOOT_CLICK = ("button.cpp:84-92: a first click still held when classify_button_presses() starts reading (here "
+                   "~50 ms after the wake) but released within 50 ms counts as NoAction; the double click is lost")
+
+# The sleep special function keeps the screen only where it isn't a BMP (see
+# test_sleep_keeps_the_screen): BMPs aren't cached under their filename.
+BMP_NOT_CACHED = ("sleep: status=false/HTTPS_SUCCESS takes the cached-image path (bl.cpp:1478), but BMPs are only "
+                  "saved as /current.bmp: \"Cached image is empty or unreadable\", an error log and message")
+# Firmware bugs on the XIAO ESP32-C3: GPIO 9 can't wake a C3 from deep sleep; and bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
+                  "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
+                  "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
+# Firmware (bb_epaper) bug on the Waveshare 3.97": EP397_800x480 starts the RAM Y counter at 0
+# instead of 479, so every picture lands one row too high, its top row at the bottom (see
+# test_byod_ssd.Waveshare397); its BMPs also hit the SSD16xx partial refresh bug.
+WAVESHARE_ROW = ("bb_epaper EP397_800x480 init sets the RAM Y counter to 0 while counting down from 479: "
+                 "every screen is one row too high (see test_byod_ssd.Waveshare397)")
+# Firmware bug on the gen-2 BWRY: its env defines BOARD_TRMNL_GEN2 but not BOARD_TRMNL_4CLR, so
+# images take the 1-bit two-plane path the BWRY panel misreads (see test_og_gen2.OgGen2Bwry).
+GEN2_BWRY_IMAGES = ("trmnl_gen2_4clr lacks BOARD_TRMNL_4CLR, so display.cpp's 4-color image path isn't compiled: "
+                    "images come out half drawn in the wrong inks (see test_og_gen2.OgGen2Bwry)")
+KNOWN_FAILURES = {
+    "xteink_x4": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "CrowPanel42": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": CROWPANEL_PNG,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": CROWPANEL_PNG,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": CROWPANEL_PNG,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": CROWPANEL_PNG,
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_reTerminal_E1002": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_xiao_esp32s3": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit_3CLR": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit_6CLR": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_4inch26_DIY_Kit": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+        "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "seeed_reTerminal_E1001": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_sticky": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+        "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "seeed_xiao_esp32c3": {
+        "SpecialFunctions": XIAO_C3_BUTTON,
+        "Identify": XIAO_C3_BUTTON,
+        "Buttons": XIAO_C3_BUTTON,
+    },
+    "WAVESHARE_397": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": WAVESHARE_ROW,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": WAVESHARE_ROW,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": WAVESHARE_ROW,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": WAVESHARE_ROW,
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "trmnl_gen2_4clr": {
+        "SpecialFunctions.test_identify_shows_the_identify_image": GEN2_BWRY_IMAGES,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": GEN2_BWRY_IMAGES,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": GEN2_BWRY_IMAGES,
+        "ApiStatus.test_screen_wiper_clears_then_shows_the_next_item": GEN2_BWRY_IMAGES,
+    },
+    "m5_paper_mono": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_reTerminal_E1004": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+}
+for _d in DEVICES.values():
+    if _d.default_bmp:
+        KNOWN_FAILURES.setdefault(_d.env, {})["SpecialFunctions.test_sleep_keeps_the_screen"] = BMP_NOT_CACHED
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -31,7 +138,7 @@ class Case(unittest.TestCase):
         """Boot answers assign `function`; returns once the device sleeps with it saved."""
         dev().mock.display = {"image": image, "refresh_rate": 300, "special_function": function}
         dev().mock.wait_for_request("/api/display", timeout_s=90)
-        s.wait(state="deep_sleep", timeout_s=90)
+        s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
 
     def run_function(self, s, answer: dict, press_ms: int = 1500):
         """Press the button (a medium press counts as a double click) and answer the
@@ -44,15 +151,15 @@ class Case(unittest.TestCase):
         return req
 
 
-@needs("double_click")  # runs the special function
+@needs("double_click", "button")  # runs the special function
 class SpecialFunctions(Case):
     def test_identify_shows_the_identify_image(self):
-        seven = dev().mock.set_image("seven", big_number("7"))
+        seven_path, seven = device_image(dev().mock, "seven", device_number("7"))
         with dev().boot() as s:
             self.assign(s, "identify")
             self.run_function(s, {"image": "seven", "action": "identify", "refresh_rate": 300})
-            dev().mock.wait_for_request("/images/seven.bmp", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=90)
+            dev().mock.wait_for_request(seven_path, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertTrue(s.compare_screen(seven, tolerance=64, max_ratio=0)["match"])
 
     def test_sleep_uses_the_answered_refresh_rate(self):
@@ -62,15 +169,15 @@ class SpecialFunctions(Case):
             st = s.wait(state="deep_sleep", timeout_s=90)["status"]
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 1800, delta=30)
 
-    @unittest.expectedFailure
     def test_sleep_keeps_the_screen(self):
-        # Like send_to_me (see there): status=false/HTTPS_SUCCESS makes the OG look for the
-        # answer's image in a cache it doesn't have, then report and show an error.
+        # Where the server's default image is a BMP (see KNOWN_FAILURES), like send_to_me (see
+        # there): status=false/HTTPS_SUCCESS makes the OG look for the answer's image in a
+        # cache it doesn't have, then report and show an error.
         with dev().boot() as s:
             self.assign(s, "sleep")
             screen = s.screenshot()
             self.run_function(s, {"image": "default", "action": "sleep", "refresh_rate": 1800})
-            s.wait(state="deep_sleep", timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertEqual(dev().mock.count("/api/log"), 0)
             self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])
 
@@ -94,12 +201,12 @@ class SpecialFunctions(Case):
             s.wait(state="deep_sleep", timeout_s=120)
 
     def test_restart_playlist_shows_the_first_item(self):
-        one = dev().mock.set_image("one", big_number("1"))
+        one_path, one = device_image(dev().mock, "one", device_number("1"))
         with dev().boot() as s:
             self.assign(s, "restart_playlist")
             self.run_function(s, {"image": "one", "action": "restart_playlist", "refresh_rate": 300})
-            dev().mock.wait_for_request("/images/one.bmp", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=90)
+            dev().mock.wait_for_request(one_path, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertTrue(s.compare_screen(one, tolerance=64, max_ratio=0)["match"])
 
     @unittest.expectedFailure
@@ -108,22 +215,25 @@ class SpecialFunctions(Case):
         # downloadAndShow() takes the "image already cached" path with the answer's filename.
         # The OG doesn't cache BMP images under their filename (only PNG and JPEG), so with a
         # BMP it is always "empty or unreadable": the device submits an error log and draws an error message
-        # over the image it just showed.
-        two = dev().mock.set_image("two", big_number("2"))
+        # over the image it just showed. Where the image is a PNG, send_to_me doesn't get that
+        # far: it looks for /current.bmp or /current.png (bl.cpp:2073), but PNGs are only
+        # saved under their filename (bl.cpp:1616-1618 writes nothing but /current.bmp), so
+        # it finds "No current image!" and shows an error instead.
+        two_path, two = device_image(dev().mock, "two", device_number("2"))
         with dev().boot() as s:
             self.assign(s, "send_to_me", image="two")
             self.run_function(s, {"image": "two", "action": "send_to_me", "refresh_rate": 300})
-            s.wait(state="deep_sleep", timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertEqual(dev().mock.count("/api/log"), 0)
             self.assertTrue(s.compare_screen(two, tolerance=64, max_ratio=0)["match"])
 
     def test_guest_mode_shows_the_guest_image_for_its_refresh_rate(self):
-        three = dev().mock.set_image("three", big_number("3"))
+        three_path, three = device_image(dev().mock, "three", device_number("3"))
         with dev().boot() as s:
             self.assign(s, "guest_mode")
             self.run_function(s, {"image": "three", "action": "guest_mode", "refresh_rate": 1200})
-            dev().mock.wait_for_request("/images/three.bmp", timeout_s=90)
-            st = s.wait(state="deep_sleep", timeout_s=90)["status"]
+            dev().mock.wait_for_request(three_path, timeout_s=90)
+            st = s.wait(state="deep_sleep", display_idle=True, timeout_s=90)["status"]
             self.assertTrue(s.compare_screen(three, tolerance=64, max_ratio=0)["match"])
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 1200, delta=30)
 
@@ -141,7 +251,7 @@ class SpecialFunctions(Case):
             self.assertEqual(st["boot_count"], 1, "the device restarted (crashed)")
 
 
-@needs("double_click")  # runs the special function
+@needs("double_click", "button")  # runs the special function
 class Identify(Case):
     def test_identify_with_the_empty_state_image(self):
         with dev().boot() as s:
@@ -229,12 +339,12 @@ class ApiStatus(Case):
 
     @slow("the wiper runs 100 full refreshes; about 3.5 minutes on the TRMNL X")
     def test_screen_wiper_clears_then_shows_the_next_item(self):
-        path, four = device_image(dev().mock, "four", big_number("4"))
+        four_path, four = device_image(dev().mock, "four", device_number("4"))
         dev().mock.display_queue = [{"image": "default", "filename": "screen_wiper.png", "refresh_rate": 300}]
         dev().mock.display = {"image": "four", "refresh_rate": 300}
         with dev().boot() as s:
-            dev().mock.wait_for_request(path, timeout_s=600)
-            s.wait(state="deep_sleep", timeout_s=600)
+            dev().mock.wait_for_request(four_path, timeout_s=600)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=600)
             self.assertTrue(s.compare_screen(four, tolerance=64, max_ratio=0)["match"])
 
     @slow("the wiper runs 100 full refreshes; about 3.5 minutes on the TRMNL X")
@@ -245,6 +355,7 @@ class ApiStatus(Case):
             self.assertEqual(dev().mock.count("/api/display"), 2)
 
 
+@needs("button")
 class Buttons(Case):
     @needs("double_click")
     def test_double_click_runs_the_special_function(self):

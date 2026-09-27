@@ -367,7 +367,9 @@ impl Periph {
             0x40 => 7 << 9,
             // BLK1: MAC (byte order reversed like hardware)
             0x44 => u32::from_le_bytes([m[5], m[4], m[3], m[2]]),
-            0x48 => u16::from_le_bytes([m[1], m[0]]) as u32,
+            // ...and MAC_EXT (bits 48..63), which factories burn as FF FE: the chip has 802.15.4,
+            // so esp_efuse_mac_get_default() returns the EUI-64 OUI:FF:FE:NIC
+            0x48 => u16::from_le_bytes([m[1], m[0]]) as u32 | 0xFF << 16 | 0xFE << 24,
             // MAC_SYS2: wafer version 1.0 (production silicon)
             0x4C => 1 << 4 | 2 << 8,
             0x1D4 => 1, // EFUSE_STATUS: state = idle

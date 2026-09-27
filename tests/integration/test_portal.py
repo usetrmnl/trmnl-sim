@@ -1,4 +1,4 @@
-"""The captive portal of a TRMNL OG in setup mode: what phones and laptops probe, the
+"""The captive portal of the device under test in setup mode: what phones and laptops probe, the
 settings page, the advanced join options (static IP, WPA2 Enterprise, NTP server,
 hostname) and several saved networks."""
 
@@ -8,11 +8,36 @@ import time
 import unittest
 from urllib.parse import urlparse
 
-from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, needs, sim
+from support import MockTrmnl, ProvisionedDevice, close_fixtures, device_mock, fixture, needs, sim
 
 from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
+
+# Firmware bug on the gen-2 boards (ESP32-C5): ClockGen2::waitForSync() (clock_gen2.cpp:9-11)
+# waits for NTP with no timeout. With a static IP on a subnet that doesn't reach the
+# network (as here: 192.168.4.50 behind the simulated AP), it never gets the time and never
+# sleeps.
+C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the clock, with no timeout; "
+                  "unreachable NTP (this static IP's subnet) keeps the device awake forever")
+# Firmware bugs on the XIAO ESP32-C3: GPIO 9 can't wake a C3 from deep sleep; and bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
+                  "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
+                  "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
+KNOWN_FAILURES = {
+    **{env: {
+        "JoinOptions.test_static_ip": C5_NTP_FOREVER,
+        "JoinOptions.test_static_ip_with_defaults": C5_NTP_FOREVER,
+    } for env in ("trmnl_gen2", "trmnl_gen2_4clr")},
+    "seeed_xiao_esp32c3": {
+        # add_network() wakes it with a press
+        "SavedNetworks.test_second_network_is_used_when_the_first_is_gone": XIAO_C3_BUTTON,
+        "SavedNetworks.test_joining_a_saved_network_again_is_not_saved_twice": XIAO_C3_BUTTON,
+        "SavedNetworks.test_portal_lists_saved_networks_out_of_range": XIAO_C3_BUTTON,
+    },
+}
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -23,10 +48,10 @@ def tearDownModule():
     close_fixtures()
 
 
-def raw_get(s, path: str) -> tuple[int, dict, bytes]:
+def raw_get(s, path: str, timeout: float = 30) -> tuple[int, dict, bytes]:
     """GET from the portal without following redirects: (status, headers, body)."""
     url = urlparse(s.portal_url())
-    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=30)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=timeout)
     try:
         conn.request("GET", path)
         r = conn.getresponse()
@@ -83,7 +108,9 @@ class Probes(unittest.TestCase):
         self.assertIn("api_url", json.loads(body))
 
     def test_sensor_self_test(self):
-        code, _, body = raw_get(self.sim, "/run-test")
+        # two averages of 1000 chip temperature readings, 7 s apart: over 9 s of device time,
+        # more on the clock where the simulation runs slower than real time
+        code, _, body = raw_get(self.sim, "/run-test", timeout=120)
         self.assertEqual(code, 200)
         json.loads(body)
 
@@ -118,46 +145,46 @@ class JoinOptions(unittest.TestCase):
         self.assertEqual(code, 200, data)
 
     def test_static_ip(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="192.168.4.50", gateway="192.168.4.1",
                       subnet="255.255.255.0", dns1="1.1.1.1", dns2="8.8.8.8")
             s.wait_for_console(r"Static IP configured", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_static_ip_with_defaults(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="192.168.4.50")
             s.wait_for_console(r"Static IP configured", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_invalid_static_ip_falls_back_to_dhcp(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, useStaticIP=True, staticIP="not-an-ip")
             s.wait_for_console(r"Invalid static IP address", timeout_s=90)
             mock.wait_for_request("/api/setup", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_wpa2_enterprise(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True, identity="alice@example.com", username="alice")
             s.wait_for_console(r"WPA2 Enterprise", timeout_s=90)
             mock.wait_for_request("/api/setup", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=180)
 
     def test_wpa2_enterprise_identity_only(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True, identity="alice@example.com", pswd="")
             s.wait_for_console(r"WPA2 Enterprise", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_wpa2_enterprise_without_identity_fails(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, isEnterprise=True)
             s.wait_for_console(r"requires an identity", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=300)
 
     def test_ntp_server_and_hostname_are_saved(self):
-        with MockTrmnl() as mock, fresh() as s:
+        with device_mock() as mock, fresh() as s:
             self.join(s, mock, ntpServer1="time.example.com", hostname="kitchen-trmnl")
             s.wait_for_console(r"Saved NTP server: time.example.com", timeout_s=60)
             s.wait_for_console(r"Saved hostname: kitchen-trmnl", timeout_s=60)
@@ -185,7 +212,7 @@ class SavedNetworks(unittest.TestCase):
         s.wait(portal=True, timeout_s=120)
         return s
 
-    @needs("double_click")  # add_network: the add_wifi special function
+    @needs("double_click", "button")  # add_network: the add_wifi special function
     def test_second_network_is_used_when_the_first_is_gone(self):
         nets = [{"ssid": "TRMNL-Sim"}, {"ssid": "Office", "password": "office-pass", "rssi": -60}]
         with dev().boot_asleep(networks=nets) as s:
@@ -202,7 +229,7 @@ class SavedNetworks(unittest.TestCase):
             dev().mock.wait_for_request("/api/display", after=n, timeout_s=240)
             s.wait(state="deep_sleep", timeout_s=120)
 
-    @needs("double_click")  # add_network: the add_wifi special function
+    @needs("double_click", "button")  # add_network: the add_wifi special function
     def test_joining_a_saved_network_again_is_not_saved_twice(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
@@ -212,7 +239,7 @@ class SavedNetworks(unittest.TestCase):
             s.wait(console=r"Duplicate regular network found", since=c, timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
 
-    @needs("double_click")  # add_network: the add_wifi special function
+    @needs("double_click", "button")  # add_network: the add_wifi special function
     def test_portal_lists_saved_networks_out_of_range(self):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
