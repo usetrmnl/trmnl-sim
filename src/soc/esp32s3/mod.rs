@@ -886,6 +886,11 @@ impl Machine for Esp32s3 {
         self.hle.wifi.set_networks(networks, now);
     }
 
+    fn set_portal_client(&mut self, on: bool) {
+        let now = self.bus.now_ns();
+        self.hle.wifi.set_portal_client(on, now);
+    }
+
     fn net_status(&self) -> NetStatus {
         let w = &self.hle.wifi;
         NetStatus { connected: w.is_connected(), ip: w.ip().map(|i| i.to_string()), portal_url: w.portal_url() }

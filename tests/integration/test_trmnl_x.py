@@ -215,6 +215,46 @@ class TouchAndDock(ProvisionedCase):
         self.assertEqual((h["Battery-Current"], h["Battery-Temp"]), ("-50", "25.00"))  # discharging
 
 
+class PortalTimeout(unittest.TestCase):
+    """Nobody joins the setup portal: after 15 minutes the X goes back to shipment mode."""
+
+    def time_out(self, s):
+        s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=30)
+        s.dock(True)
+        s.wait(portal=True, timeout_s=30)
+        s.dock(False)
+        s.set_portal_client(False)  # so turbo can run to the timeout
+        # Serial isn't running when enter_shipment_sleep() announces itself on a production
+        # build, so go by the clock: the portal is gone once 15 minutes have passed.
+        t0 = s.status()["sim_time_s"]
+        deadline = time.time() + 60
+        while (st := s.status())["sim_time_s"] < t0 + 15 * 60 + 5:
+            self.assertLess(time.time(), deadline, "the portal did not time out")
+            time.sleep(0.5)
+        self.assertIsNone(st["portal_url"])
+        return st["console_total"]
+
+    def test_unattended_portal_goes_back_to_shipment_mode(self):
+        with shipped().boot() as s:
+            c = self.time_out(s)
+            s.dock(True)  # the charger ends shipment mode
+            s.wait(console=r"CHARGER DETECTED - Exiting shipment mode", since=c, timeout_s=30)
+
+    @unittest.expectedFailure
+    def test_shipment_mode_after_the_timeout_stays_asleep(self):
+        # The setup screen (WIFI_CONNECT) ends with display_sleep(1000), which arms a 1 s
+        # light-sleep timer that is never disarmed. enter_shipment_sleep() only adds the
+        # charger's GPIO wakeup, so the device wakes about every 1.2 s ("Unexpected wakeup
+        # cause: 4") instead of sleeping until it is docked, draining the battery in the box.
+        with shipped().boot() as s:
+            c = self.time_out(s)
+            t0 = s.status()["sim_time_s"]
+            while s.status()["sim_time_s"] < t0 + 10:
+                time.sleep(0.2)
+            wakes = [line for line in s.console(c) if "WAKEUP from light sleep" in line]
+            self.assertEqual(wakes, [])
+
+
 class Onboarding(unittest.TestCase):
     def test_portal_rescans_both_radios_and_joins_the_chosen_band(self):
         with MockTrmnl() as mock, shipped().boot() as s:

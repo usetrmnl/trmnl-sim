@@ -184,9 +184,14 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
         }
         (Method::Post, "/wifi") => {
             let b = body_json(body)?;
-            let (on, nets) = (b["available"].as_bool(), b.get("networks"));
-            if on.is_none() && nets.is_none() {
-                return Err("need {\"available\": bool} and/or {\"networks\": [...]}".into());
+            let (on, nets, client) = (b["available"].as_bool(), b.get("networks"), b["portal_client"].as_bool());
+            if on.is_none() && nets.is_none() && client.is_none() {
+                return Err(
+                    "need {\"available\": bool}, {\"networks\": [...]} and/or {\"portal_client\": bool}".into()
+                );
+            }
+            if let Some(client) = client {
+                h.send(Command::SetPortalClient(client));
             }
             if let Some(nets) = nets {
                 h.send(Command::SetWifiNetworks(wifi::parse_networks(nets)?));

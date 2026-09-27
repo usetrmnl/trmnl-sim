@@ -31,6 +31,7 @@ const EV_STA_DISCONNECTED: u32 = 5;
 const EV_AP_START: u32 = 12;
 const EV_AP_STOP: u32 = 13;
 const EV_AP_STACONNECTED: u32 = 14;
+const EV_AP_STADISCONNECTED: u32 = 15;
 
 // wifi_err_reason_t
 const REASON_ASSOC_LEAVE: u8 = 8;
@@ -106,6 +107,9 @@ pub struct WifiState {
     net: VirtualNet,
     ap_client: Option<ApClient>,
     ap_client_joined: bool,
+    /// The host "browser client" stays off the soft-AP (`set_portal_client(false)`), so an
+    /// unattended portal can run ahead of wall-clock time in turbo mode.
+    portal_client_away: bool,
     scan_results: Vec<SimAp>,
     pub stats: WifiStats,
 }
@@ -149,6 +153,7 @@ impl WifiState {
             net: VirtualNet::new(NetConfig::default()),
             ap_client: None,
             ap_client_joined: false,
+            portal_client_away: false,
             scan_results: Vec::new(),
             stats: WifiStats::default(),
         }
@@ -157,9 +162,10 @@ impl WifiState {
     /// The chip reset: the driver state is gone (the "air" is not).
     pub fn reset(&mut self) {
         let keep = (self.available, self.networks.clone(), self.base_mac, self.portal_forward, self.net_config.clone());
-        let (abi, faults) = (self.abi, self.net_faults.clone());
+        let (abi, faults, away) = (self.abi, self.net_faults.clone(), self.portal_client_away);
         *self = WifiState::new(keep.2);
         self.set_abi(abi);
+        self.portal_client_away = away;
         self.available = keep.0;
         self.networks = keep.1;
         self.portal_forward = keep.3;
@@ -187,7 +193,20 @@ impl WifiState {
     /// Guest time must track wall time: host-side network activity is in flight,
     /// or the setup portal is up (the device is waiting for a person/browser).
     pub fn net_busy(&self) -> bool {
-        (self.connected.is_some() && self.net.busy()) || self.ap_client.is_some()
+        (self.connected.is_some() && self.net.busy()) || (self.ap_client.is_some() && !self.portal_client_away)
+    }
+
+    /// The host's portal client joins the soft-AP whenever it runs (true, the default) or
+    /// stays away (false; leaving now if it had joined).
+    pub fn set_portal_client(&mut self, on: bool, now: u64) {
+        self.portal_client_away = !on;
+        if !on && self.ap_client_joined {
+            self.ap_client_joined = false;
+            let mut d = vec![0u8; 12]; // mac, aid (IDF 5: is_mesh_child, reason)
+            d[..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x99]);
+            d[6] = 1;
+            self.post(now + 100 * MS, EV_AP_STADISCONNECTED, d);
+        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -200,7 +219,7 @@ impl WifiState {
 
     /// Host URL of the captive portal, once the host "client" has joined the AP and has a lease.
     pub fn portal_url(&self) -> Option<String> {
-        self.ap_client.as_ref().filter(|c| c.client_ip().is_some()).map(|c| {
+        self.ap_client.as_ref().filter(|c| !self.portal_client_away && c.client_ip().is_some()).map(|c| {
             let addr = c.listen_addrs().first().copied().unwrap_or(self.portal_forward);
             format!("http://{addr}/")
         })
@@ -791,7 +810,7 @@ fn task_loop(c: &mut HleCtx) -> Flow {
 
     // The host "browser client" joins the soft-AP shortly after it starts.
     let w = &mut c.state.wifi;
-    if w.ap_client.is_some() && !w.ap_client_joined && w.mode & 2 != 0 {
+    if w.ap_client.is_some() && !w.ap_client_joined && !w.portal_client_away && w.mode & 2 != 0 {
         w.ap_client_joined = true;
         let mut d = vec![0u8; 8];
         d[..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x99]);
@@ -832,6 +851,7 @@ fn post_event(c: &mut HleCtx, ev: PendingEvent) -> Flow {
         EV_AP_START => "AP_START",
         EV_AP_STOP => "AP_STOP",
         EV_AP_STACONNECTED => "AP_STACONNECTED",
+        EV_AP_STADISCONNECTED => "AP_STADISCONNECTED",
         _ => "?",
     };
     c.env.console(&format!("wifi: event WIFI_EVENT_{name}"));

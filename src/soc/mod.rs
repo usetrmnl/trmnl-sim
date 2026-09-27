@@ -54,6 +54,8 @@ pub trait Machine: Send {
     fn set_wifi_available(&mut self, on: bool);
     /// Replace the access points in range of the SoC's own radio.
     fn set_wifi_networks(&mut self, networks: &[sim_api::WifiNetwork]);
+    /// Whether the host's portal client joins the soft-AP (`Command::SetPortalClient`).
+    fn set_portal_client(&mut self, on: bool);
     fn net_status(&self) -> NetStatus;
     /// Something outside the simulation (host network) is being waited on, so
     /// virtual time must not run ahead of wall time even in turbo mode.

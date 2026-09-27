@@ -711,6 +711,11 @@ impl Machine for Esp32c3 {
         self.hle.wifi.set_networks(networks, now);
     }
 
+    fn set_portal_client(&mut self, on: bool) {
+        let now = self.bus.now_ns();
+        self.hle.wifi.set_portal_client(on, now);
+    }
+
     fn realtime_required(&self) -> bool {
         self.hle.wifi.net_busy()
     }

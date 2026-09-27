@@ -502,6 +502,11 @@ pub enum Command {
     /// Replace the access points in range (the defaults: "TRMNL-Sim", any password,
     /// -54 dBm, and "Neighbors WiFi", password "hunter2hunter2", -81 dBm).
     SetWifiNetworks(Vec<WifiNetwork>),
+    /// Whether the host's portal client joins the device's setup access point (true, the
+    /// default). While it is joined the simulation keeps to wall-clock time, even in turbo
+    /// mode, so a person can use the portal; without it an unattended portal (and its
+    /// 15-minute timeout) runs ahead.
+    SetPortalClient(bool),
     /// Run as fast as possible (true) or pace to wall-clock time (false).
     SetTurbo(bool),
     Pause(bool),

@@ -331,6 +331,14 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                     let names: Vec<&str> = nets.iter().map(|n| n.ssid.as_str()).collect();
                     ports.console.lock().push_sim(&format!("WiFi networks in range: {}", names.join(", ")));
                 }
+                Command::SetPortalClient(on) => {
+                    m.set_portal_client(on);
+                    ports.console.lock().push_sim(if on {
+                        "portal client joins the setup access point"
+                    } else {
+                        "portal client stays off the setup access point"
+                    });
+                }
                 Command::SetTurbo(t) => {
                     turbo = t;
                     ports.status.lock().turbo = t;

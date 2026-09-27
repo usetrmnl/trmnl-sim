@@ -229,7 +229,10 @@ impl Fake {
                 self.combo_logged = false;
                 self.update_touching();
             }
-            Command::SetRefreshFlashing(_) | Command::Gesture(_) | Command::SetWifiNetworks(_) => {}
+            Command::SetRefreshFlashing(_)
+            | Command::Gesture(_)
+            | Command::SetWifiNetworks(_)
+            | Command::SetPortalClient(_) => {}
             Command::PressRepeat { ms: dur, .. } => {
                 self.press_until = Some(self.t + ms(dur));
                 self.p.status.lock().button_down = true;

@@ -311,6 +311,12 @@ class Simulator:
         (None: any), "rssi", "channel", "open", "internet" (see --wifi-networks)."""
         self._post("/wifi", {"networks": networks})
 
+    def set_portal_client(self, on: bool) -> None:
+        """Whether the host's portal client joins the setup access point (the default). It
+        keeps the simulation at wall-clock pace, even in turbo mode; without it an
+        unattended portal runs ahead (e.g. to its 15-minute timeout)."""
+        self._post("/wifi", {"portal_client": on})
+
     def set_battery(self, mv: int) -> None:
         self._post("/battery", {"mv": mv})
 

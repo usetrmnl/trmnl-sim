@@ -442,7 +442,7 @@ Useful pieces:
 | `POST /gesture {"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | TRMNL X slide along the touch bar (reported in slide mode only) |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
-| `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points in range (as `--wifi-networks`) |
+| `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points in range (as `--wifi-networks`); `{"portal_client": false}` keeps the host's portal client off the setup access point, so an unattended portal runs ahead of wall-clock time in turbo mode (e.g. to its 15-minute timeout) |
 | `POST /battery {"mv": N}` | |
 | `POST /turbo {"on": bool}`, `/pause {"on": bool}` | |
 | `POST /debug` | dump CPU state (registers, backtrace, current FreeRTOS task) and board diagnostics to the console |

@@ -5,7 +5,7 @@ import json
 import time
 import unittest
 
-from support import MockTrmnl, ProvisionedDevice, close_fixtures, fixture, sim
+from support import GOLDEN, MockTrmnl, ProvisionedDevice, close_fixtures, fixture, sim
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -73,6 +73,18 @@ class ErrorScreens(Case):
         dev().mock.set_fault("/images/*", close=True)
         with self.boot_with_error():
             pass
+
+    def test_image_url_that_can_t_be_fetched(self):
+        # HTTPClient refuses the URL, so the request never starts: HTTPS_UNABLE_TO_CONNECT.
+        # The screen blames the API although it answered (only HTTP errors from the image
+        # host get the "image download failed" screen).
+        dev().mock.display = {"image_url": "ftp://10.0.2.2/image.bmp", "filename": "plugin-bbbbbb-1",
+                              "refresh_rate": 300}
+        with self.boot_with_error() as s:
+            # "WiFi connected, unable connect to API." and how to retry
+            s.assert_screen(GOLDEN / "api_unable_to_connect.png", region=(200, 320, 400, 64))
+        log = dev().mock.wait_for_request("/api/log", timeout_s=10)
+        self.assertIn("HTTPS_UNABLE_TO_CONNECT - Unable to create WiFiClient", log.body.decode())
 
     def test_image_too_large(self):
         dev().mock.set_file("/huge.bmp", "image/bmp", bytes(100_000))

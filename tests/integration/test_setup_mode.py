@@ -37,6 +37,20 @@ class FreshDevice(unittest.TestCase):
         self.assertIsNotNone(st["portal_url"])
 
 
+class PortalTimeout(unittest.TestCase):
+    def test_unattended_portal_times_out_and_sleeps(self):
+        with sim(erase=True, extra_args=("--offline",)) as s:
+            s.wait(portal=True, timeout_s=90)
+            s.set_portal_client(False)  # nobody joins, so turbo can run to the timeout
+            st = s.wait(state="deep_sleep", timeout_s=40)["status"]
+            self.assertGreaterEqual(st["sim_time_s"], 15 * 60)
+            # "Wifi Captive Portal timed out" / "Press button to try again"
+            s.assert_screen(GOLDEN / "portal_timed_out.png", region=(260, 320, 280, 48))
+            s.set_portal_client(True)
+            s.press(200)
+            s.wait(portal=True, timeout_s=60)
+
+
 class Onboarding(unittest.TestCase):
     def test_onboarding_registers_with_server(self):
         with MockTrmnl() as mock, sim(erase=True, extra_args=("--offline",)) as s:
