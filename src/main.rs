@@ -20,7 +20,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use devices::spi_flash::SpiFlash;
-use devices::uc8179::Uc8179;
 
 /// Run TRMNL firmware builds in a simulated device.
 #[derive(Parser)]
@@ -118,9 +117,13 @@ struct Cli {
     /// Its flash replaces the --flash image.
     #[arg(long, value_name = "FILE")]
     restore: Option<PathBuf>,
-    /// Environment sensor on the TRMNL OG's I2C header (repeatable): scd41, aht20.
+    /// Environment sensor on the I2C header of an SPI-panel board (repeatable): scd41, aht20.
     #[arg(long, value_enum)]
-    sensor: Vec<board::trmnl_og::Sensor>,
+    sensor: Vec<board::spi_epd::Sensor>,
+    /// The board, as the firmware's DEVICE_MODEL (e.g. og, xteink_x4, reterminal_e1001; x for
+    /// the TRMNL X) or PlatformIO environment. Default: from the build directory's name.
+    #[arg(long)]
+    board: Option<String>,
     /// Access points in range of the device's own radio, replacing the defaults: a JSON
     /// array, e.g. '[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'
     /// (keys: ssid, password, rssi, channel, open, internet).
@@ -195,20 +198,59 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let mut panel = mock_trmnl::Panel::Og;
-    // ESP32-S3 builds with bb_epaper drive an SPI panel: the reTerminal E1002 (Spectra 6).
-    let spi_panel = fw.symbols.has_prefix("_Z16bbepSetPanelType");
-    let (mut machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
-        firmware::CHIP_ESP32S3 if spi_panel => {
-            if !fw.symbols.has_prefix("_Z13png_draw_6clr") {
-                anyhow::bail!(
-                    "unsupported ESP32-S3 board: only the reTerminal E1002 (Spectra 6) has an SPI panel model"
-                );
+    // Which board: --board, else the PlatformIO environment the build directory is named
+    // after, else what the firmware links (OG / BWRY / reTerminal E1002 / X).
+    let env = std::fs::canonicalize(&cli.build_dir)
+        .ok()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let spi_spec = match &cli.board {
+        Some(b) if b == "x" => None,
+        Some(b) => Some(board::spi_epd::find(b).with_context(|| {
+            let names: Vec<&str> = board::spi_epd::SPECS.iter().map(|s| s.model).collect();
+            format!("unknown board {b:?} (known: x, {})", names.join(", "))
+        })?),
+        None => board::spi_epd::find(&env).or_else(|| match fw.chip_id {
+            firmware::CHIP_ESP32C3 if fw.symbols.has_prefix("_Z13png_draw_4clr") => board::spi_epd::find("og_4clr"),
+            firmware::CHIP_ESP32C3 => board::spi_epd::find("og"),
+            // ESP32-S3 builds with bb_epaper drive an SPI panel, the others FastEPD (the X).
+            _ if fw.symbols.has_prefix("_Z16bbepSetPanelType") => {
+                fw.symbols.has_prefix("_Z13png_draw_6clr").then(|| board::spi_epd::find("reterminal_e1002")).flatten()
             }
-            let epd = Uc8179::new_color(cli.panel_rev, devices::uc8179::ColorPanel::Spectra6);
-            panel = mock_trmnl::Panel::Spectra6;
-            let frame = epd.frame.clone();
-            let board = Box::new(board::trmnl_og::TrmnlOg::reterminal_e1002(epd));
+            _ => None,
+        }),
+    };
+    if spi_spec.is_none() && fw.chip_id == firmware::CHIP_ESP32S3 && fw.symbols.has_prefix("_Z16bbepSetPanelType") {
+        anyhow::bail!("unknown ESP32-S3 board with an SPI panel (build directory {env:?}): pass --board");
+    }
+    let (board, frame, panel): (Box<dyn board::Board>, sim_api::SharedFrame, mock_trmnl::Panel) = match spi_spec {
+        Some(spec) => {
+            let chip = match spec.chip {
+                board::spi_epd::Chip::Esp32c3 => firmware::CHIP_ESP32C3,
+                board::spi_epd::Chip::Esp32s3 => firmware::CHIP_ESP32S3,
+            };
+            if chip != fw.chip_id {
+                anyhow::bail!("the {} is a {:?} board, but the firmware is for another chip", spec.name, spec.chip);
+            }
+            let b = board::spi_epd::SpiEpdBoard::new(spec, cli.panel_rev, &cli.sensor);
+            let frame = b.panel.frame();
+            (Box::new(b), frame, spec.panel.mock_panel())
+        }
+        None => {
+            if fw.chip_id != firmware::CHIP_ESP32S3 {
+                anyhow::bail!("the TRMNL X is an ESP32-S3 board, but the firmware is for another chip");
+            }
+            let modem_mac = cli.mac.map(|mut m| {
+                m[5] = m[5].wrapping_add(2);
+                m
+            });
+            let b = board::trmnl_x::TrmnlX::new(modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]), &net);
+            let frame = b.panel.frame();
+            (Box::new(b), frame, mock_trmnl::Panel::X)
+        }
+    };
+    let mut machine: Box<dyn soc::Machine> = match fw.chip_id {
+        firmware::CHIP_ESP32S3 => {
             let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
@@ -218,36 +260,9 @@ fn main() -> Result<()> {
             if let Some(mode) = memcheck_mode {
                 m.enable_memcheck(mode, cli.memcheck_suppress.clone());
             }
-            (Box::new(m), frame)
-        }
-        firmware::CHIP_ESP32S3 => {
-            let modem_mac = cli.mac.map(|mut m| {
-                m[5] = m[5].wrapping_add(2);
-                m
-            });
-            let board = board::trmnl_x::TrmnlX::new(modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]), &net);
-            let frame = board.panel.frame();
-            panel = mock_trmnl::Panel::X;
-            let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, Box::new(board), apps, &cli.trace)?;
-            if let Some(mac) = cli.mac {
-                m.set_mac(mac);
-            }
-            m.set_portal_port(cli.portal_port);
-            m.set_net_config(net);
-            if let Some(mode) = memcheck_mode {
-                m.enable_memcheck(mode, cli.memcheck_suppress.clone());
-            }
-            (Box::new(m), frame)
+            Box::new(m)
         }
         _ => {
-            // trmnl_4clr (TRMNL BWRY) is the OG board with a 4-color panel.
-            let bwry = fw.symbols.has_prefix("_Z13png_draw_4clr");
-            let epd = if bwry { Uc8179::new_bwry(cli.panel_rev) } else { Uc8179::new(cli.panel_rev) };
-            if bwry {
-                panel = mock_trmnl::Panel::Bwry;
-            }
-            let frame = epd.frame.clone();
-            let board = Box::new(board::trmnl_og::TrmnlOg::new(epd, &cli.sensor));
             let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
@@ -257,7 +272,7 @@ fn main() -> Result<()> {
             if let Some(mode) = memcheck_mode {
                 m.enable_memcheck(mode, cli.memcheck_suppress.clone());
             }
-            (Box::new(m), frame)
+            Box::new(m)
         }
     };
 

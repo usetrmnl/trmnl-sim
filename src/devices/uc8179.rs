@@ -15,9 +15,9 @@ use sim_api::{Frame, SharedFrame};
 
 use crate::savepoint::{StateReader, StateWriter, read_f32s_into};
 
+/// The TRMNL OG's 7.5" panel.
 pub const WIDTH: usize = 800;
 pub const HEIGHT: usize = 480;
-const STRIDE: usize = WIDTH / 8;
 const MS: u64 = 1_000_000;
 
 #[derive(Clone, Copy)]
@@ -57,15 +57,15 @@ impl ColorPanel {
         }
     }
 
-    fn ram_len(self) -> usize {
-        WIDTH * HEIGHT * self.bits() / 8
+    fn ram_len(self, pixels: usize) -> usize {
+        pixels * self.bits() / 8
     }
 
     /// Image RAM filled with white.
-    fn white_ram(self) -> Vec<u8> {
+    fn white_ram(self, pixels: usize) -> Vec<u8> {
         let per_byte = 8 / self.bits();
         let byte = (0..per_byte).fold(0u8, |b, _| b << self.bits() | BWRY_WHITE);
-        vec![byte; self.ram_len()]
+        vec![byte; self.ram_len(pixels)]
     }
 
     /// Pixel `i`'s code in image RAM (leftmost pixel in the high bits).
@@ -157,6 +157,9 @@ struct Refresh {
 }
 
 pub struct Uc8179 {
+    /// Panel size in pixels (the source x gate lines).
+    w: usize,
+    h: usize,
     // Serial interface
     cs: bool,
     dc: bool,
@@ -205,8 +208,15 @@ pub struct Uc8179 {
 
 impl Uc8179 {
     pub fn new(rev: u32) -> Self {
-        let frame = Frame::new(WIDTH, HEIGHT);
+        Self::with_size(rev, WIDTH, HEIGHT)
+    }
+
+    /// A black-and-white panel of another size (`w` a multiple of 8).
+    pub fn with_size(rev: u32, w: usize, h: usize) -> Self {
+        let frame = Frame::new(w, h);
         Uc8179 {
+            w,
+            h,
             cs: true,
             dc: true,
             sck: false,
@@ -219,14 +229,14 @@ impl Uc8179 {
             cmd: 0,
             args: Vec::new(),
             data_ptr: 0,
-            old: vec![0; STRIDE * HEIGHT],
-            new: vec![0; STRIDE * HEIGHT],
+            old: vec![0; w / 8 * h],
+            new: vec![0; w / 8 * h],
             luts: [[0; 42]; 6],
             psr: 0x1f,
             cdi: [0x11, 0x07],
             pll: 0x06,
             partial_mode: false,
-            window: (0, 0, WIDTH, HEIGHT),
+            window: (0, 0, w, h),
             cascade: 0,
             forced_temp: 0,
             powered: false,
@@ -235,7 +245,7 @@ impl Uc8179 {
             refresh: None,
             rev,
             temperature_c: 22,
-            state: vec![0.0; WIDTH * HEIGHT],
+            state: vec![0.0; w * h],
             color: None,
             color_refresh: None,
             flashing: true,
@@ -256,9 +266,14 @@ impl Uc8179 {
 
     /// A color panel variant.
     pub fn new_color(rev: u32, kind: ColorPanel) -> Self {
-        let mut p = Self::new(rev);
-        p.color = Some((kind, kind.white_ram()));
-        p.frame.lock().rgb = Some(vec![255; WIDTH * HEIGHT * 3]);
+        Self::new_color_sized(rev, kind, WIDTH, HEIGHT)
+    }
+
+    /// A color panel of another size.
+    pub fn new_color_sized(rev: u32, kind: ColorPanel, w: usize, h: usize) -> Self {
+        let mut p = Self::with_size(rev, w, h);
+        p.color = Some((kind, kind.white_ram(w * h)));
+        p.frame.lock().rgb = Some(vec![255; w * h * 3]);
         p
     }
 
@@ -303,8 +318,8 @@ impl Uc8179 {
     /// power-on, showing the saved image.
     pub fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
         let mut fresh = match self.color_panel() {
-            Some(kind) => Self::new_color(self.rev, kind),
-            None => Self::new(self.rev),
+            Some(kind) => Self::new_color_sized(self.rev, kind, self.w, self.h),
+            None => Self::with_size(self.rev, self.w, self.h),
         };
         fresh.frame = self.frame.clone();
         fresh.flashing = self.flashing;
@@ -373,7 +388,7 @@ impl Uc8179 {
         self.cdi = [0x11, 0x07];
         self.pll = 0x06;
         self.partial_mode = false;
-        self.window = (0, 0, WIDTH, HEIGHT);
+        self.window = (0, 0, self.w, self.h);
         self.cascade = 0;
         self.forced_temp = 0;
         self.powered = false;
@@ -557,7 +572,8 @@ impl Uc8179 {
                 let he = ((a[2] as usize) << 8 | a[3] as usize) | 7;
                 let vs = (a[4] as usize) << 8 | a[5] as usize;
                 let ve = (a[6] as usize) << 8 | a[7] as usize;
-                self.window = (hs.min(WIDTH), vs.min(HEIGHT), (he + 1).min(WIDTH), (ve + 1).min(HEIGHT));
+                let (w, h) = (self.w, self.h);
+                self.window = (hs.min(w), vs.min(h), (he + 1).min(w), (ve + 1).min(h));
             }
             0xe0 => self.cascade = a[0],
             0xe5 => self.forced_temp = a[0],
@@ -574,7 +590,7 @@ impl Uc8179 {
             self.data_ptr += 1;
             return;
         }
-        let (x0, y0, x1, y1) = if self.partial_mode { self.window } else { (0, 0, WIDTH, HEIGHT) };
+        let (x0, y0, x1, y1) = if self.partial_mode { self.window } else { (0, 0, self.w, self.h) };
         let row_bytes = (x1 - x0) / 8;
         if row_bytes == 0 {
             return;
@@ -585,7 +601,7 @@ impl Uc8179 {
         if y0 + row >= y1 {
             return;
         }
-        let idx = (y0 + row) * STRIDE + x0 / 8 + col;
+        let idx = (y0 + row) * (self.w / 8) + x0 / 8 + col;
         if self.cmd == 0x10 {
             self.old[idx] = b;
         } else {
@@ -596,12 +612,12 @@ impl Uc8179 {
     // ---- refresh simulation --------------------------------------------------------------
 
     /// Is the pixel "black" in the given plane? Polarity follows CDI.DDX[0].
-    fn bit(plane: &[u8], x: usize, y: usize) -> bool {
-        plane[y * STRIDE + x / 8] & (0x80 >> (x & 7)) != 0
+    fn bit(&self, plane: &[u8], x: usize, y: usize) -> bool {
+        plane[y * (self.w / 8) + x / 8] & (0x80 >> (x & 7)) != 0
     }
 
     fn start_refresh(&mut self, now: u64) {
-        let region = if self.partial_mode { self.window } else { (0, 0, WIDTH, HEIGHT) };
+        let region = if self.partial_mode { self.window } else { (0, 0, self.w, self.h) };
         let use_reg_lut = self.psr & 0x20 != 0;
         let invert = self.cdi[0] & 1 != 0; // DDX[0]: 1 => data bit 1 means white
         let frame_hz = match self.pll & 0x3f {
@@ -660,10 +676,10 @@ impl Uc8179 {
         let mut start_state = Vec::with_capacity(sel.capacity());
         for y in y0..y1 {
             for x in x0..x1 {
-                let o = Self::bit(&self.old, x, y) as u8;
-                let n = Self::bit(&self.new, x, y) as u8;
+                let o = self.bit(&self.old, x, y) as u8;
+                let n = self.bit(&self.new, x, y) as u8;
                 sel.push(o << 1 | n);
-                start_state.push(self.state[y * WIDTH + x]);
+                start_state.push(self.state[y * self.w + x]);
             }
         }
         self.busy_until = now + total_frames as u64 * frame_ns + 5 * MS;
@@ -691,8 +707,9 @@ impl Uc8179 {
         let Some((kind, ram)) = &self.color else { return };
         let mut frame = self.frame.lock();
         let frame = &mut *frame;
-        let rgb = frame.rgb.get_or_insert_with(|| vec![255; WIDTH * HEIGHT * 3]);
-        for i in 0..WIDTH * HEIGHT {
+        let n = self.w * self.h;
+        let rgb = frame.rgb.get_or_insert_with(|| vec![255; n * 3]);
+        for i in 0..n {
             let c = kind.rgb(solid.unwrap_or_else(|| kind.code(ram, i)));
             rgb[i * 3..i * 3 + 3].copy_from_slice(&c);
             let luma = (c[0] as u32 * 30 + c[1] as u32 * 59 + c[2] as u32 * 11) / 100;
@@ -783,11 +800,12 @@ impl Uc8179 {
         r.frames_done = target;
         let (x0, y0, x1, _) = r.region;
         let w = x1 - x0;
+        let stride = self.w;
         let mut frame = self.frame.lock();
         for (i, (&sel, s)) in r.sel.iter().zip(r.start_state.iter_mut()).enumerate() {
             let (a, b) = resp[sel as usize];
             *s = a * *s + b;
-            let k = (y0 + i / w) * WIDTH + x0 + i % w;
+            let k = (y0 + i / w) * stride + x0 + i % w;
             self.state[k] = *s;
             frame.pixels[k] = (optical(*s) * 255.0).round() as u8;
         }
@@ -796,6 +814,48 @@ impl Uc8179 {
         if target >= r.total_frames {
             self.refresh = None;
         }
+    }
+}
+
+impl crate::devices::epd::SpiEpd for Uc8179 {
+    fn set_pins(&mut self, now: u64, cs: bool, dc: bool, sck: bool, mosi: bool, rst: bool) {
+        Uc8179::set_pins(self, now, cs, dc, sck, mosi, rst);
+    }
+    fn spi_bytes(&mut self, now: u64, data: &[u8]) {
+        Uc8179::spi_bytes(self, now, data);
+    }
+    fn mosi_out(&self) -> Option<bool> {
+        self.mosi_out
+    }
+    fn busy(&self, now: u64) -> bool {
+        !self.busy_n(now)
+    }
+    fn next_event(&self, now: u64) -> Option<u64> {
+        Uc8179::next_event(self, now)
+    }
+    fn update(&mut self, now: u64) {
+        Uc8179::update(self, now);
+    }
+    fn frame(&self) -> SharedFrame {
+        self.frame.clone()
+    }
+    fn refresh_count(&self) -> u64 {
+        self.refresh_count
+    }
+    fn is_color(&self) -> bool {
+        self.color.is_some()
+    }
+    fn set_flashing(&mut self, on: bool) {
+        self.flashing = on;
+    }
+    fn set_busy_stuck(&mut self, stuck: bool) {
+        self.busy_stuck = stuck;
+    }
+    fn save_state(&self, w: &mut StateWriter, powered: bool) {
+        Uc8179::save_state(self, w, powered);
+    }
+    fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
+        Uc8179::restore_state(self, r, powered)
     }
 }
 
@@ -886,7 +946,7 @@ mod tests {
         let e = WIDTH / 2 / 8;
         let row: Vec<u8> =
             codes.iter().flat_map(|&c| std::iter::repeat_n(if c == 0x10 { 0x10 } else { c << 4 | c }, e)).collect();
-        let img: Vec<u8> = row.iter().copied().cycle().take(kind.ram_len()).collect();
+        let img: Vec<u8> = row.iter().copied().cycle().take(kind.ram_len(WIDTH * HEIGHT)).collect();
         cmd(&mut p, 0, 0x04, &[]);
         cmd(&mut p, 0, 0x10, &img);
         cmd(&mut p, 0, 0x12, &[0x00]);
@@ -938,7 +998,7 @@ mod tests {
             cmd(&mut p, 0, 0x21 + i as u8, &lut(l));
         }
         // Pixels 0..3 of the first row get (old, new) = 00, 01, 10, 11.
-        let mut old = vec![0u8; STRIDE * HEIGHT];
+        let mut old = vec![0u8; WIDTH / 8 * HEIGHT];
         let mut new = old.clone();
         old[0] = 0b0011_0000;
         new[0] = 0b0101_0000;

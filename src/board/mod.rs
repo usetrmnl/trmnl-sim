@@ -1,7 +1,7 @@
 //! Boards: what is wired to the SoC's pins. A board is chip-agnostic; the SoC
 //! calls into it with pin levels and bus transfers, in nanoseconds of virtual time.
 
-pub mod trmnl_og;
+pub mod spi_epd;
 pub mod trmnl_x;
 
 use crate::savepoint::{StateReader, StateWriter};
