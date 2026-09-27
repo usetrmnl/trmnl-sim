@@ -290,6 +290,8 @@ The suite ([tests/integration](tests/integration)) runs in about two minutes and
 no internet. For the TRMNL OG it covers:
 
 - the first-boot setup screen and captive portal, and the portal's 15-minute timeout;
+- factory QA near a `TRMNL_QA` network: pass, fail on an overheating chip, stopped by the
+  button (needs the firmware's QA fix; see [test_errors.py](tests/integration/test_errors.py));
 - onboarding, and WiFi failures (unknown SSID, wrong password);
 - `/api/setup` and `/api/display` requests and their headers, including the `Panel-Rev`
   read from the panel;
@@ -332,6 +334,9 @@ no `TRMNL_X` build):
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
 - a left tap showing the previous cached image without touching the network;
+- the touch bar ([test_touchbar_x.py](tests/integration/test_touchbar_x.py)): browsing with
+  taps, holds and (slide mode) swipes, the WiFi-reset and power-off confirmations, and
+  switching between tap and slide mode;
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
   refreshing over 5 GHz.
 
