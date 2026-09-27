@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 import setup_cache
-from support import BUILD, BWRY_BUILD, TURBO, MockTrmnl, big_number, sim
+from support import BUILD, BWRY_BUILD, DEVICE, TURBO, MockTrmnl, big_number, device_image, sim
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
 from devices import ANY
@@ -20,6 +20,11 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 SNTP_BUG = ("_ZN5Clock14setTimeFromNTPEv", "sntp_request")
+
+
+def fixed_on(*envs: str, why: str):
+    """An expected failure, except on these environments, where the bug doesn't show (`why`)."""
+    return lambda test: test if DEVICE.env in envs else unittest.expectedFailure(test)
 
 
 def assert_no_low_stacks(test: unittest.TestCase, report: dict) -> None:
@@ -36,7 +41,7 @@ class MemcheckOG(unittest.TestCase):
 
     def test_onboarding_and_refresh_cycles_are_clean(self):
         with MockTrmnl() as mock, sim(BUILD, erase=True, memcheck="halt", extra_args=("--offline",)) as s:
-            mock.set_image("one", big_number("1"))
+            device_image(mock, "one", big_number("1"))
             mock.display = {"image": "one", "refresh_rate": 300}
             self.onboard(s, mock)
             n = len(mock.requests)
@@ -54,7 +59,10 @@ class MemcheckOG(unittest.TestCase):
             heap = report["heap"]
             self.assertGreater(heap["allocs"], 500)
             self.assertGreater(heap["internal"]["peak_bytes"], 50_000)
-            self.assertEqual(heap["psram"]["peak_bytes"], 0)
+            if DEVICE.psram_frame_buffers:
+                self.assertGreater(heap["psram"]["peak_bytes"], 1_000_000)
+            else:
+                self.assertEqual(heap["psram"]["peak_bytes"], 0)
             stacks = {t["task"]: t for t in report["stacks"]}
             self.assertEqual(stacks["loopTask"]["size"], 8192)
             self.assertGreater(stacks["loopTask"]["max_used"], 1000)
@@ -70,7 +78,7 @@ class MemcheckOG(unittest.TestCase):
             self.onboard(s, mock)
             s.assert_no_memory_errors()
 
-    @unittest.expectedFailure
+    @fixed_on("TRMNL_X", why="Arduino 3's String::concat(buf, len) copies len bytes, not len + 1")
     def test_api_display_body_is_not_read_past_its_end(self):
         # bodyAsString() calls String::concat(body, size), which copies size + 1 bytes of a
         # body that isn't NUL-terminated. The built-in server sends a Content-Length, which

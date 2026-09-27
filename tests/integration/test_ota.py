@@ -3,7 +3,7 @@ isn't firmware, and (TRMNL X) updates through the 5 GHz modem."""
 
 import unittest
 
-from support import ProvisionedDevice, close_fixtures, fixture
+from support import DEVICE, ProvisionedDevice, close_fixtures, fixture
 from support_x import ProvisionedX, ShippedX, X_BUILD
 
 from devices import ANY
@@ -41,7 +41,7 @@ class Case(unittest.TestCase):
         if path:
             self.device().mock.wait_for_request(path, timeout_s=20)
         st = s.wait(state="deep_sleep", timeout_s=20, settle_ms=500)["status"]
-        self.assertNotIn("Loaded app from partition at offset 0x1e0000", "\n".join(s.console(0)))
+        self.assertNotIn(f"Loaded app from partition at offset {DEVICE.ota_slot:#x}", "\n".join(s.console(0)))
         return st
 
 
