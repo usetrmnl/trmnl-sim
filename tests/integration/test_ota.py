@@ -52,6 +52,22 @@ class OgUpdates(Case):
         with self.device().boot() as s:
             self.assert_keeps_running_the_old_firmware(s, "/missing.bin")
 
+    def test_failed_update_is_not_retried_within_a_day(self):
+        # The failure's time is stored so a bad update can't boot-loop the device.
+        m = self.device().mock
+        self.update_from("/missing.bin")
+        with self.device().boot() as s:
+            self.assert_keeps_running_the_old_firmware(s, "/missing.bin")
+            m.display_queue = list(m.display_queue) or [
+                {"image": "default", "refresh_rate": 300, "update_firmware": True,
+                 "firmware_url": m.device_url + "/missing.bin"}]
+            n, c = len(m.requests), s.status()["console_total"]
+            s.wake()
+            m.wait_for_request("/api/display", after=n, timeout_s=20)
+            s.wait(console=r"Last OTA attempt was < 24h ago, skipping", since=c, timeout_s=20)
+            s.wait(state="deep_sleep", timeout_s=20)
+            self.assertNotIn("/missing.bin", [r.path for r in m.requests[n:]])
+
     @unittest.skip("slow: after the connection drops, Update.writeStream waits well over 20 s for the "
                    "rest of the firmware")
     def test_download_cut_short(self):

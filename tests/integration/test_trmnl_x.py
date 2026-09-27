@@ -227,7 +227,7 @@ class PortalTimeout(unittest.TestCase):
         # Serial isn't running when enter_shipment_sleep() announces itself on a production
         # build, so go by the clock: the portal is gone once 15 minutes have passed.
         t0 = s.status()["sim_time_s"]
-        deadline = time.time() + 60
+        deadline = time.time() + 150  # about 40 s alone, longer next to other tests
         while (st := s.status())["sim_time_s"] < t0 + 15 * 60 + 5:
             self.assertLess(time.time(), deadline, "the portal did not time out")
             time.sleep(0.5)

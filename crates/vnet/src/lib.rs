@@ -11,6 +11,9 @@
 //!   * DNS A lookups run `ToSocketAddrs` on a short-lived worker thread; results are picked
 //!     up by `poll()`, so nothing blocks. `dns_overrides` and IP literals are answered inline,
 //!     non-A queries get an empty NOERROR answer.
+//!   * An NTP server at `ntp_ip` answers with the host's clock. In offline mode, NTP server
+//!     names (containing "ntp" or starting with "time.") resolve to it, so the guest can set
+//!     its clock without internet.
 //!   * TCP is terminated by a smoltcp [`Interface`](smoltcp::iface::Interface) using
 //!     `Medium::Ip` with *AnyIP* enabled (we add/strip Ethernet headers ourselves). A guest
 //!     SYN for a new flow is parked while a worker thread does the host `connect()`; on
@@ -52,6 +55,8 @@ pub struct NetConfig {
     pub gateway_ip: Ipv4Addr,
     /// DNS server offered by DHCP (answered locally on UDP 53).
     pub dns_ip: Ipv4Addr,
+    /// Built-in NTP server (UDP 123, the host's clock).
+    pub ntp_ip: Ipv4Addr,
     /// Address offered to the guest by DHCP.
     pub guest_ip: Ipv4Addr,
     pub netmask: Ipv4Addr,
@@ -72,6 +77,7 @@ impl Default for NetConfig {
         Self {
             gateway_ip: Ipv4Addr::new(10, 0, 2, 2),
             dns_ip: Ipv4Addr::new(10, 0, 2, 3),
+            ntp_ip: Ipv4Addr::new(10, 0, 2, 123),
             guest_ip: Ipv4Addr::new(10, 0, 2, 15),
             netmask: Ipv4Addr::new(255, 255, 255, 0),
             gateway_mac: [0x02, 0, 0, 0, 0, 0x02],

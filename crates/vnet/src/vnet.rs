@@ -351,6 +351,13 @@ impl VirtualNet {
             self.handle_dns(ip.src, sport, data);
             return;
         }
+        if ip.dst == self.cfg.ntp_ip && dport == 123 {
+            if let Some(resp) = ntp_response(data, std::time::SystemTime::now()) {
+                let pkt = udp_ip_packet(self.cfg.ntp_ip, 123, ip.src, sport, &resp);
+                self.send_ip_to_guest(&pkt);
+            }
+            return;
+        }
         let Some(target) = self.host_target(ip.dst, dport) else {
             return;
         };
@@ -476,6 +483,8 @@ impl VirtualNet {
                 Some(immediate(RCODE_NOERROR, &[*ip]))
             } else if let Ok(ip) = name.parse::<Ipv4Addr>() {
                 Some(immediate(RCODE_NOERROR, &[ip]))
+            } else if self.offline() && (name.contains("ntp") || name.starts_with("time.")) {
+                Some(immediate(RCODE_NOERROR, &[self.cfg.ntp_ip]))
             } else if self.offline() {
                 Some(immediate(RCODE_NXDOMAIN, &[]))
             } else {
@@ -717,4 +726,49 @@ impl VirtualNet {
 fn immediate_servfail(query: &[u8]) -> Option<Vec<u8>> {
     let q = parse_dns_query(query)?;
     Some(build_dns_response(&q, RCODE_SERVFAIL, &[]))
+}
+
+/// An NTP server's (mode 4) answer to a client request (mode 3) at `now`; None for anything
+/// else.
+fn ntp_response(req: &[u8], now: std::time::SystemTime) -> Option<Vec<u8>> {
+    if req.len() < 48 || req[0] & 7 != 3 {
+        return None;
+    }
+    let since = now.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let secs = (since.as_secs() + 2_208_988_800) as u32; // NTP era 0 counts from 1900
+    let frac = ((since.subsec_nanos() as u64) << 32) / 1_000_000_000;
+    let mut ts = [0u8; 8];
+    ts[..4].copy_from_slice(&secs.to_be_bytes());
+    ts[4..].copy_from_slice(&(frac as u32).to_be_bytes());
+    let mut r = vec![0u8; 48];
+    r[0] = (req[0] & 0x38) | 4; // LI 0, the client's version, mode 4 (server)
+    r[1] = 1; // stratum 1: a reference clock
+    r[2] = req[2]; // poll
+    r[3] = 0xec; // precision 2^-20 s
+    r[12..16].copy_from_slice(b"SIM\0"); // reference id
+    r[16..24].copy_from_slice(&ts); // reference timestamp
+    r[24..32].copy_from_slice(&req[40..48]); // origin: the client's transmit timestamp
+    r[32..40].copy_from_slice(&ts); // receive
+    r[40..48].copy_from_slice(&ts); // transmit
+    Some(r)
+}
+
+#[cfg(test)]
+mod ntp_tests {
+    use super::ntp_response;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn answers_client_requests_with_the_time() {
+        let mut req = vec![0u8; 48];
+        req[0] = 0x23; // version 4, mode 3
+        req[40..48].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let r = ntp_response(&req, UNIX_EPOCH + Duration::from_millis(1_700_000_000_500)).unwrap();
+        assert_eq!(r[0], 0x24);
+        assert_eq!(&r[24..32], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(u32::from_be_bytes(r[40..44].try_into().unwrap()), 1_700_000_000 + 2_208_988_800);
+        assert_eq!(u32::from_be_bytes(r[44..48].try_into().unwrap()), 1 << 31); // .5 s
+        req[0] = 0x24; // a server's packet: ignored
+        assert!(ntp_response(&req, UNIX_EPOCH).is_none());
+    }
 }

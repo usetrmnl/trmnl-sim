@@ -130,7 +130,8 @@ class ProvisionedDevice:
                 s.wait(portal=True, timeout_s=90)
                 s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)
                 mock.wait_for_request("/api/display", timeout_s=120)
-                s.wait(state="deep_sleep", timeout_s=120)
+                # a slow panel (Spectra 6) can still be refreshing when the chip sleeps
+                s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
                 s.save_point(out / "asleep.trmnlsave", label="onboarded, asleep")
             return {"port": mock.port}
 

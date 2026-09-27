@@ -26,7 +26,7 @@ Common to all devices:
 |---|---|
 | Boot | The real mask ROM code (from Espressif's ROM ELFs) and your real 2nd-stage bootloader: partition table, OTA slot selection, image SHA-256 check, flash MMU, deep-sleep wake stubs |
 | WiFi | The binary WiFi driver is replaced by a high-level model: scans, joins, soft-AP. lwIP, DHCP, DNS, TLS (mbedTLS on the emulated crypto accelerators), AsyncTCP and the captive portal are all the firmware's own code |
-| Network | A user-mode router/NAT (`vnet`): DHCP, DNS, TCP/UDP to the internet, or `--offline` for hermetic tests. The device reaches the host machine at `10.0.2.2` |
+| Network | A user-mode router/NAT (`vnet`): DHCP, DNS, TCP/UDP to the internet, or `--offline` for hermetic tests. The device reaches the host machine at `10.0.2.2`. An NTP server at `10.0.2.123` answers with the host's clock; offline, NTP server names (containing "ntp" or starting with "time.") resolve to it, so the device knows the time without internet |
 | Sleep | Deep sleep (timer + GPIO wake, RTC memory kept, correct wake cause) and light sleep |
 | Persistence | Flash is a file: WiFi credentials, API key and SPIFFS/LittleFS survive restarts. `--erase` gives a factory-fresh device |
 
@@ -212,7 +212,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--control ADDR` | Serve the [control API](#control-api), e.g. `127.0.0.1:7878` (port 0 = pick one; the address is printed) |
 | `--turbo` | Don't pace to wall-clock time (see [Time](#time)) |
 | `--fast-sleep` | Fast-forward deep sleeps instead of waiting them out |
-| `--offline` | Hermetic network: only the host (`10.0.2.2` → `127.0.0.1`) is reachable |
+| `--offline` | Hermetic network: only the host (`10.0.2.2` → `127.0.0.1`) and the built-in NTP server are reachable |
 | `--dns NAME=IP` | Answer DNS for NAME locally (repeatable) |
 | `--portal-port N` | Host port forwarded to the captive portal (default 8080, 0 = any free port) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default port 8090, 0 = any free port); the device URL is `http://10.0.2.2:PORT` |
@@ -245,8 +245,9 @@ The simulator keeps *virtual time* from executed cycles. By default it is paced 
 wall-clock time, so the device behaves in real time. With `--turbo`, idle periods
 (FreeRTOS idle, display BUSY waits, light sleep) are fast-forwarded. Turbo still runs
 in real time while the host network is being waited on (an open TCP connection, a
-DNS lookup, a modem HTTP request) and while the setup portal is up, so no firmware
-timeout fires early because of the simulator. A light sleep with no timer armed
+DNS lookup, a modem HTTP request) and while the setup portal is up (unless its client
+is sent away: `POST /wifi {"portal_client": false}`), so no firmware timeout fires early
+because of the simulator. A light sleep with no timer armed
 (shipment mode, waiting for the dock) also runs in real time. Deep sleep always lasts its real duration unless
 `--fast-sleep` is given; end it early with **Wake** or the button.
 
