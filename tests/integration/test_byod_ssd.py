@@ -68,9 +68,10 @@ class SsdBoard(ByodBoard):
         # and asks for a partial refresh. SSD16xx partial refreshes are differential: they
         # drive only the pixels where the new image differs from the "old" RAM (0x26), which
         # the controller updates itself only after a partial refresh. After a fast or full
-        # refresh of a PNG, which leaves the inverted PNG there (PLANE_FALSE_DIFF), every
-        # pixel that should change counts as unchanged and the old picture stays up.
-        # (PNGs are fine: png_to_epd() writes the inverted image to 0x26 every time.)
+        # refresh of a PNG it holds the inverted PNG (PLANE_FALSE_DIFF): every pixel that
+        # should change counts as unchanged and the old picture stays up. (On the Sticky,
+        # whose panel supply is off during deep sleep, it holds nothing: only the white
+        # pixels get drawn.) PNGs are fine: png_to_epd() writes both RAMs every time.
         w, h = self.SIZE
         if (w, h) != (800, 480):
             self.skipTest("the mock serves 800x480 BMPs")
