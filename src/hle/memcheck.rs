@@ -14,7 +14,9 @@ use crate::memcheck::{self, Bindings, FRAMES, Free, Memcheck, Mode, Site, Violat
 /// TCB_t field offsets, the same in IDF 4.4 and 5.x (16-byte task names).
 const TCB_STACK: u32 = 0x30;
 const TCB_NAME: u32 = 0x34;
+/// pxEndOfStack follows xCoreID, which single-core IDF 5 builds (ESP32-C5) leave out.
 const TCB_END_OF_STACK: u32 = 0x48;
+const TCB_END_OF_STACK_UNICORE: u32 = 0x44;
 
 /// Install the hooks, and bind `mc` to the firmware: the addresses the hooks need, the
 /// allocator's code (exempt from access checks) and the word-at-a-time string functions.
@@ -188,7 +190,12 @@ fn task_created(c: &mut HleCtx) -> Flow {
     let tcb = c.cpu.arg(0);
     let name = super::idf::read_cstr(c, tcb + TCB_NAME, 16);
     let stack = c.mem.read_u32(tcb + TCB_STACK).unwrap_or(0);
-    let end = c.mem.read_u32(tcb + TCB_END_OF_STACK).unwrap_or(0);
+    let looks_like_end = |e: &u32| *e > stack && e - stack < 1 << 20;
+    let end = [TCB_END_OF_STACK, TCB_END_OF_STACK_UNICORE]
+        .iter()
+        .filter_map(|off| c.mem.read_u32(tcb + off))
+        .find(looks_like_end)
+        .unwrap_or(0);
     if let Some(mc) = c.mem.memcheck() {
         // pxEndOfStack is the aligned-down top: prefer the block size if the stack is on the heap.
         let size = match (mc.live_size(stack), end.wrapping_sub(stack).wrapping_add(4)) {

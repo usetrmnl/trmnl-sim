@@ -145,6 +145,37 @@ class OgGen2(Gen2Tests, unittest.TestCase):
     NAME = "TRMNL OG gen 2"
     MODEL = "og_gen2"
 
+    def test_memcheck_onboarding_and_refresh_cycles(self):
+        # The heap checker follows the C5's IDF 5.5 heap and its single-core FreeRTOS tasks
+        # (known firmware bugs suppressed, see support.KNOWN_MEMORY_BUGS).
+        with MockTrmnl() as mock, sim(self.dev.build, erase=True, memcheck="halt", extra_args=("--offline",)) as s:
+            mock.set_image("one", big_number("1"))
+            mock.display = {"image": "one", "refresh_rate": 300}
+            s.wait(portal=True, timeout_s=90)
+            s.portal_connect("TRMNL-Sim", "password", server=mock.device_url)
+            mock.wait_for_request("/api/display", timeout_s=120)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
+            n = len(mock.requests)
+            s.press(150)
+            mock.wait_for_request("/api/display", after=n, timeout_s=90)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
+            report = s.memcheck()
+            self.assertEqual(report["violations"], [])
+            self.assertGreater(report["heap"]["allocs"], 500)
+            stacks = {t["task"]: t for t in report["stacks"]}
+            self.assertEqual(stacks["loopTask"]["size"], 8192)
+            self.assertGreaterEqual(stacks["loopTask"]["instances"], 2)  # one per boot
+
+    def test_coverage_of_the_setup_boot(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                sim(self.dev.build, erase=True, coverage=Path(tmp) / "c5.info", extra_args=("--offline",)) as s:
+            s.wait(portal=True, timeout_s=90)
+            cov = s.write_coverage(Path(tmp) / "mid.info")
+            self.assertGreater(cov["lines_hit"], 1000)
+            self.assertLess(cov["lines_hit"], cov["lines_found"])
+            info = (Path(tmp) / "mid.info").read_text()
+            self.assertIn("SF:src/bl.cpp", info)
+
 
 class OgGen2Bwry(Gen2Tests, unittest.TestCase):
     """FIRMWARE BUG: the trmnl_gen2_4clr env defines BOARD_TRMNL_GEN2 but not

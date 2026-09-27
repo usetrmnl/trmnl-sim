@@ -743,3 +743,77 @@ impl GuestCpu for Rv32 {
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clic_interrupt_saves_and_mret_restores_the_level() {
+        let mut c = Rv32::new();
+        c.csr.clic = true;
+        c.csr.mstatus = MSTATUS_MIE;
+        c.csr.mtvec = 0x4080_0003;
+        c.pc = 0x4200_0100;
+        c.take_clic_interrupt(17, 0x3f, Some(0x4080_1234));
+        assert_eq!(c.pc, 0x4080_1234);
+        assert_eq!(c.csr.mil, 0x3f);
+        assert_eq!(c.read_csr(clic_csr::MINTSTATUS, 0), Some(0x3f << 24));
+        let mcause = c.read_csr(0x342, 0).unwrap();
+        assert_eq!(mcause & 0x8000_0fff, 0x8000_0011);
+        assert_eq!((mcause >> 16) & 0xff, 0, "previous level");
+        assert_ne!(mcause & 1 << 27, 0, "mpie");
+        assert!(!c.irq_enabled());
+        // IDF writes mcause back before mret, which restores mintstatus.mil and MIE
+        c.write_csr(0x342, mcause, 0);
+        c.csr.mepc = 0x4200_0100;
+        c.pc = 0x4080_0000;
+        struct Nop;
+        impl MemBus for Nop {
+            fn fetch16(&mut self, a: u32) -> crate::arch::BusResult<u16> {
+                // mret = 0x30200073
+                Ok(if a & 2 == 0 { 0x0073 } else { 0x3020 })
+            }
+            fn read8(&mut self, _: u32) -> crate::arch::BusResult<u8> {
+                Ok(0)
+            }
+            fn read16(&mut self, _: u32) -> crate::arch::BusResult<u16> {
+                Ok(0)
+            }
+            fn read32(&mut self, _: u32) -> crate::arch::BusResult<u32> {
+                Ok(0)
+            }
+            fn write8(&mut self, _: u32, _: u8) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn write16(&mut self, _: u32, _: u16) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn write32(&mut self, _: u32, _: u32) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn cycles(&self) -> u64 {
+                0
+            }
+            fn tick(&mut self) {}
+        }
+        c.step(&mut Nop);
+        assert_eq!(c.pc, 0x4200_0100);
+        assert_eq!(c.csr.mil, 0);
+        assert!(c.irq_enabled());
+        // exceptions enter at mtvec[31:6]
+        c.take_trap(cause::ILLEGAL, 0, c.pc);
+        assert_eq!(c.pc, 0x4080_0000);
+    }
+
+    #[test]
+    fn without_clic_the_c3_behaviour_is_unchanged() {
+        let mut c = Rv32::new();
+        c.csr.mstatus = MSTATUS_MIE;
+        c.csr.mtvec = 0x4038_0001;
+        c.enter_interrupt(5, 1);
+        assert_eq!(c.pc, 0x4038_0014);
+        assert_eq!(c.read_csr(0x342, 0), Some(0x8000_0005));
+        assert_eq!(c.read_csr(clic_csr::MINTTHRESH, 0), Some(0));
+    }
+}

@@ -329,11 +329,8 @@ impl WifiState {
     fn start_connect(&mut self, now: u64) {
         let ssid = self.sta_ssid();
         let pw = self.sta_password();
-        let found = if self.available {
-            self.networks.iter().position(|a| a.ssid == ssid && self.visible(a))
-        } else {
-            None
-        };
+        let found =
+            if self.available { self.networks.iter().position(|a| a.ssid == ssid && self.visible(a)) } else { None };
         self.connecting = true;
         match found {
             Some(i) => {

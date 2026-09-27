@@ -381,7 +381,7 @@ impl Periph {
             0x44 => u32::from_le_bytes([m[5], m[4], m[3], m[2]]),
             0x48 => u16::from_le_bytes([m[1], m[0]]) as u32,
             // MAC_SYS2: wafer version 1.0 (production silicon)
-            0x4C => 1 << 4,
+            0x4C => 1 << 4 | 2 << 8,
             0x1D4 => 1, // EFUSE_STATUS: state = idle
             _ => return None,
         })
@@ -942,7 +942,17 @@ impl C5Bus {
                 0
             };
             let mosi = buf(&self.p, mosi_bytes);
-            let rx = self.flash.transact(opcode, addr, &mosi, miso_bytes.min(64));
+            let mut rx = self.flash.transact(opcode, addr, &mosi, miso_bytes.min(64));
+            log::trace!("spi1 usr {opcode:#04x} miso {miso_bytes} -> {:02x?}", &rx[..rx.len().min(16)]);
+            if addr.is_some() && !self.mspi_samples_well() {
+                // sampled at the wrong moment: every bit a cycle late
+                let mut carry = 0;
+                for b in rx.iter_mut() {
+                    let v = *b;
+                    *b = v >> 1 | carry << 7;
+                    carry = v & 1;
+                }
+            }
             self.spi1_fill(&rx);
         } else if cmd & (1 << 31) != 0 {
             let len = ((addr_reg >> 24) as usize).min(64);
@@ -978,11 +988,88 @@ impl C5Bus {
         }
     }
 
+    /// Whether flash data is sampled correctly with the current MSPI input timing (DIN mode
+    /// and number, SPI1's extra dummy cycles). IDF sweeps the timing configs of its 80 MHz
+    /// table at boot and wants a window of 3 to 6 working ones (MSPI_TIMING_FLASH_CONSECUTIVE_
+    /// LEN_MAX) around the default, as on real silicon; outside the table all timings work.
+    fn mspi_samples_well(&self) -> bool {
+        const TABLE_80M: [(u32, u32, u32); 14] = [
+            (2, 2, 1),
+            (2, 1, 1),
+            (2, 0, 1),
+            (0, 0, 0),
+            (3, 1, 2),
+            (2, 3, 2),
+            (2, 2, 2),
+            (2, 1, 2),
+            (2, 0, 2),
+            (0, 0, 1),
+            (3, 1, 3),
+            (2, 3, 3),
+            (2, 2, 3),
+            (2, 1, 3),
+        ];
+        let cali = self.p.store_get(SPIMEM1 + 0x180);
+        let dummy = if cali & 2 != 0 { (cali >> 2) & 7 } else { 0 };
+        let t = (self.p.store_get(SPIMEM0 + 0x184) & 7, self.p.store_get(SPIMEM0 + 0x188) & 3, dummy);
+        TABLE_80M.iter().position(|c| *c == t).is_none_or(|i| (2..=6).contains(&i))
+    }
+
     fn spi1_fill(&mut self, rx: &[u8]) {
         for (i, chunk) in rx.chunks(4).enumerate() {
             let mut w = [0u8; 4];
             w[..chunk.len()].copy_from_slice(chunk);
             self.p.store_set(SPIMEM1 + 0x58 + 4 * i as u32, u32::from_le_bytes(w));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_shows_a_line_sent_to_both_channels_once() {
+        let (mut c, mut out) = (Console::default(), Vec::new());
+        for b in b"I (5) boot: hi\r\n" {
+            c.push(0, *b, &mut out);
+        }
+        for b in b"arduino only\r\nI (5) boot: hi\r\n" {
+            c.push(1, *b, &mut out);
+        }
+        assert_eq!(out, b"I (5) boot: hi\r\narduino only\r\n");
+    }
+
+    #[test]
+    fn clic_offers_the_highest_level_enabled_pending_interrupt() {
+        let mut i = Intc::default();
+        i.write_map(4 * src::GPIO as u32, 17);
+        i.write_map(4 * src::UART0 as u32, 18);
+        // id 17: enabled, level 1; id 18: enabled, level 3; both level triggered
+        i.write_clic(0x1000 + 4 * 17, 1 << 8 | 0x20 << 24);
+        i.write_clic(0x1000 + 4 * 18, 1 << 8 | 0x60 << 24);
+        assert!(i.best().is_none());
+        i.sources = 1 << src::GPIO | 1 << src::UART0;
+        let b = i.best().unwrap();
+        assert_eq!((b.id, b.level), (18, 0x7f));
+        // disabled interrupts don't pend the core
+        i.write_clic(0x1000 + 4 * 18, 0x60 << 24);
+        assert_eq!(i.best().unwrap().id, 17);
+        // the line dropping clears a level-triggered interrupt
+        i.sources = 0;
+        assert!(i.best().is_none());
+    }
+
+    #[test]
+    fn clic_edge_interrupt_pends_until_taken() {
+        let mut i = Intc::default();
+        i.write_map(4 * src::GPIO as u32, 20);
+        i.write_clic(0x1000 + 4 * 20, 1 << 8 | 1 << 17 | 0x40 << 24); // rising edge
+        i.sources = 1 << src::GPIO;
+        assert_eq!(i.best().unwrap().id, 20);
+        i.sources = 0;
+        assert_eq!(i.best().unwrap().id, 20, "latched");
+        i.taken(20);
+        assert!(i.best().is_none());
     }
 }
