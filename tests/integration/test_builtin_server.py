@@ -5,12 +5,24 @@ import unittest
 import urllib.parse
 import urllib.request
 
-from support import BUILD, BWRY_BUILD, sim, big_number
-from trmnl_mock import color_bars, expected_bwry, png_gray, png_rgb
+from support import BUILD, BWRY_BUILD, DEVICE, panel_number, sim
+from trmnl_mock import color_bars, expected_bwry, expected_gray, png_image, png_rgb
 
 from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
+
+# Firmware bugs, by the device they show on (see run.py's DeviceLoader).
+SHOWS = "BuiltinServerOg.test_onboards_and_shows_uploaded_images"
+KNOWN_FAILURES = {
+    # the built-in server serves 800x480 black-and-white panels the OG's 1-bit BMP
+    **{env: {SHOWS: "a 1-bit BMP after the setup screens' full refresh shows only scraps on SSD16xx panels "
+                    "(see test_http.SSD16XX_BMP)"}
+       for env in ("xteink_x4", "TRMNL_4inch26_DIY_Kit", "seeed_sticky", "WAVESHARE_397")},
+    "CrowPanel42": {SHOWS: "1-bit PNGs never show on the CrowPanel (see test_images.CROWPANEL_1BIT_PNG)"},
+    "trmnl_gen2_4clr": {SHOWS: "images don't take the 4-color path without BOARD_TRMNL_4CLR "
+                               "(see test_images.GEN2_4CLR)"},
+}
 
 
 def onboard(s, refresh_rate: int = 300) -> str:
@@ -22,12 +34,27 @@ def onboard(s, refresh_rate: int = 300) -> str:
     return url
 
 
+def black_and_white(text: str) -> tuple[bytes, bytes]:
+    """An 8-bit gray PNG of the panel's size with `text` in black on white, and the screenshot
+    it should give (black and white are inks on every panel)."""
+    px = panel_number(text)
+    level = lambda x, y: 0 if px(x, y) else 255  # noqa: E731
+    w, h = DEVICE.size
+    return png_image(level, w, h, bits=8), expected_gray(level, w, h, bits=8)
+
+
 class BuiltinServerOg(unittest.TestCase):
+    """On the device under test (the class keeps the name it had when it ran on the OG only)."""
+
+    def assertMatch(self, result: dict):
+        self.assertTrue(result["match"], result)
+
     def test_onboards_and_shows_uploaded_images(self):
         with sim(erase=True, extra_args=("--offline",)) as s:
-            # An 8-bit gray PNG: converted to the OG's 1-bit BMP without changing a pixel.
-            reference = png_gray(big_number("7"))
-            info = s.mock.add_image("seven", reference, current=True)
+            # A black-and-white 8-bit gray PNG of the panel's size: converted to what the panel
+            # takes (the OG's 1-bit BMP, a 1-bit/4-bit gray or palette PNG) without changing a pixel.
+            data, reference = black_and_white("7")
+            info = s.mock.add_image("seven", data, current=True)
             self.assertTrue(info["filename"].startswith("plugin-"), info)
             url = onboard(s)
             self.assertRegex(url, r"^http://10\.0\.2\.2:\d+$")
@@ -36,20 +63,20 @@ class BuiltinServerOg(unittest.TestCase):
             self.assertEqual(setup["headers"]["ID"], "7C:DF:A1:00:00:01")
             req = s.mock.wait_for_request("/api/display", timeout_s=120)
             self.assertEqual(req["headers"]["Access-Token"], "sim-test-api-key")
-            s.mock.wait_for_request("/images/seven.bmp", timeout_s=120)
-            st = s.wait(state="deep_sleep", timeout_s=120)["status"]
+            s.mock.wait_for_request(info["path"], timeout_s=120)
+            st = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 300, delta=15)
-            self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
-            self.assertTrue(s.compare_screen(reference, tolerance=64, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0))
+            self.assertMatch(s.compare_screen(reference, tolerance=64, max_ratio=0))
 
             # Switch the image and wake the device: the next request fetches it.
             cursor = s.mock.state()["total_requests"]
-            s.mock.add_image("eight", png_gray(big_number("8")))
+            info = s.mock.add_image("eight", black_and_white("8")[0])
             s.mock.display(image="eight")
             s.wake()
-            s.mock.wait_for_request("/images/eight.bmp", after=cursor, timeout_s=120)
-            s.wait(state="deep_sleep", timeout_s=120)
-            self.assertTrue(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0)["match"])
+            s.mock.wait_for_request(info["path"], after=cursor, timeout_s=120)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
+            self.assertMatch(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0))
 
     def test_serves_this_build_s_firmware_for_ota(self):
         with sim(extra_args=("--offline",)) as s:
@@ -62,6 +89,7 @@ class BuiltinServerOg(unittest.TestCase):
 
 class BuiltinServerBwry(unittest.TestCase):
     ENV = "trmnl_4clr"
+    assertMatch = BuiltinServerOg.assertMatch
     @classmethod
     def setUpClass(cls):
         if not (BWRY_BUILD / "firmware.elf").exists():
@@ -76,8 +104,8 @@ class BuiltinServerBwry(unittest.TestCase):
             self.assertEqual(req["headers"]["Model"], "og_4clr")
             s.mock.wait_for_request("/images/bars.png", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
-            self.assertTrue(s.compare_screen(s.mock.expected("bars"), tolerance=16, max_ratio=0)["match"])
-            self.assertTrue(s.compare_screen(expected_bwry(color_bars), tolerance=16, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(s.mock.expected("bars"), tolerance=16, max_ratio=0))
+            self.assertMatch(s.compare_screen(expected_bwry(color_bars), tolerance=16, max_ratio=0))
 
 
 if __name__ == "__main__":

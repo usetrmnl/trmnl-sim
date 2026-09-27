@@ -196,6 +196,10 @@ impl Board for TrmnlX {
         }
     }
 
+    fn uart_is_console(&self, _port: u8) -> bool {
+        false // UART0 is the modem's
+    }
+
     fn uart_rx(&mut self, now: u64, port: u8) -> Vec<u8> {
         if port == 0 { self.modem.poll(now) } else { Vec::new() }
     }

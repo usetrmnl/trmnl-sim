@@ -1,8 +1,8 @@
-"""Against the real trmnl.app API (opt-in: TRMNL_SIM_NETWORK=1)."""
+"""The device under test against the real trmnl.app API (opt-in: TRMNL_SIM_NETWORK=1)."""
 
 import unittest
 
-from support import GOLDEN, NETWORK, sim
+from support import DEVICE, GOLDEN, NETWORK, sim
 
 from devices import ANY
 
@@ -18,7 +18,12 @@ class TrmnlApp(unittest.TestCase):
             s.portal_connect("TRMNL-Sim", "pw")
             s.wait(wifi_connected=True, timeout_s=60)
             s.wait(min_refreshes=refreshes + 1, display_idle=True, settle_ms=500, timeout_s=120)
-            s.assert_screen(GOLDEN / "not_registered_text.png", region=(0, 320, 800, 50))
+            if DEVICE.env == "trmnl":
+                s.assert_screen(GOLDEN / "not_registered_text.png", region=(0, 320, 800, 50))
+            else:
+                # the whole screen: the message's place depends on the panel (a golden per device,
+                # written by the first run that has none; check it by eye)
+                s.assert_screen(GOLDEN / DEVICE.env / "not_registered.png")
             s.wait(state="deep_sleep", timeout_s=120)
 
 
