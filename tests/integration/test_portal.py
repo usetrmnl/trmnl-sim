@@ -20,11 +20,12 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 # sleeps.
 C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the clock, with no timeout; "
                   "unreachable NTP (this static IP's subnet) keeps the device awake forever")
-# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# Firmware bugs on the XIAO ESP32-C3: GPIO 9 can't wake a C3 from deep sleep; and bl_init() waits 2 s (bl.cpp:731-733) before it reads the
 # button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
 # then waits for another press with no timeout: the device stays awake until pressed again.
-XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
-                  "for a new press forever (no timeout): a button wake never reaches the server")
+XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
+                  "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
+                  "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
 KNOWN_FAILURES = {
     **{env: {
         "JoinOptions.test_static_ip": C5_NTP_FOREVER,

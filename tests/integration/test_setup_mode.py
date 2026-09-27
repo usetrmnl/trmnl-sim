@@ -24,11 +24,12 @@ PARALLEL_SMALL_PANEL = ("display_show_msg() uses the TRMNL X's Inter_18 font and
 C5_AP_NAME = ("WifiCaptive.cpp:27-30 takes the AP name from bytes 3-5 of the C5's EUI-64 factory MAC (FF FE + one "
               "NIC byte): every gen-2 device's setup network is TRMNL-FFFExx instead of the MAC's last three bytes")
 
-# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# Firmware bugs on the XIAO ESP32-C3: GPIO 9 can't wake a C3 from deep sleep; and bl_init() waits 2 s (bl.cpp:731-733) before it reads the
 # button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
 # then waits for another press with no timeout: the device stays awake until pressed again.
-XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
-                  "for a new press forever (no timeout): a button wake never reaches the server")
+XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
+                  "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
+                  "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
 # Firmware (bb_epaper) bug on the Waveshare 3.97": EP397_800x480 starts the RAM Y counter at 0
 # instead of 479, so every picture lands one row too high, its top row at the bottom (see
 # test_byod_ssd.Waveshare397); its BMPs also hit the SSD16xx partial refresh bug.
