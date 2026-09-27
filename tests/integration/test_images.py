@@ -6,7 +6,7 @@ import struct
 import time
 import unittest
 
-from support import BWRY_BUILD, HERE, ProvisionedDevice, big_number, close_fixtures, fixture
+from support import BWRY_BUILD, DEVICE, HERE, ProvisionedDevice, big_number, close_fixtures, fixture
 from trmnl_mock import bmp_1bit, expected_gray, png_image, png_palette, png_rgb
 
 from devices import ANY
@@ -20,6 +20,23 @@ dev = fixture(ProvisionedDevice)
 bwry = fixture(lambda: ProvisionedDevice(BWRY_BUILD))
 
 seven = big_number("7")
+W, H = DEVICE.size  # the images of the general classes (Png, Jpeg) fill the device's panel
+
+KNOWN_FAILURES = {
+    "TRMNL_X": {
+        "Png.test_larger_png_is_cropped":
+            "the parallel-panel png_draw (display.cpp:1473) takes any 1-bit PNG wider than the panel for "
+            "a rotated (portrait) one: it writes its rows as columns up from the last line, 2072 rows "
+            "into a 1404-line buffer, and crashes (StoreProhibited at display.cpp:1486); the SPI-panel "
+            "png_draw crops instead",
+    },
+}
+
+
+def spi_panel_bug(test):
+    """An expected failure on the SPI-panel boards (bb_epaper's png_draw); the parallel-panel
+    boards (16 grays) decode these images their own way."""
+    return test if DEVICE.inks == "gray16" else unittest.expectedFailure(test)
 
 
 def digit(level_black: int, level_white: int, text: str = "7"):
@@ -92,67 +109,67 @@ class Case(unittest.TestCase):
 class Png(Case):
     def test_1bit_png(self):
         level = digit(0, 1)
-        with self.show("one.png", png_image(level, 800, 480, 1), "image/png") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 1))
+        with self.show("one.png", png_image(level, W, H, 1), "image/png") as s:
+            self.assert_shows(s, expected_gray(level, W, H, 1))
 
     def test_2bit_png_with_two_colors_is_drawn_as_1bit(self):
         level = digit(0, 3)
-        with self.show("two-colors.png", png_image(level, 800, 480, 2), "image/png") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 2))
+        with self.show("two-colors.png", png_image(level, W, H, 2), "image/png") as s:
+            self.assert_shows(s, expected_gray(level, W, H, 2))
 
     def test_2bit_png_uses_4_gray_levels(self):
         def level(x, y):
-            return 0 if seven(x, y) else min(3, x * 4 // 800)
+            return 0 if seven(x, y) else min(3, x * 4 // W)
 
-        with self.show("gray4.png", png_image(level, 800, 480, 2), "image/png") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 2), tolerance=48, max_ratio=0.01)
+        with self.show("gray4.png", png_image(level, W, H, 2), "image/png") as s:
+            self.assert_shows(s, expected_gray(level, W, H, 2), tolerance=48, max_ratio=0.01)
 
     def test_8bit_gray_png_is_reduced(self):
         level = digit(0, 255)
-        with self.show("gray8.png", png_image(level, 800, 480, 8), "image/png") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 8))
+        with self.show("gray8.png", png_image(level, W, H, 8), "image/png") as s:
+            self.assert_shows(s, expected_gray(level, W, H, 8))
 
-    @unittest.expectedFailure
+    @spi_panel_bug
     def test_4bit_gray_png_is_reduced(self):
         # ReduceBpp's 4-bit grayscale case builds odd pixels as (s[0] & 0xf) | (s[0] << 4)
         # without masking to 8 bits: white is 0xfff, and g >> 7 ORs 5 bits into the output
         # byte, so most of the image comes out black.
         level = digit(0, 15)
-        with self.show("gray16.png", png_image(level, 800, 480, 4), "image/png") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 4))
+        with self.show("gray16.png", png_image(level, W, H, 4), "image/png") as s:
+            self.assert_shows(s, expected_gray(level, W, H, 4))
 
     def test_palette_png_is_reduced(self):
         colors = [(0, 0, 0), (255, 255, 255)]
-        data = png_palette(lambda x, y: colors[0] if seven(x, y) else colors[1], colors)
+        data = png_palette(lambda x, y: colors[0] if seven(x, y) else colors[1], colors, W, H)
         with self.show("palette.png", data, "image/png") as s:
-            self.assert_shows(s, expected_gray(digit(0, 1), 800, 480, 1))
+            self.assert_shows(s, expected_gray(digit(0, 1), W, H, 1))
 
     def test_truecolor_png_is_reduced(self):
-        data = png_rgb(lambda x, y: (0, 0, 0) if seven(x, y) else (255, 255, 255))
+        data = png_rgb(lambda x, y: (0, 0, 0) if seven(x, y) else (255, 255, 255), W, H)
         with self.show("rgb.png", data, "image/png") as s:
-            self.assert_shows(s, expected_gray(digit(0, 1), 800, 480, 1))
+            self.assert_shows(s, expected_gray(digit(0, 1), W, H, 1))
 
     def test_portrait_png_is_rotated(self):
         px = big_number("7")
-        level = lambda x, y: 0 if px(y, 479 - x) else 1  # noqa: E731  (the digit, turned)
-        with self.show("portrait.png", png_image(level, 480, 800, 1), "image/png") as s:
+        level = lambda x, y: 0 if px(y, H - 1 - x) else 1  # noqa: E731  (the digit, turned)
+        with self.show("portrait.png", png_image(level, H, W, 1), "image/png") as s:
             screen = s.screenshot()
             self.assertGreater(len(screen), 0)
 
     def test_larger_png_is_cropped(self):
         px = big_number("7")
-        level = lambda x, y: 0 if x < 800 and y < 480 and px(x, y) else 1  # noqa: E731
-        with self.show("large.png", png_image(level, 1000, 600, 1), "image/png") as s:
-            self.assert_shows(s, expected_gray(digit(0, 1), 800, 480, 1))
+        level = lambda x, y: 0 if x < W and y < H and px(x, y) else 1  # noqa: E731
+        with self.show("large.png", png_image(level, W + 200, H + 120, 1), "image/png") as s:
+            self.assert_shows(s, expected_gray(digit(0, 1), W, H, 1))
 
     def test_corrupt_png_is_not_drawn(self):
-        data = png_image(digit(0, 1), 800, 480, 1)
+        data = png_image(digit(0, 1), W, H, 1)
         with self.show("corrupt.png", data[:40] + bytes(len(data) - 40), "image/png") as s:
             self.assertNotEqual(s.status()["state"], "halted")
 
     def test_same_png_again_is_not_downloaded_or_redrawn(self):
         level = digit(0, 1)
-        with self.show("again.png", png_image(level, 800, 480, 1), "image/png") as s:
+        with self.show("again.png", png_image(level, W, H, 1), "image/png") as s:
             refreshes = s.status()["display_refreshes"]
             n = len(self.device().mock.requests)
             s.wake()
@@ -163,7 +180,7 @@ class Png(Case):
 
     def test_new_version_of_a_plugin_image_replaces_the_cached_one(self):
         m = self.device().mock
-        old, new = png_image(digit(0, 1, "1"), 800, 480, 1), png_image(digit(0, 1, "2"), 800, 480, 1)
+        old, new = png_image(digit(0, 1, "1"), W, H, 1), png_image(digit(0, 1, "2"), W, H, 1)
         m.set_file("/img/v1.png", "image/png", old)
         m.set_file("/img/v2.png", "image/png", new)
         m.display_queue = [{"image_url": m.device_url + "/img/v1.png", "filename": "plugin-abc123-1000", "refresh_rate": 300}]
@@ -175,49 +192,49 @@ class Png(Case):
             s.wake()
             s.wait(console=r"Deleting older version of plugin image", since=c, timeout_s=15)
             s.wait(state="deep_sleep", timeout_s=15)
-            self.assert_shows(s, expected_gray(digit(0, 1, "2"), 800, 480, 1))
+            self.assert_shows(s, expected_gray(digit(0, 1, "2"), W, H, 1))
 
     def test_long_filenames_are_shortened(self):
         level = digit(0, 1)
-        path = self.serve("long.png", png_image(level, 800, 480, 1), "image/png")
+        path = self.serve("long.png", png_image(level, W, H, 1), "image/png")
         self.device().mock.display["filename"] = "mashup-066cc3-weather-and-calendar-1771674964"
         with self.device().boot() as s:
             self.device().mock.wait_for_request(path, timeout_s=15)
             s.wait(state="deep_sleep", timeout_s=15)
-            self.assert_shows(s, expected_gray(level, 800, 480, 1))
+            self.assert_shows(s, expected_gray(level, W, H, 1))
 
     def test_temperature_profile_is_saved(self):
         level = digit(0, 1)
-        data = png_image(level, 800, 480, 1)
+        data = png_image(level, W, H, 1)
         with self.show("temp.png", data, "image/png", temperature_profile="a") as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 1))
-            self.serve("temp2.png", png_image(digit(0, 1, "8"), 800, 480, 1), "image/png", temperature_profile="b")
+            self.assert_shows(s, expected_gray(level, W, H, 1))
+            self.serve("temp2.png", png_image(digit(0, 1, "8"), W, H, 1), "image/png", temperature_profile="b")
             n = len(self.device().mock.requests)
             s.wake()
             self.device().mock.wait_for_request("/img/temp2.png", after=n, timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=90)
-            self.assert_shows(s, expected_gray(digit(0, 1, "8"), 800, 480, 1))
+            self.assert_shows(s, expected_gray(digit(0, 1, "8"), W, H, 1))
 
     def test_maximum_compatibility_forces_full_refreshes(self):
         level = digit(0, 1)
-        with self.show("compat.png", png_image(level, 800, 480, 1), "image/png", maximum_compatibility=True) as s:
-            self.assert_shows(s, expected_gray(level, 800, 480, 1))
+        with self.show("compat.png", png_image(level, W, H, 1), "image/png", maximum_compatibility=True) as s:
+            self.assert_shows(s, expected_gray(level, W, H, 1))
 
     def test_long_refresh_rates_use_fast_instead_of_partial_refreshes(self):
-        with self.show("slow1.png", png_image(digit(0, 1), 800, 480, 1), "image/png", refresh_rate=3600) as s:
+        with self.show("slow1.png", png_image(digit(0, 1), W, H, 1), "image/png", refresh_rate=3600) as s:
             eight = digit(0, 1, "8")
-            self.serve("slow2.png", png_image(eight, 800, 480, 1), "image/png", refresh_rate=3600)
+            self.serve("slow2.png", png_image(eight, W, H, 1), "image/png", refresh_rate=3600)
             n = len(self.device().mock.requests)
             s.wake()
             self.device().mock.wait_for_request("/img/slow2.png", after=n, timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=90)
-            self.assert_shows(s, expected_gray(eight, 800, 480, 1))
+            self.assert_shows(s, expected_gray(eight, W, H, 1))
 
 
 class Jpeg(Case):
     def test_jpeg_is_dithered_to_1bit(self):
         with self.show("five.jpg", (DATA / "five_800x480.jpg").read_bytes(), "image/jpeg") as s:
-            self.assert_shows(s, expected_gray(digit(0, 1, "5"), 800, 480, 1), tolerance=64, max_ratio=0.02)
+            self.assert_shows(s, expected_gray(digit(0, 1, "5"), W, H, 1), tolerance=64, max_ratio=0.02)
 
     def test_jpeg_of_the_wrong_size_is_refused(self):
         with self.show("small.jpg", (DATA / "five_640x480.jpg").read_bytes(), "image/jpeg") as s:
