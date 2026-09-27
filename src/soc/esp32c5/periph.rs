@@ -155,6 +155,20 @@ impl Intc {
         best
     }
 
+    /// For debug dumps: each routed source with its CLIC id, and the enabled ids with their
+    /// level and pending bit.
+    pub fn summary(&self) -> String {
+        let routed: Vec<String> = (0..src::COUNT)
+            .filter(|&n| self.map[n] >= 16)
+            .map(|n| format!("{n}->{}{}", self.map[n], if self.sources >> n & 1 != 0 { "*" } else { "" }))
+            .collect();
+        let enabled: Vec<String> = (16..48)
+            .filter(|&id| self.ctrl[id] & 1 << 8 != 0)
+            .map(|id| format!("{id}:l{}{}", self.ctrl[id] >> 29, if self.ctrl[id] & 1 != 0 { "*" } else { "" }))
+            .collect();
+        format!("sources {} (* = active); CLIC enabled {} (* = pending)", routed.join(" "), enabled.join(" "))
+    }
+
     /// The core took `id`: an edge-triggered interrupt stops pending.
     pub fn taken(&mut self, id: u32) {
         let c = &mut self.ctrl[id as usize];

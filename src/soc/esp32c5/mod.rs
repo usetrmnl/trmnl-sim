@@ -684,7 +684,12 @@ impl Machine for Esp32c5 {
             "irqs taken per line: {:?}\n",
             self.irq_counts.iter().enumerate().filter(|(_, n)| **n > 0).collect::<Vec<_>>()
         );
-        s += &format!("intc: {:?}\n", self.bus.p.intc);
+        s += &format!(
+            "intc: {}; mintthresh {:#x}, mintstatus.mil {:#x}\n",
+            self.bus.p.intc.summary(),
+            self.cpu.csr.mintthresh,
+            self.cpu.csr.mil
+        );
         s += &format!("systimer: {:?}\n", self.bus.p.systimer);
         // Heuristic backtrace: code addresses found on the stack.
         s += "stack scan:";
