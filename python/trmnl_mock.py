@@ -95,6 +95,7 @@ def expected_gray(level: Callable[[int, int], int], width: int, height: int, bit
 
 
 BWRY_RGB = {"black": (0, 0, 0), "white": (255, 255, 255), "yellow": (255, 255, 0), "red": (255, 0, 0)}
+BWR_RGB = {k: BWRY_RGB[k] for k in ("black", "white", "red")}
 SPECTRA6_RGB = {**BWRY_RGB, "blue": (0, 0, 255), "green": (0, 255, 0)}
 
 
@@ -154,6 +155,34 @@ def expected_bwry(color: Callable[[int, int], tuple], width: int = 800, height: 
         b"\x00" + bytes(c for x in range(width) for c in bwry_quantize(*color(x, y))) for y in range(height)
     )
     return _png(struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0), raw)
+
+
+def bwr_quantize(r: int, g: int, b: int) -> tuple:
+    """Black/white/red color reduction (GetBWRPixel in display.cpp; the firmware defines it
+    but no image path calls it yet)."""
+    gr = (b + r + g * 2) >> 2
+    if r > g and r > b:
+        if gr < 100 and r < 80:
+            return BWR_RGB["black"]
+        return BWR_RGB["red"] if r - b > 32 and r - g > 32 else BWR_RGB["white"]
+    return BWR_RGB["white"] if gr >= 128 else BWR_RGB["black"]
+
+
+def expected_bwr(color: Callable[[int, int], tuple], width: int = 800, height: int = 480) -> bytes:
+    """The RGB PNG a simulator screenshot of an image of `color` on a black/white/red panel
+    should match."""
+    raw = b"".join(
+        b"\x00" + bytes(c for x in range(width) for c in bwr_quantize(*color(x, y))) for y in range(height)
+    )
+    return _png(struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0), raw)
+
+
+def bwr_bars(x: int, y: int) -> tuple:
+    """Vertical black/white/red bars (thirds of 800 px), with a red/black checker band."""
+    names = list(BWR_RGB)
+    if 200 <= y < 280:
+        return BWR_RGB[("red", "black")[(x // 40 + y // 40) % 2]]
+    return BWR_RGB[names[min(2, x * 3 // 800)]]
 
 
 def spectra6_quantize(r: int, g: int, b: int) -> tuple:
@@ -480,6 +509,16 @@ class MockTrmnl:
         self.images[name + ".png"] = png_palette(lambda x, y: bwry_quantize(*color(x, y)), palette, width, height)
         self._stamp(name)
         return expected_bwry(color, width, height)
+
+    def set_bwr_png(self, name: str, color: Callable[[int, int], tuple], width: int = 800,
+                    height: int = 480) -> bytes:
+        """Register a color image for a black/white/red panel, reduced to its three inks and
+        served as a 2-bit palette PNG (as for the TRMNL BWRY). Returns the RGB PNG a
+        screenshot should match."""
+        palette = list(BWR_RGB.values())
+        self.images[name + ".png"] = png_palette(lambda x, y: bwr_quantize(*color(x, y)), palette, width, height)
+        self._stamp(name)
+        return expected_bwr(color, width, height)
 
     def set_spectra6_png(self, name: str, color: Callable[[int, int], tuple], width: int = 800,
                          height: int = 480) -> bytes:

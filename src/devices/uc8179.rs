@@ -7,6 +7,11 @@
 //! long built-in refresh with no LUT registers ([`ColorPanel`]): the 4-color
 //! black/white/yellow/red panel of the TRMNL BWRY (GDEM075F52, 2 bits/pixel) and the
 //! 7.3" Spectra 6 panel of the Seeed reTerminal E1002 (GDEP073E01, 4 bits/pixel).
+//! The Waveshare 7.5" black/white/red panel ([`ColorPanel::Bwr`]) instead has two 1-bit
+//! planes: black/white in `DTM1`, red in `DTM2`.
+//!
+//! Other black-and-white UC81xx panels (5.83" 648x480, 3.68" 792x528) are the same
+//! controller at another size ([`Uc8179::with_size`]).
 
 use std::sync::Arc;
 
@@ -35,9 +40,13 @@ const BWRY_RED: u8 = 3;
 const SPECTRA_BLUE: u8 = 5;
 const SPECTRA_GREEN: u8 = 6;
 
-/// A color panel: one image plane with a built-in (OTP) refresh.
+/// A color panel with a built-in (OTP) refresh.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorPanel {
+    /// Black/white/red, two 1-bit planes as the KWR mode of the UC8179 takes them with
+    /// `CDI` DDX=01 (Waveshare 7.5" V2 B, bb_epaper EP75R_800x480): `DTM1` 1 = white,
+    /// 0 = black; `DTM2` 1 = red (over either). Held in the controller's OLD/NEW planes.
+    Bwr,
     /// Black/white/yellow/red, 2 bits per pixel (TRMNL BWRY).
     Bwry,
     /// E Ink Spectra 6: black/white/yellow/red/blue/green, 4 bits per pixel (reTerminal E1002).
@@ -52,6 +61,7 @@ const COLOR_FLASH_MS: u64 = 100;
 impl ColorPanel {
     fn bits(self) -> usize {
         match self {
+            ColorPanel::Bwr => 1,
             ColorPanel::Bwry => 2,
             ColorPanel::Spectra6 => 4,
         }
@@ -61,8 +71,11 @@ impl ColorPanel {
         pixels * self.bits() / 8
     }
 
-    /// Image RAM filled with white.
+    /// Image RAM filled with white (none for BWR, which uses the OLD/NEW planes).
     fn white_ram(self, pixels: usize) -> Vec<u8> {
+        if self == ColorPanel::Bwr {
+            return Vec::new();
+        }
         let per_byte = 8 / self.bits();
         let byte = (0..per_byte).fold(0u8, |b, _| b << self.bits() | BWRY_WHITE);
         vec![byte; self.ram_len(pixels)]
@@ -90,6 +103,7 @@ impl ColorPanel {
     /// The colors the refresh flashes through.
     fn flashes(self) -> &'static [u8] {
         match self {
+            ColorPanel::Bwr => &[BWRY_BLACK, BWRY_WHITE, BWRY_RED, BWRY_WHITE],
             ColorPanel::Bwry => &[BWRY_BLACK, BWRY_WHITE],
             ColorPanel::Spectra6 => {
                 &[BWRY_BLACK, BWRY_WHITE, BWRY_RED, BWRY_YELLOW, SPECTRA_BLUE, SPECTRA_GREEN, BWRY_WHITE]
@@ -99,6 +113,7 @@ impl ColorPanel {
 
     fn image_ms(self) -> u64 {
         match self {
+            ColorPanel::Bwr => 11_000,
             ColorPanel::Bwry => 9_000,
             ColorPanel::Spectra6 => 12_000,
         }
@@ -106,6 +121,7 @@ impl ColorPanel {
 
     fn refresh_ms(self) -> u64 {
         match self {
+            ColorPanel::Bwr => 16_000,
             ColorPanel::Bwry => 16_000,
             ColorPanel::Spectra6 => 19_000,
         }
@@ -128,9 +144,15 @@ impl ColorPanel {
 /// fraction of the way to full black, each frame towards white this fraction of the way
 /// to white (white particles respond faster). With [`optical`], fitted so bb_epaper's
 /// 4-gray waveforms for the 7.5" panel land on the intended 0/85/170/255 and the OTP
-/// full refresh on solid black and white.
+/// full refresh on solid black and white. Other panels respond differently (see
+/// [`Uc8179::with_response`]).
 const K_BLACK: f32 = 0.1425;
 const K_WHITE: f32 = 0.3425;
+
+/// The Xteink X3's 3.68" panel: much faster to black, slower to white, fitted the same way
+/// to bb_epaper's epd368g_init (whose gray levels are 4 frames towards black, and 21
+/// towards black then 4 towards white).
+pub const X3_RESPONSE: (f32, f32) = (0.214, 0.2126);
 
 /// How dark a pixel looks for a particle state (0 = white .. 1 = black): a mild S-curve,
 /// as partly-driven particles scatter less light than their position suggests.
@@ -194,6 +216,9 @@ pub struct Uc8179 {
 
     /// Physical particle state, 0.0 = white, 1.0 = black.
     state: Vec<f32>,
+    /// Particle response per frame of drive towards black and white (see [`K_BLACK`]).
+    k_black: f32,
+    k_white: f32,
     /// Color panel: its kind and image RAM, and the refresh in progress
     /// (start, stages shown so far).
     color: Option<(ColorPanel, Vec<u8>)>,
@@ -246,6 +271,8 @@ impl Uc8179 {
             rev,
             temperature_c: 22,
             state: vec![0.0; w * h],
+            k_black: K_BLACK,
+            k_white: K_WHITE,
             color: None,
             color_refresh: None,
             flashing: true,
@@ -253,6 +280,14 @@ impl Uc8179 {
             refresh_count: 0,
             busy_stuck: false,
         }
+    }
+
+    /// A panel whose particles respond differently to the drive: per frame towards black
+    /// they move `k_black` of the way to black, towards white `k_white` of the way to white.
+    pub fn with_response(mut self, (k_black, k_white): (f32, f32)) -> Self {
+        self.k_black = k_black;
+        self.k_white = k_white;
+        self
     }
 
     pub fn color_panel(&self) -> Option<ColorPanel> {
@@ -323,6 +358,7 @@ impl Uc8179 {
         };
         fresh.frame = self.frame.clone();
         fresh.flashing = self.flashing;
+        (fresh.k_black, fresh.k_white) = (self.k_black, self.k_white);
         fresh.temperature_c = self.temperature_c;
         *self = fresh;
         read_f32s_into(r, &mut self.state)?;
@@ -582,7 +618,9 @@ impl Uc8179 {
     }
 
     fn pixel_data(&mut self, b: u8) {
-        if let Some((_, ram)) = &mut self.color {
+        if let Some((kind, ram)) = &mut self.color
+            && *kind != ColorPanel::Bwr
+        {
             // One full-screen plane; DTM2 isn't used by these panels.
             if self.cmd == 0x10 && self.data_ptr < ram.len() {
                 ram[self.data_ptr] = b;
@@ -709,8 +747,15 @@ impl Uc8179 {
         let frame = &mut *frame;
         let n = self.w * self.h;
         let rgb = frame.rgb.get_or_insert_with(|| vec![255; n * 3]);
+        let plane_bit = |plane: &[u8], i: usize| plane[i / 8] & (0x80 >> (i % 8)) != 0;
         for i in 0..n {
-            let c = kind.rgb(solid.unwrap_or_else(|| kind.code(ram, i)));
+            let code = || match kind {
+                ColorPanel::Bwr if plane_bit(&self.new, i) => BWRY_RED,
+                ColorPanel::Bwr if plane_bit(&self.old, i) => BWRY_WHITE,
+                ColorPanel::Bwr => BWRY_BLACK,
+                _ => kind.code(ram, i),
+            };
+            let c = kind.rgb(solid.unwrap_or_else(code));
             rgb[i * 3..i * 3 + 3].copy_from_slice(&c);
             let luma = (c[0] as u32 * 30 + c[1] as u32 * 59 + c[2] as u32 * 11) / 100;
             frame.pixels[i] = 255 - luma as u8;
@@ -761,15 +806,15 @@ impl Uc8179 {
 
     /// What a schedule does to a pixel's darkness over frames [from, to), as an affine map
     /// `d -> a * d + b` (the per-frame particle response is affine, so frames compose).
-    fn response(s: &[Phase], from: u32, to: u32) -> (f32, f32) {
+    fn response(s: &[Phase], from: u32, to: u32, (k_black, k_white): (f32, f32)) -> (f32, f32) {
         let (mut a, mut b) = (1.0f32, 0.0f32);
         let mut t = 0u32;
         for ph in s {
             let n = ((t + ph.frames).min(to) as i32 - t.max(from) as i32).max(0);
-            // One frame towards black: d += K_BLACK * (1 - d); towards white: d -= K_WHITE * d.
+            // One frame towards black: d += k_black * (1 - d); towards white: d -= k_white * d.
             let (fa, fb) = match ph.level {
-                1 => (1.0 - K_BLACK, K_BLACK),
-                2 => (1.0 - K_WHITE, 0.0),
+                1 => (1.0 - k_black, k_black),
+                2 => (1.0 - k_white, 0.0),
                 _ => (1.0, 0.0),
             };
             for _ in 0..n {
@@ -788,6 +833,7 @@ impl Uc8179 {
         if self.color.is_some() {
             return self.update_color(now);
         }
+        let k = (self.k_black, self.k_white);
         let Some(r) = &mut self.refresh else { return };
         let target = (((now.saturating_sub(r.start)) / r.frame_ns) as u32).min(r.total_frames);
         if target == r.frames_done {
@@ -796,7 +842,7 @@ impl Uc8179 {
             }
             return;
         }
-        let resp: [(f32, f32); 4] = std::array::from_fn(|i| Self::response(&r.schedules[i], r.frames_done, target));
+        let resp: [(f32, f32); 4] = std::array::from_fn(|i| Self::response(&r.schedules[i], r.frames_done, target, k));
         r.frames_done = target;
         let (x0, y0, x1, _) = r.region;
         let w = x1 - x0;
@@ -975,6 +1021,82 @@ mod tests {
         assert_eq!(at(7 * w8 + 11), vec![0; 3]);
     }
 
+    #[test]
+    fn bwr_refresh_combines_the_black_and_red_planes() {
+        let kind = ColorPanel::Bwr;
+        let mut p = Uc8179::new_color(0, kind);
+        // bb_epaper's epd75r_init: KWR mode, CDI DDX=01.
+        cmd(&mut p, 0, 0x04, &[]);
+        cmd(&mut p, 0, 0x00, &[0x0f]);
+        cmd(&mut p, 0, 0x50, &[0x11, 0x07]);
+        // Quarters of each row: DTM1 black, white, black, white; DTM2 red over the right half.
+        let q = WIDTH / 8 / 4;
+        let bw: Vec<u8> = [0x00u8, 0xff, 0x00, 0xff].iter().flat_map(|&b| std::iter::repeat_n(b, q)).collect();
+        let red: Vec<u8> = [0x00u8, 0x00, 0xff, 0xff].iter().flat_map(|&b| std::iter::repeat_n(b, q)).collect();
+        cmd(&mut p, 0, 0x10, &bw.repeat(HEIGHT));
+        cmd(&mut p, 0, 0x13, &red.repeat(HEIGHT));
+        cmd(&mut p, 0, 0x92, &[]);
+        cmd(&mut p, 0, 0x12, &[]);
+        // It flashes black, white and red before the image settles.
+        let first = |p: &Uc8179| p.frame.lock().rgb.as_ref().unwrap()[..3].to_vec();
+        let mut seen = std::collections::HashSet::new();
+        for t in (0..kind.image_ms()).step_by(COLOR_FLASH_MS as usize) {
+            p.update(t * MS);
+            seen.insert(first(&p));
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert!(!p.busy_n(kind.image_ms() * MS));
+        let done = kind.refresh_ms() * MS;
+        p.update(done);
+        assert!(p.busy_n(done));
+        let f = p.frame.lock();
+        let rgb = f.rgb.as_ref().unwrap();
+        let at = |x: usize, y: usize| rgb[(y * WIDTH + x) * 3..(y * WIDTH + x) * 3 + 3].to_vec();
+        let w4 = WIDTH / 4;
+        assert_eq!(at(10, 7), vec![0, 0, 0]);
+        assert_eq!(at(w4 + 10, 200), vec![255; 3]);
+        assert_eq!(at(2 * w4 + 10, 300), vec![255, 0, 0]);
+        assert_eq!(at(3 * w4 + 10, 479), vec![255, 0, 0]);
+        assert_eq!(f.pixels[10], 255);
+        assert_eq!(f.pixels[w4 + 10], 0);
+        assert_eq!(p.refresh_count, 1);
+    }
+
+    #[test]
+    fn other_sizes_lay_out_rows_by_their_width() {
+        // 3.68" 792x528 (99 bytes per row), bb_epaper's epd368_init_full: register LUTs,
+        // CDI 0xa9 (data bit 1 = white).
+        let (w, h) = (792, 528);
+        let mut p = Uc8179::with_size(0, w, h);
+        cmd(&mut p, 0, 0x00, &[0x3b, 0x08]);
+        cmd(&mut p, 0, 0x61, &[0x03, 0x18, 0x02, 0x58]);
+        cmd(&mut p, 0, 0x50, &[0xa9, 0x07]);
+        let full = |a: u8, b: u8| lut(&[[a, 0x1e, 0x1e, 0x01, 0x00, 0x02], [b, 0x01, 0x1e, 0x01, 0x00, 0x01]]);
+        cmd(&mut p, 0, 0x20, &[0u8; 44]);
+        cmd(&mut p, 0, 0x21, &full(0x60, 0x00));
+        cmd(&mut p, 0, 0x22, &full(0x60, 0x00));
+        cmd(&mut p, 0, 0x23, &full(0x60, 0x10));
+        cmd(&mut p, 0, 0x24, &full(0x60, 0x10));
+        cmd(&mut p, 0, 0x04, &[]);
+        // Black left half, a black last row.
+        let mut img = vec![0xffu8; w / 8 * h];
+        for y in 0..h {
+            for x in 0..w / 16 {
+                img[y * w / 8 + x] = 0;
+            }
+        }
+        img[(h - 1) * w / 8..].fill(0);
+        cmd(&mut p, 0, 0x13, &img);
+        cmd(&mut p, 0, 0x12, &[]);
+        p.update(60_000 * MS);
+        let f = p.frame.lock();
+        assert_eq!((f.width, f.height), (w, h));
+        let at = |x: usize, y: usize| f.pixels[y * w + x];
+        assert!(at(0, 0) > 240 && at(w / 2 - 9, 300) > 240, "left half black");
+        assert!(at(w / 2 + 8, 0) < 15 && at(w - 1, 300) < 15, "right half white");
+        assert!(at(w - 1, h - 1) > 240, "last row black");
+    }
+
     /// A LUT register: rows of (level patterns, 4 frame counts, repeat), zero-padded to 42 bytes.
     fn lut(rows: &[[u8; 6]]) -> Vec<u8> {
         let mut v: Vec<u8> = rows.iter().flatten().copied().collect();
@@ -1006,6 +1128,42 @@ mod tests {
         cmd(&mut p, 0, 0x10, &old);
         cmd(&mut p, 0, 0x13, &new);
         cmd(&mut p, 0, 0x12, &[]);
+        p.update(60_000 * MS);
+        let f = p.frame.lock();
+        let mut levels: Vec<u8> = f.pixels[..4].to_vec();
+        levels.sort();
+        for (got, want) in levels.iter().zip([0u8, 85, 170, 255]) {
+            assert!(got.abs_diff(want) <= 3, "levels {levels:?}, want 0/85/170/255");
+        }
+    }
+
+    #[test]
+    fn x3_four_gray_waveform_gives_the_intended_levels() {
+        // bb_epaper's epd368g_init: register LUTs 0x21..0x24 (GRAY0 black .. GRAY3 white),
+        // CDI 0xa9 (data bit 1 = white).
+        let flip = [0x60, 0x10, 0x10, 0x01, 0x00, 0x01];
+        let luts: [[u8; 6]; 4] = [
+            [0x40, 0x15, 0x04, 0x01, 0x00, 0x01],
+            [0x60, 0x15, 0x04, 0x01, 0x00, 0x01],
+            [0x10, 0x15, 0x04, 0x01, 0x00, 0x01],
+            [0x00, 0x15, 0x04, 0x01, 0x00, 0x01],
+        ];
+        let (w, h) = (792, 528);
+        let mut p = Uc8179::with_size(0, w, h).with_response(X3_RESPONSE);
+        cmd(&mut p, 0, 0x00, &[0x3b, 0x08]);
+        for (i, l) in luts.iter().enumerate() {
+            cmd(&mut p, 0, 0x21 + i as u8, &lut(&[flip, *l]));
+        }
+        cmd(&mut p, 0, 0x50, &[0xa9, 0x07]);
+        cmd(&mut p, 0, 0x04, &[]);
+        // Pixels 0..3 of the first row get (old, new) = 00, 01, 10, 11.
+        let mut old = vec![0u8; w / 8 * h];
+        let mut new = old.clone();
+        old[0] = 0b0011_0000;
+        new[0] = 0b0101_0000;
+        cmd(&mut p, 0, 0x10, &old);
+        cmd(&mut p, 0, 0x13, &new);
+        cmd(&mut p, 0, 0x12, &[0x00]);
         p.update(60_000 * MS);
         let f = p.frame.lock();
         let mut levels: Vec<u8> = f.pixels[..4].to_vec();
