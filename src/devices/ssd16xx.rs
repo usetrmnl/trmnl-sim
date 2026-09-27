@@ -546,6 +546,11 @@ impl Ssd16xx {
         }
         if bit(2) {
             t = self.start_refresh(t);
+            if bit(3) {
+                // Display mode 2 keeps the RED RAM as "the image on screen" for the next
+                // differential update: the new image replaces it.
+                self.red.copy_from_slice(&self.bw);
+            }
         }
         if bit(1) {
             t += 5 * MS;
