@@ -20,6 +20,11 @@ CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].On
 X4_BATTERY = ("device_list[] (display.cpp:51) gives the X4 batt_pin 0xff though its divider is on GPIO0 "
               "(config.h:117), so it always reports 0 V")
 
+# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
+                  "for a new press forever (no timeout): a button wake never reaches the server")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "RefreshCycle.test_image_is_rendered_exactly": SSD_BMP,
@@ -29,6 +34,17 @@ KNOWN_FAILURES = {
     "CrowPanel42": {
         "RefreshCycle.test_image_is_rendered_exactly": CROWPANEL_PNG,
         "RefreshCycle.test_timer_wake_fetches_next_image": CROWPANEL_PNG,
+    },
+    "TRMNL_4inch26_DIY_Kit": {
+        "RefreshCycle.test_image_is_rendered_exactly": SSD_BMP,
+        "RefreshCycle.test_timer_wake_fetches_next_image": SSD_BMP,
+    },
+    "seeed_sticky": {
+        "RefreshCycle.test_image_is_rendered_exactly": SSD_BMP,
+        "RefreshCycle.test_timer_wake_fetches_next_image": SSD_BMP,
+    },
+    "seeed_xiao_esp32c3": {
+        "RefreshCycle.test_button_press_wakes_and_refreshes": XIAO_C3_BUTTON,
     },
 }
 

@@ -30,6 +30,11 @@ SLOW_BOOT_CLICK = ("button.cpp:84-92: a first click still held when classify_but
 # test_sleep_keeps_the_screen): BMPs aren't cached under their filename.
 BMP_NOT_CACHED = ("sleep: status=false/HTTPS_SUCCESS takes the cached-image path (bl.cpp:1478), but BMPs are only "
                   "saved as /current.bmp: \"Cached image is empty or unreadable\", an error log and message")
+# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
+                  "for a new press forever (no timeout): a button wake never reaches the server")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
@@ -45,6 +50,39 @@ KNOWN_FAILURES = {
     },
     "seeed_reTerminal_E1002": {
         "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_xiao_esp32s3": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit_3CLR": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit_6CLR": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "TRMNL_4inch26_DIY_Kit": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+        "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "seeed_reTerminal_E1001": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
+    "seeed_sticky": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+        "SpecialFunctions.test_identify_shows_the_identify_image": SSD_BMP,
+        "SpecialFunctions.test_restart_playlist_shows_the_first_item": SSD_BMP,
+        "SpecialFunctions.test_guest_mode_shows_the_guest_image_for_its_refresh_rate": SSD_BMP,
+    },
+    "seeed_xiao_esp32c3": {
+        "SpecialFunctions": XIAO_C3_BUTTON,
+        "Identify": XIAO_C3_BUTTON,
+        "Buttons.test_double_click_runs_the_special_function": XIAO_C3_BUTTON,
+        "Buttons.test_short_tap_is_a_plain_button_wake": XIAO_C3_BUTTON,
     },
 }
 for _d in DEVICES.values():

@@ -20,12 +20,22 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 # sleeps.
 C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the clock, with no timeout; "
                   "unreachable NTP (this static IP's subnet) keeps the device awake forever")
+# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
+                  "for a new press forever (no timeout): a button wake never reaches the server")
 KNOWN_FAILURES = {
-    env: {
+    **{env: {
         "JoinOptions.test_static_ip": C5_NTP_FOREVER,
         "JoinOptions.test_static_ip_with_defaults": C5_NTP_FOREVER,
-    }
-    for env in ("trmnl_gen2", "trmnl_gen2_4clr")
+    } for env in ("trmnl_gen2", "trmnl_gen2_4clr")},
+    "seeed_xiao_esp32c3": {
+        # add_network() wakes it with a press
+        "SavedNetworks.test_second_network_is_used_when_the_first_is_gone": XIAO_C3_BUTTON,
+        "SavedNetworks.test_joining_a_saved_network_again_is_not_saved_twice": XIAO_C3_BUTTON,
+        "SavedNetworks.test_portal_lists_saved_networks_out_of_range": XIAO_C3_BUTTON,
+    },
 }
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker

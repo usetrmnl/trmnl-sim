@@ -22,6 +22,11 @@ SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image
 CROWPANEL_PNG = ("CrowPanel: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) (display.cpp:1764) with the "
                  "bb_epaper product number the panel was begun with, selecting a 2.9\" 128x296 panel: 1-bit PNGs "
                  "never show (see test_byod_ssd.CrowPanel42)")
+# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
+                  "for a new press forever (no timeout): a button wake never reaches the server")
 KNOWN_FAILURES = {
     "xteink_x4": {
         "SavePoints.test_timer_wake_refreshes_without_onboarding": SSD_BMP,
@@ -30,6 +35,17 @@ KNOWN_FAILURES = {
     "CrowPanel42": {
         "SavePoints.test_timer_wake_refreshes_without_onboarding": CROWPANEL_PNG,
         "SavePoints.test_in_memory_slot_goes_back_in_time": CROWPANEL_PNG,
+    },
+    "TRMNL_4inch26_DIY_Kit": {
+        "SavePoints.test_timer_wake_refreshes_without_onboarding": SSD_BMP,
+        "SavePoints.test_in_memory_slot_goes_back_in_time": SSD_BMP,
+    },
+    "seeed_sticky": {
+        "SavePoints.test_timer_wake_refreshes_without_onboarding": SSD_BMP,
+        "SavePoints.test_in_memory_slot_goes_back_in_time": SSD_BMP,
+    },
+    "seeed_xiao_esp32c3": {
+        "SavePoints.test_button_wakes_a_restored_device": XIAO_C3_BUTTON,
     },
 }
 

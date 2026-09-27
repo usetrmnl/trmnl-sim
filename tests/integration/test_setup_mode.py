@@ -24,6 +24,11 @@ PARALLEL_SMALL_PANEL = ("display_show_msg() uses the TRMNL X's Inter_18 font and
 C5_AP_NAME = ("WifiCaptive.cpp:27-30 takes the AP name from bytes 3-5 of the C5's EUI-64 factory MAC (FF FE + one "
               "NIC byte): every gen-2 device's setup network is TRMNL-FFFExx instead of the MAC's last three bytes")
 
+# Firmware bug on the XIAO ESP32-C3: bl_init() waits 2 s (bl.cpp:731-733) before it reads the
+# button, so a wake press is over by then, and classify_button_presses() (button.cpp:66-71)
+# then waits for another press with no timeout: the device stays awake until pressed again.
+XIAO_C3_BUTTON = ("XIAO C3: after bl.cpp:731-733's 2 s delay the wake press is over, and button.cpp:66-71 waits "
+                  "for a new press forever (no timeout): a button wake never reaches the server")
 KNOWN_FAILURES: dict[str, dict[str, str]] = {
     "CrowPanel42": {
         "FreshDevice.test_setup_screen": SMALL_PANEL,
@@ -46,6 +51,9 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
     "trmnl_gen2_4clr": {
         "FreshDevice.test_setup_screen": C5_AP_NAME,
         "FreshDevice.test_setup_screen_names_the_access_point": C5_AP_NAME,
+    },
+    "seeed_xiao_esp32c3": {
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps": XIAO_C3_BUTTON,
     },
 }
 
