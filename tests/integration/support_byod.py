@@ -43,7 +43,8 @@ class ByodBoard:
         build = build_of(cls.ENV)
         if not (build / "firmware.elf").exists():
             raise unittest.SkipTest(f"no {cls.ENV} build at {build} (pio run -e {cls.ENV})")
-        cls.dev = ProvisionedDevice(build)
+        # Panels of other sizes get a default image of their size (see ProvisionedDevice).
+        cls.dev = ProvisionedDevice(build, panel_size=None if cls.SIZE == (800, 480) else cls.SIZE)
 
     @classmethod
     def tearDownClass(cls):

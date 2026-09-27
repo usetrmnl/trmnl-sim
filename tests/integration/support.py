@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-from trmnl_mock import MockTrmnl, big_number  # noqa: E402
+from trmnl_mock import MockTrmnl, big_number, png_image  # noqa: E402
 from trmnl_sim import Simulator  # noqa: E402
 
 import setup_cache  # noqa: E402
@@ -128,18 +128,31 @@ class ProvisionedDevice:
     SIM_ARGS: tuple[str, ...] = ("--offline",)
     DEVICE_HOST = "10.0.2.2"
 
-    def __init__(self, build: Path = BUILD):
+    def __init__(self, build: Path = BUILD, panel_size: tuple[int, int] | None = None):
+        """`panel_size`: serve the default image as a 1-bit PNG of that size (as the TRMNL
+        server does for other panels) instead of the OG's 800x480 BMP."""
         self.build = build
+        self.panel_size = panel_size
         inputs = {"build": setup_cache.build_id(build), "memcheck": MEMCHECK, "turbo": TURBO, "args": self.SIM_ARGS, "host": self.DEVICE_HOST}
+        if panel_size:
+            inputs["panel_size"] = list(panel_size)
         self.cache, meta = setup_cache.entry(f"{self.NAME}-{build.name}", inputs, self._onboard)
         self.mock = MockTrmnl()
+        self._panel_default(self.mock)
         self.mock.device_host = self.DEVICE_HOST
         self.mock.display = {"image": "default", "refresh_rate": 300}
         self.host_ports = {meta["port"]: self.mock.port}
         self.dir = Path(tempfile.mkdtemp(prefix="trmnl-provisioned-"))
 
+    def _panel_default(self, mock: MockTrmnl) -> None:
+        if self.panel_size:
+            w, h = self.panel_size
+            number = big_number("0")
+            mock.images["default.png"] = png_image(lambda x, y: 0 if number(x, y) else 1, w, h, bits=1)
+
     def _onboard(self, out: Path) -> dict:
         with MockTrmnl() as mock:
+            self._panel_default(mock)
             mock.device_host = self.DEVICE_HOST
             mock.display = {"image": "default", "refresh_rate": 300}
             with sim(self.build, flash=out / "flash.bin", erase=True, extra_args=self.SIM_ARGS, name=f"{self.NAME}-setup") as s:
