@@ -87,6 +87,7 @@ def expected_gray(level: Callable[[int, int], int], width: int, height: int, bit
 
 
 BWRY_RGB = {"black": (0, 0, 0), "white": (255, 255, 255), "yellow": (255, 255, 0), "red": (255, 0, 0)}
+SPECTRA6_RGB = {**BWRY_RGB, "blue": (0, 0, 255), "green": (0, 255, 0)}
 
 
 def png_rgb(color: Callable[[int, int], tuple], width: int = 800, height: int = 480) -> bytes:
@@ -96,17 +97,19 @@ def png_rgb(color: Callable[[int, int], tuple], width: int = 800, height: int = 
 
 
 def png_palette(color: Callable[[int, int], tuple], palette: list, width: int = 800, height: int = 480) -> bytes:
-    """A 2-bit indexed PNG (as TRMNL serves color images); `color(x, y)` must return one
-    of the `palette` colors (up to 4)."""
+    """An indexed PNG (as TRMNL serves color images), 2 bits per pixel for up to 4 colors,
+    else 4; `color(x, y)` must return one of the `palette` colors."""
     index = {c: i for i, c in enumerate(palette)}
+    bits = 2 if len(palette) <= 4 else 4
+    per_byte = 8 // bits
     rows = []
     for y in range(height):
-        row = bytearray((width + 3) // 4)
+        row = bytearray((width + per_byte - 1) // per_byte)
         for x in range(width):
-            row[x // 4] |= index[tuple(color(x, y))] << (6 - 2 * (x % 4))
+            row[x // per_byte] |= index[tuple(color(x, y))] << (8 - bits * (x % per_byte + 1))
         rows.append(b"\x00" + bytes(row))
     plte = b"".join(bytes(c) for c in palette)
-    ihdr = struct.pack(">IIBBBBB", width, height, 2, 3, 0, 0, 0)
+    ihdr = struct.pack(">IIBBBBB", width, height, bits, 3, 0, 0, 0)
 
     def chunk(tag: bytes, body: bytes) -> bytes:
         return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
@@ -135,6 +138,32 @@ def expected_bwry(color: Callable[[int, int], tuple], width: int = 800, height: 
         b"\x00" + bytes(c for x in range(width) for c in bwry_quantize(*color(x, y))) for y in range(height)
     )
     return _png(struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0), raw)
+
+
+def spectra6_quantize(r: int, g: int, b: int) -> tuple:
+    """The Spectra 6 firmware's color reduction (GetSpectraPixel in display.cpp): the
+    nearest of its reference inks to the color's RGB333 value."""
+    inks = [(0, 0, 0), (192, 192, 192), (192, 192, 0), (192, 0, 0), (0, 0, 192), (0, 192, 0)]
+    r, g, b = (r >> 5) * 36, (g >> 5) * 36, (b >> 5) * 36
+    dist = [(r - i[0]) ** 2 + (g - i[1]) ** 2 + (b - i[2]) ** 2 for i in inks]
+    return list(SPECTRA6_RGB.values())[dist.index(min(dist))]
+
+
+def expected_spectra6(color: Callable[[int, int], tuple], width: int = 800, height: int = 480) -> bytes:
+    """The RGB PNG a simulator screenshot of an image of `color` on a Spectra 6 panel
+    (reTerminal E1002) should match."""
+    raw = b"".join(
+        b"\x00" + bytes(c for x in range(width) for c in spectra6_quantize(*color(x, y))) for y in range(height)
+    )
+    return _png(struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0), raw)
+
+
+def spectra_bars(x: int, y: int) -> tuple:
+    """Vertical bars of the six Spectra 6 inks, with a blue/green checker band in the middle."""
+    names = list(SPECTRA6_RGB)
+    if 200 <= y < 280:
+        return SPECTRA6_RGB[names[4 + (x // 40 + y // 40) % 2]]
+    return SPECTRA6_RGB[names[min(5, x * 6 // 800)]]
 
 
 def color_bars(x: int, y: int) -> tuple:
@@ -391,6 +420,16 @@ class MockTrmnl:
         self.images[name + ".png"] = png_palette(lambda x, y: bwry_quantize(*color(x, y)), palette, width, height)
         self._stamp(name)
         return expected_bwry(color, width, height)
+
+    def set_spectra6_png(self, name: str, color: Callable[[int, int], tuple], width: int = 800,
+                         height: int = 480) -> bytes:
+        """Register a color image for a Spectra 6 panel (reTerminal E1002), reduced to its
+        six inks and served as a 4-bit palette PNG. Returns the RGB PNG a screenshot should
+        match."""
+        palette = list(SPECTRA6_RGB.values())
+        self.images[name + ".png"] = png_palette(lambda x, y: spectra6_quantize(*color(x, y)), palette, width, height)
+        self._stamp(name)
+        return expected_spectra6(color, width, height)
 
     def set_fault(self, path: str, *, status: Optional[int] = None, body: Optional[str | bytes] = None,
                   content_type: Optional[str] = None, delay: float = 0, hang: bool = False,

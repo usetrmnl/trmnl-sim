@@ -448,6 +448,9 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
         ("esp_wifi_get_channel", get_channel),
         ("esp_wifi_internal_reg_rxcb", reg_rxcb),
         ("esp_wifi_internal_tx", internal_tx),
+        // Zero-copy variant (Arduino's prebuilt IDF 4.4 for the S3): the extra netstack
+        // buffer only needs a reference when the driver queues the frame; we copy it now.
+        ("esp_wifi_internal_tx_by_ref", internal_tx),
         ("esp_wifi_internal_free_rx_buffer", free_rx_buffer),
     ];
     for (name, f) in real {

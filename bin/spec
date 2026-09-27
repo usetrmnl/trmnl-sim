@@ -7,8 +7,8 @@
 #   bin/spec test_trmnl_x         # a module, class or test (unittest selectors)
 #   bin/spec test_refresh_cycle.RefreshCycle.test_long_press_resets_wifi
 #
-# Uses ../trmnl-firmware/.pio/build/{trmnl,trmnl_4clr,TRMNL_X} (TRMNL_FIRMWARE=<checkout>
-# to use another one); the X and BWRY tests skip themselves when their build is missing.
+# Uses ../trmnl-firmware/.pio/build/{trmnl,trmnl_4clr,TRMNL_X,seeed_reTerminal_E1002} (TRMNL_FIRMWARE=<checkout>
+# to use another one); the X, BWRY and E1002 tests skip themselves when their build is missing.
 # Onboarded devices etc. are cached in target/spec-cache/, keyed by the firmware, the
 # simulator and the test support code, so they are rebuilt whenever one changes.
 # The firmware is not built here. See scripts/integration-tests.sh for more variables.

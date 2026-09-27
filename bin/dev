@@ -4,6 +4,7 @@
 #   bin/dev                 # TRMNL OG   (<firmware>/.pio/build/trmnl)
 #   bin/dev bwry            # TRMNL BWRY (<firmware>/.pio/build/trmnl_4clr)
 #   bin/dev x               # TRMNL X    (<firmware>/.pio/build/TRMNL_X)
+#   bin/dev e1002           # Seeed reTerminal E1002 (<firmware>/.pio/build/seeed_reTerminal_E1002)
 #   bin/dev path/to/build   # any PlatformIO build directory
 #   bin/dev x --erase       # arguments after the device go to trmnl-sim (see --help)
 #
@@ -20,6 +21,7 @@ case "$target" in
   og | trmnl) env=trmnl ;;
   bwry | 4clr | trmnl_4clr) env=trmnl_4clr ;;
   x | trmnl_x | TRMNL_X) env=TRMNL_X ;;
+  e1002 | seeed_reTerminal_E1002) env=seeed_reTerminal_E1002 ;;
   -h | --help)
     awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
     exit 0

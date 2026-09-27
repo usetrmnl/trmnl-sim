@@ -14,12 +14,13 @@ Supported devices, picked automatically from the build:
 | `trmnl` | TRMNL OG | ESP32-C3 (RISC-V) | 7.5" 800×480, UC8179 over SPI | button |
 | `trmnl_4clr` | TRMNL BWRY | ESP32-C3 (RISC-V) | 7.5" 800×480 black/white/yellow/red (GDEM075F52) | button |
 | `TRMNL_X` | TRMNL X | ESP32-S3 (dual-core Xtensa LX7) + ESP32-C5 modem | 10.3" 1872×1404 parallel panel, 16 grays | touch bar (left/center/right), magnetic dock |
+| `seeed_reTerminal_E1002` | Seeed reTerminal E1002 | ESP32-S3 (XIAO, 8 MB octal PSRAM) | 7.3" 800×480 Spectra 6: black/white/yellow/red/blue/green (GDEP073E01) over SPI | button |
 
 ![setup screen as rendered by the simulator](tests/integration/golden/setup_screen.png)
 
 ## What is simulated
 
-Common to both devices:
+Common to all devices:
 
 | Part | How |
 |---|---|
@@ -41,12 +42,23 @@ panel; detected from the firmware):
 | Button | GPIO2 with pull-up: presses, holds, double-clicks, and deep-sleep GPIO wake |
 | Battery | ADC on GPIO3 behind the ½ divider; settable voltage |
 
+**Seeed reTerminal E1002** (`seeed_reTerminal_E1002`; an ESP32-S3 build that drives an SPI
+panel through bb_epaper): the ESP32-S3 below with the SPI e-paper board above, wired as the
+firmware's `reterminal_e1002` row (SCK 7, MOSI 9, CS 10, RST 12, DC 11, BUSY 13).
+
+| Part | How |
+|---|---|
+| Display | The UC81xx model with one 4 bit/pixel image (`DTM1`, codes 0/1/2/3/5/6) and a ~19 s built-in refresh: flashes through the six colors (every 100 ms for 12 s), then the image in exact black/white/yellow/red/blue/green. **Refresh flashing** turns the flashes off |
+| Button | GPIO3 with pull-up, as on the OG |
+| Battery | ADC on GPIO1 behind the ½ divider, connected only while the firmware drives GPIO21 high |
+| Firmware | Arduino 2.0.17 on prebuilt ESP-IDF 4.4 libraries (unlike the X's IDF 5.5): PSRAM, the WiFi glue's zero-copy transmit and the setup portal all work |
+
 **TRMNL X** (`TRMNL_X`):
 
 | Part | How |
 |---|---|
 | CPU | Two Xtensa LX7 cores (windowed ABI, FPU, MAC16, loops, atomics) in lockstep at the firmware's CPU clock; idle cores sleep until an interrupt |
-| Peripherals | ESP32-S3 memory map with 16 MB flash and 8 MB octal PSRAM behind the cache MMU, interrupt matrix, SYSTIMER, GPIO (49 pins), UART0 with a 128-byte RX FIFO and flow control, USB serial/JTAG console, I2C, LCD_CAM i80 + GDMA, SHA/AES/RSA, eFuse, RTC |
+| Peripherals | ESP32-S3 memory map with 16 MB flash and 8 MB octal PSRAM behind the cache MMU, interrupt matrix, SYSTIMER, GPIO (49 pins), UART0 with a 128-byte RX FIFO and flow control, USB serial/JTAG console, I2C, GPSPI2, LCD_CAM i80 + GDMA, SHA/AES/RSA, eFuse, RTC |
 | Display | EPDiy-style 1872×1404 panel: the firmware (FastEPD) clocks rows over the LCD_CAM 16-bit bus and drives SPV/CKV/LE on GPIOs; the TPS65185 PMIC supplies the rails. The panel model applies the per-frame drive to each pixel, so 1-bit and 16-gray images come out as the firmware drew them |
 | Touch bar | IQS323 capacitive controller on I2C: left, center and right taps and holds (several fingers at once), with RDY as the deep-sleep (EXT0) wake source. The wake stub's bit-banged I2C read of the touch state works too |
 | Dock | Placing the device on its magnetic dock powers USB and the charger: TCA9535 expander inputs (charger power-good and status), the fuel gauge's charging flag, and the `USB-Connected` / `Battery-Charging` request headers. Docking wakes a device in shipment mode |
@@ -55,8 +67,8 @@ panel; detected from the firmware):
 ## Requirements
 
 - Rust (stable, 1.85+).
-- A PlatformIO build of the firmware: `pio run -e trmnl`, `-e trmnl_4clr` and/or
-  `-e TRMNL_X` in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
+- A PlatformIO build of the firmware: `pio run -e trmnl`, `-e trmnl_4clr`, `-e TRMNL_X`
+  and/or `-e seeed_reTerminal_E1002` in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
   and the modem firmware); its post-build script downloads it into the build dir.
 - The ESP32-C3 / ESP32-S3 ROM ELFs from PlatformIO's `tool-esp-rom-elfs` package.
   They are usually already installed; if not, run
@@ -82,6 +94,7 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl     # TRMNL OG
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr  # TRMNL BWRY
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X   # TRMNL X
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002  # reTerminal E1002
 ```
 
 The window shows the device. On the OG, click and hold the button on screen, or hold
@@ -265,7 +278,7 @@ is refused too; try again when it is idle.
 
 ```sh
 scripts/integration-tests.sh                  # build the sim, run the whole suite
-scripts/integration-tests.sh --build-firmware # also `pio run -e trmnl -e trmnl_4clr -e TRMNL_X` first
+scripts/integration-tests.sh --build-firmware # also `pio run` for the tested envs first
 scripts/integration-tests.sh test_refresh_cycle.RefreshCycle.test_button_press_wakes_and_refreshes
 scripts/integration-tests.sh test_trmnl_x     # only the TRMNL X tests
 ```
@@ -292,6 +305,12 @@ For the TRMNL BWRY ([test_trmnl_bwry.py](tests/integration/test_trmnl_bwry.py); 
 there is no `trmnl_4clr` build): the device identity (`Model: og_4clr`), a 4-color image
 rendered exactly (compared as RGB), the panel's long refresh, and a save point keeping the
 color image.
+
+For the Seeed reTerminal E1002 ([test_reterminal_e1002.py](tests/integration/test_reterminal_e1002.py);
+skipped if there is no `seeed_reTerminal_E1002` build): the setup screen (the OG's
+goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switched battery
+divider, palette and truecolor PNGs reduced to the six inks exactly as the firmware does,
+the long refresh, button wake, and a save point keeping the color image.
 
 For the TRMNL X ([test_trmnl_x.py](tests/integration/test_trmnl_x.py); skipped if there is
 no `TRMNL_X` build):
@@ -320,6 +339,7 @@ unresponsive modem.
 | `TRMNL_FIRMWARE_BUILD` | TRMNL OG build dir (default `../trmnl-firmware/.pio/build/trmnl`) |
 | `TRMNL_BWRY_BUILD` | TRMNL BWRY build dir (default `../trmnl-firmware/.pio/build/trmnl_4clr`) |
 | `TRMNL_X_BUILD` | TRMNL X build dir (default `../trmnl-firmware/.pio/build/TRMNL_X`) |
+| `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
@@ -337,7 +357,7 @@ Two standard-library Python modules live in [python/](python):
 - **`trmnl_mock.MockTrmnl`** is a fake TRMNL API server. It serves `/api/setup`,
   `/api/display`, `/api/log`, images and firmware files, and records every request.
   It also generates BMP images (OG), 1/2/4/8-bit gray PNGs (`set_png`, X) and 4-color
-  palette PNGs (`set_color_png`, BWRY; like the TRMNL server, colors are reduced to the
+  palette PNGs (`set_color_png`, BWRY; `set_spectra6_png`, 4-bit, reTerminal E1002; like the TRMNL server, colors are reduced to the
   panel's four first, since the OG-family PNG decoder can't take 800 px truecolor rows), with
   server-style `plugin-<id>-<timestamp>` filenames the X uses for its image cache, and
   returns the PNG you should expect on screen. Request header lookups are
