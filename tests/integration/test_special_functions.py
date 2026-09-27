@@ -109,6 +109,9 @@ KNOWN_FAILURES = {
     "m5_paper_mono": {
         "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
     },
+    "seeed_reTerminal_E1004": {
+        "Buttons.test_double_click_runs_the_special_function": SLOW_BOOT_CLICK,
+    },
 }
 for _d in DEVICES.values():
     if _d.default_bmp:
