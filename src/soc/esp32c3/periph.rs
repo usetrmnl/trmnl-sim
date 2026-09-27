@@ -20,6 +20,7 @@ pub mod src {
     pub const AES: usize = 48;
     pub const SHA: usize = 49;
     pub const FROM_CPU0: usize = 50;
+    pub const USB_DEVICE: usize = 26;
 }
 
 const UART0: u32 = 0x6000_0000;
@@ -156,6 +157,8 @@ pub struct Periph {
     /// Merges UART0 and USB serial/JTAG output into `uart_out` (see [`Console`]).
     console: Console,
     uart_raw: [u32; 2],
+    usb_raw: u32,
+    usb_last_sof: u64,
     pub reset_request: Option<ResetRequest>,
     pub reset_reason: ResetReason,
     pub wakeup_cause: u32,
@@ -188,6 +191,8 @@ impl Periph {
             uart_out: Vec::new(),
             console: Console::default(),
             uart_raw: [0; 2],
+            usb_raw: 0,
+            usb_last_sof: 0,
             reset_request: None,
             reset_reason: ResetReason::PowerOn,
             wakeup_cause: 0,
@@ -239,6 +244,7 @@ impl Periph {
         self.gpio_oe = 0;
         self.gpio_status = 0;
         self.uart_raw = [0; 2];
+        self.usb_raw = 0;
         self.reset_request = None;
         // Default register values that software relies on
         self.store_set(SYSTEM + 0x58, 1); // SYSCLK_CONF: XTAL, div 1 -> 40 MHz
@@ -379,7 +385,9 @@ impl C3Bus {
 
             // ---- USB serial/JTAG: always ready ----
             _ if a == USB_JTAG + 0x04 => stored & !1 | 2,
-            _ if a == USB_JTAG + 0x08 => stored | 1 << 1 | 1 << 3, // int raw: in empty
+            _ if a == USB_JTAG + 0x08 => self.usb_raw(),
+            _ if a == USB_JTAG + 0x0C => self.usb_raw() & self.p.store_get(USB_JTAG + 0x10),
+            _ if a == USB_JTAG + 0x24 => ((self.clock.ns() / 1_000_000) & 0x7ff) as u32, // SOF frame number
 
             // ---- SYSTEM ----
             _ if a == SYSTEM + 0x48 => stored | 1 << 31, // RTC mem CRC finished
@@ -425,6 +433,11 @@ impl C3Bus {
             }
             // USB serial/JTAG EP1: the console of builds with USB CDC on boot (XIAO ESP32-C3)
             _ if a == USB_JTAG => self.p.console.push(1, v as u8, &mut self.p.uart_out),
+            _ if a == USB_JTAG + 0x14 => {
+                self.p.usb_raw &= !v;
+                self.irq_dirty = true;
+            }
+            _ if a == USB_JTAG + 0x10 => self.irq_dirty = true,
             _ if a == UART0 + 0x10 || a == UART1 + 0x10 => {
                 let u = (a == UART1 + 0x10) as usize;
                 self.p.uart_raw[u] &= !v;
@@ -600,7 +613,24 @@ impl C3Bus {
             set(src::DMA_CH0 + ch as usize, st != 0);
         }
         set(src::I2C_EXT0, self.p.i2c.raw & self.p.store_get(I2C0 + 0x28) != 0);
+        set(src::USB_DEVICE, self.usb_raw() & self.p.store_get(USB_JTAG + 0x10) != 0);
         self.p.intc.sources = s;
+    }
+
+    /// A USB host is attached: start-of-frame every millisecond (as on the S3: Arduino's
+    /// HWCDC only drains its console buffer from the USB interrupt).
+    pub fn usb_sof(&mut self, now: u64) {
+        let frame = now / 1_000_000;
+        if frame != self.p.usb_last_sof {
+            self.p.usb_last_sof = frame;
+            self.p.usb_raw |= 1 << 1;
+            self.irq_dirty = true;
+        }
+    }
+
+    fn usb_raw(&self) -> u32 {
+        // SERIAL_IN_EMPTY (bit 3): the IN FIFO is always drained immediately.
+        self.p.usb_raw | 1 << 3
     }
 
     // ---- clocks ------------------------------------------------------------------------------

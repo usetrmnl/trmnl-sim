@@ -336,6 +336,7 @@ impl Esp32c3 {
         self.bus.systimer_update(now);
         self.bus.board.update(now);
         self.bus.gpio_sample(now);
+        self.bus.usb_sof(now);
         let mut next = now + SERVICE_NS;
         if let Some(t) = self.bus.systimer_next_ns(now) {
             next = next.min(t);
