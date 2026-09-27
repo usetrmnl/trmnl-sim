@@ -474,6 +474,15 @@ no `TRMNL_X` build):
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
   refreshing over 5 GHz.
 
+`bin/spec TRMNL_X` also runs the general tests on the X (onboarded on 2.4 GHz). Their
+factory-fresh device is an *unboxed* X (shipped, then docked once: it restarted into the
+setup portal; `support_x.unboxed`), and their button presses are its touch bar gestures
+(`support_x.XSim`): a short press is a tap in the middle, a 5 s press the WiFi reset (both
+edges, then a middle hold). The OG's double click and 15 s press have no equivalent there,
+so those tests are skipped (`@needs("double_click")`, `@needs("soft_reset_press")`), as is
+what the X doesn't have (factory QA, sensors, Panel-Rev). Its goldens are in
+[golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`support.golden`).
+
 Fault injection ([test_faults.py](tests/integration/test_faults.py) on the OG,
 [test_faults_x.py](tests/integration/test_faults_x.py) on the X): HTTP 500 and malformed
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
