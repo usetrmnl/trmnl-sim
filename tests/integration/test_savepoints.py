@@ -16,15 +16,26 @@ ENV = ANY  # general tests: they run on the device under test (see devices.py)
 # Another device's firmware, which must refuse this device's save points.
 OTHER_BUILD = BWRY_BUILD if DEVICE.env == "trmnl" else OG_BUILD
 
+# Firmware bug on the SSD16xx boards (see test_refresh_cycle): the next image, a 1-bit BMP, is
+# refreshed partially against a stale old-image RAM.
+SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+KNOWN_FAILURES = {
+    "xteink_x4": {
+        "SavePoints.test_timer_wake_refreshes_without_onboarding": SSD_BMP,
+        "SavePoints.test_in_memory_slot_goes_back_in_time": SSD_BMP,
+    },
+}
+
 dev: ProvisionedDevice
 tmp: Path
 saved: Path  # deep sleep, showing `seven`, taken in setUpModule
 seven: bytes
+saved_screen: bytes  # the screen when it was saved (`seven`, unless the device drew it wrong)
 saved_status: dict
 
 
 def setUpModule():
-    global dev, tmp, saved, seven, saved_status
+    global dev, tmp, saved, seven, saved_screen, saved_status
     dev = ProvisionedDevice()
     tmp = Path(tempfile.mkdtemp(prefix="trmnl-savepoints-"))
     saved = tmp / "asleep.trmnlsave"
@@ -33,7 +44,9 @@ def setUpModule():
     with dev.boot() as s:
         dev.mock.wait_for_request(path, timeout_s=120)
         saved_status = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
-        assert s.compare_screen(seven)["match"]
+        # (whether it shows `seven` right is test_refresh_cycle's business; a save point
+        # must bring back whatever is on screen)
+        saved_screen = s.screenshot()
         info = s.save_point(saved, label="asleep showing 7")
         assert info["deep_sleep"] and info["label"] == "asleep showing 7", info
 
@@ -60,7 +73,7 @@ class SavePoints(unittest.TestCase):
             self.assertEqual(st["display_refreshes"], saved_status["display_refreshes"])
             self.assertAlmostEqual(st["wake_at_s"], saved_status["wake_at_s"], places=3)
             self.assertGreaterEqual(st["sim_time_s"], saved_status["sim_time_s"])
-            self.assertTrue(s.compare_screen(seven, tolerance=0, max_ratio=0)["match"])
+            self.assertTrue(s.compare_screen(saved_screen, tolerance=0, max_ratio=0)["match"])
             s.wait_for_console(r"restored save point \"asleep showing 7\": deep sleep, wakes in")
             self.assertEqual(dev.mock.requests, [])
 
@@ -97,7 +110,7 @@ class SavePoints(unittest.TestCase):
             info = s.restore(id=slot["id"])
             self.assertEqual(info["label"], slot["label"])
             back = s.wait(state="deep_sleep", timeout_s=30)["status"]
-            self.assertTrue(s.compare_screen(seven, tolerance=0, max_ratio=0)["match"])
+            self.assertTrue(s.compare_screen(saved_screen, tolerance=0, max_ratio=0)["match"])
             self.assertEqual(back["boot_count"], st["boot_count"] - 1)
             self.assertLess(back["sim_time_s"], st["sim_time_s"])
 

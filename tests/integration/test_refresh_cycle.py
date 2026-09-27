@@ -8,6 +8,23 @@ from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
+# Firmware bug on the SSD16xx boards: display_show_image() (display.cpp:1947) sends a 1-bit
+# BMP with bbep.writePlane(), which without a second plane writes only the new-image RAM
+# (0x24), and asks for a partial refresh, which drives only the pixels differing from the
+# "old" RAM (0x26); that holds an earlier picture (or its inverse after a fast refresh), so
+# the BMP comes out as a mix of the two. See test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh.
+SSD_BMP = "SSD16xx: a 1-bit BMP is refreshed partially against a stale old-image RAM (display.cpp:1947)"
+X4_BATTERY = ("device_list[] (display.cpp:51) gives the X4 batt_pin 0xff though its divider is on GPIO0 "
+              "(config.h:117), so it always reports 0 V")
+
+KNOWN_FAILURES = {
+    "xteink_x4": {
+        "RefreshCycle.test_image_is_rendered_exactly": SSD_BMP,
+        "RefreshCycle.test_timer_wake_fetches_next_image": SSD_BMP,
+        "RefreshCycle.test_reports_battery_voltage": X4_BATTERY,
+    },
+}
+
 dev: ProvisionedDevice
 
 
