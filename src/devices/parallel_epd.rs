@@ -115,6 +115,9 @@ pub struct PanelGeometry {
 impl PanelGeometry {
     /// FastEPD `BB_PANEL_TRMNL_X`: 1872x1404, MIRROR_X, 16-bit bus, 44 bytes padding.
     pub const TRMNL_X: PanelGeometry = PanelGeometry { width: 1872, height: 1404, mirror_x: true, row_bytes: 468 };
+    /// FastEPD `BBEP_DISPLAY_ED047TC1` (4.7", on `BB_PANEL_M5PAPERS3` / `BB_PANEL_EPDIY_V7`):
+    /// 960x540, no mirroring, 8-bit bus, 16 bytes padding.
+    pub const ED047TC1: PanelGeometry = PanelGeometry { width: 960, height: 540, mirror_x: false, row_bytes: 240 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
