@@ -195,7 +195,11 @@ impl Esp32c5 {
 
     /// Turn on `--memcheck` and restart from power-on (so the heap is followed from the start).
     pub fn enable_memcheck(&mut self, mode: memcheck::Mode, suppressions: Vec<String>) {
-        self.bus.mc = Some(Box::new(Memcheck::new(mode, &[(bus::SRAM_BASE, bus::SRAM_SIZE as u32, None)])));
+        // SRAM, and the 32 MB cache window PSRAM is mapped into
+        self.bus.mc = Some(Box::new(Memcheck::new(
+            mode,
+            &[(bus::SRAM_BASE, bus::SRAM_SIZE as u32, None), (bus::EXT_BASE, 0x200_0000, None)],
+        )));
         if let Some(mc) = self.bus.mc.as_deref_mut() {
             mc.suppressions = suppressions;
         }

@@ -299,8 +299,10 @@ pub struct Memcheck {
     next_stack_scan: u64,
 }
 
+/// 0: internal RAM, 1: PSRAM (the S3's data-bus window, the C5's cache window: no heap
+/// lives in flash-mapped memory, so a heap block there is in PSRAM).
 fn region(addr: u32) -> usize {
-    matches!(addr >> 24, 0x3C | 0x3D) as usize
+    matches!(addr >> 24, 0x3C | 0x3D | 0x42 | 0x43) as usize
 }
 
 fn round4(n: u32) -> u32 {
