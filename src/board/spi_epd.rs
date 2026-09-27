@@ -402,8 +402,11 @@ mod tests {
 
     #[test]
     fn every_model_and_env_is_listed_once() {
-        let mut names: Vec<&str> =
-            SPECS.iter().flat_map(|s| std::iter::once(s.model).chain(s.envs.iter().copied())).collect();
+        // A model may share its name with the environment that builds it (xteink_x3).
+        let mut names: Vec<&str> = SPECS
+            .iter()
+            .flat_map(|s| std::iter::once(s.model).chain(s.envs.iter().copied().filter(|e| *e != s.model)))
+            .collect();
         let n = names.len();
         names.sort();
         names.dedup();
