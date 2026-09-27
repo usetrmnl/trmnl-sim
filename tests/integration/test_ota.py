@@ -1,9 +1,9 @@
-"""Firmware updates that go wrong: no URL, the download failing or cut short, a file that
-isn't firmware, and (TRMNL X) updates through the 5 GHz modem."""
+"""Firmware updates that go wrong on the device under test: no URL, the download failing or
+cut short, a file that isn't firmware; and (TRMNL X) updates through the 5 GHz modem."""
 
 import unittest
 
-from support import DEVICE, ProvisionedDevice, close_fixtures, fixture
+from support import ProvisionedDevice, close_fixtures, fixture, partition_table
 from support_x import ProvisionedX, ShippedX, X_BUILD
 
 from devices import ANY
@@ -41,7 +41,10 @@ class Case(unittest.TestCase):
         if path:
             self.device().mock.wait_for_request(path, timeout_s=20)
         st = s.wait(state="deep_sleep", timeout_s=20, settle_ms=500)["status"]
-        self.assertNotIn(f"Loaded app from partition at offset {DEVICE.ota_slot:#x}", "\n".join(s.console(0)))
+        self.assertEqual(st["boot_count"], 1, "it restarted")
+        # (bootloaders that log would say so if they booted the other slot)
+        other = next(p for p in partition_table(s.flash.read_bytes()) if p["type"] == 0 and p["subtype"] == 0x11)
+        self.assertNotIn(f"Loaded app from partition at offset {other['offset']:#x}", "\n".join(s.console(0)))
         return st
 
 
@@ -87,7 +90,9 @@ class OgUpdates(Case):
             self.assert_keeps_running_the_old_firmware(s, "/not-firmware.bin")
 
     def test_firmware_too_large_for_the_slot(self):
-        self.update_from("/huge.bin", b"\xe9" + bytes(3 * 1024 * 1024))
+        flash = (self.device().cache / "flash.bin").read_bytes()
+        slot = next(p for p in partition_table(flash) if p["type"] == 0 and p["subtype"] == 0x11)
+        self.update_from("/huge.bin", b"\xe9" + bytes(slot["size"]))  # a byte too many
         with self.device().boot() as s:
             self.assert_keeps_running_the_old_firmware(s, "/huge.bin")
 
