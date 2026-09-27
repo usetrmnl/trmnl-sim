@@ -4,6 +4,7 @@ Pro, both with the 4.7" ED047TC1 960x540 panel."""
 
 import unittest
 
+from support import sim
 from support_byod import ByodBoard
 from trmnl_mock import expected_gray, png_image
 
@@ -31,6 +32,21 @@ class ParallelBoard(ByodBoard):
             self.refresh(s, "/images/ramp.png")
             result = s.compare_screen(expected_gray(ramp16, W, H, bits=4), tolerance=40, max_ratio=0.001)
             self.assertTrue(result["match"], result)
+
+    # Firmware bug: display_show_msg2(WIFI_CONNECT) uses the TRMNL X's big font on every
+    # PARALLEL_EPD board and centres 'Connect your phone or computer to "TRMNL-XXXXXX" Wi-Fi'
+    # with (width - text width) / 2, which goes negative on a 960 px panel: the line starts
+    # at the left edge and is cut off after "Wi" at the right.
+    @unittest.expectedFailure
+    def test_setup_screen_text_fits_the_panel(self):
+        flash = self.dev.dir / "setup-screen.bin"
+        with sim(self.dev.build, flash=flash, erase=True, extra_args=("--offline",)) as s:
+            s.wait(portal=True, timeout_s=90)
+            s.wait(display_idle=True, timeout_s=30)
+            paper = expected_gray(lambda x, y: 1, 4, 120, bits=1)
+            for x in (0, W - 4):  # 4 px margins on both sides of the instructions
+                result = s.compare_screen(paper, region=(x, 350, 4, 120), tolerance=16, max_ratio=0)
+                self.assertTrue(result["match"], (x, result))
 
     def test_reports_the_battery_it_measures(self):
         with self.dev.boot_asleep() as s:
