@@ -5,7 +5,7 @@ import json
 import time
 import unittest
 
-from support import (ONE_BIT_PNG_PANEL_TYPE_BUG, MockTrmnl, ProvisionedDevice, assert_text, close_fixtures, fixture, needs,
+from support import (BMP_FLIP_OVERFLOW_BUG, EP397_ROW_SHIFT_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, MockTrmnl, ProvisionedDevice, assert_text, close_fixtures, fixture, needs,
                      sim, skip_if)
 
 from devices import ANY
@@ -44,6 +44,10 @@ QA_PANEL_REV_BREAKS_SPI = (
 QA_SCREENS = ["FactoryQa.test_qa_passes_and_the_button_continues_to_setup",
               "FactoryQa.test_qa_fails_when_the_chip_heats_up"]
 
+# the /api/setup failures whose screen shows the server's logo
+SETUP_LOGO = ["SetupErrors.test_setup_server_error", "SetupErrors.test_setup_server_error_on_weak_wifi",
+              "SetupErrors.test_setup_malformed_json"]
+
 KNOWN_FAILURES = {
     "CrowPanel42": {
         "ErrorScreens.test_image_url_that_can_t_be_fetched": MESSAGE_BELOW_PANEL,
@@ -54,9 +58,22 @@ KNOWN_FAILURES = {
     "trmnl_4clr": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
     "seeed_reTerminal_E1002": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
     "trmnl_gen2": dict.fromkeys(QA_SCREENS, QA_PANEL_REV_BREAKS_SPI),
+    "trmnl_gen2_4clr": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
+    "xteink_x3": dict.fromkeys(SETUP_LOGO, "the setup error screen shows the server's logo BMP, and " + BMP_FLIP_OVERFLOW_BUG),
+    "seeed_reTerminal_E1004": {
+        **dict.fromkeys(SETUP_LOGO, "the setup error screen shows the server's logo BMP, and " + BMP_FLIP_OVERFLOW_BUG),
+        # the verdict line (in qa_fail_details) runs into the start screen's text
+        "FactoryQa.test_qa_fails_when_the_chip_heats_up": QA_1BPP_BUFFER_ON_COLOR_PANEL,
+    },
+    "TRMNL_7inch5_OG_DIY_Kit_6CLR": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
+    "m5_paper_color": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL
+                                    + "; the result lines are wider than the 400-pixel panel, too"),
+    "WAVESHARE_397": {**dict.fromkeys(QA_SCREENS, EP397_ROW_SHIFT_BUG),
+                      "ErrorScreens.test_image_url_that_can_t_be_fetched": EP397_ROW_SHIFT_BUG},
     "TRMNL_X_PAPERS3": {
         "FactoryQa.test_qa_fails_when_the_chip_heats_up": QA_SECOND_DISPLAY_INIT,
     },
+    "TRMNL_X_LILYGO_T5PRO": dict.fromkeys(QA_SCREENS, QA_SECOND_DISPLAY_INIT),
 }
 
 dev = fixture(ProvisionedDevice)

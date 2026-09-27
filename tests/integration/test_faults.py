@@ -5,7 +5,7 @@ booting. The image it is served is the one its server would send (see support.de
 
 import unittest
 
-from support import (BUILD, DEVICE, GEN2_NTP_HANG_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, SSD16XX_BMP_BUG,
+from support import (BUILD, DEVICE, EP397_ROW_SHIFT_BUG, GEN2_4CLR_IMAGE_BUG, GEN2_NTP_HANG_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, SSD16XX_BMP_BUG,
                      ProvisionedDevice, boot_slot, close_fixtures, device_image, fixture, image_size, ota_slot_label,
                      panel_number, partition_table)
 
@@ -42,10 +42,13 @@ SHOWS_THE_IMAGE = [
 NO_INTERNET = ["BadNetworks.test_access_point_without_internet", "BadNetworks.test_dns_failure"]
 
 KNOWN_FAILURES = {
-    "xteink_x4": dict.fromkeys(SHOWS_THE_IMAGE, SSD16XX_BMP_BUG),
+    **{env: dict.fromkeys(SHOWS_THE_IMAGE, SSD16XX_BMP_BUG)
+       for env in ("xteink_x4", "TRMNL_4inch26_DIY_Kit", "seeed_sticky")},
     "CrowPanel42": dict.fromkeys(SHOWS_THE_IMAGE, ONE_BIT_PNG_PANEL_TYPE_BUG),
+    "WAVESHARE_397": dict.fromkeys(SHOWS_THE_IMAGE, SSD16XX_BMP_BUG + "; and " + EP397_ROW_SHIFT_BUG),
     "trmnl_gen2": dict.fromkeys(NO_INTERNET, GEN2_NTP_HANG_BUG),
-    "trmnl_gen2_4clr": dict.fromkeys(NO_INTERNET, GEN2_NTP_HANG_BUG),
+    "trmnl_gen2_4clr": {**dict.fromkeys(SHOWS_THE_IMAGE, GEN2_4CLR_IMAGE_BUG),
+                        **dict.fromkeys(NO_INTERNET, GEN2_NTP_HANG_BUG + "; and " + GEN2_4CLR_IMAGE_BUG)},
 }
 
 dev = fixture(ProvisionedDevice)

@@ -219,6 +219,9 @@ GOLDEN_REGIONS: dict[str, dict[str, tuple[int, int, int, int]]] = {
     },
     # the 960x540 FastEPD panels: Inter_18 at the OG's rows (the centred logo runs into them)
     "TRMNL_X_PAPERS3": {"api_unable_to_connect.png": (0, 304, 960, 144)},
+    "TRMNL_X_LILYGO_T5PRO": {"api_unable_to_connect.png": (0, 304, 960, 144)},
+    # 400x600: the centred logo runs into the text too
+    "m5_paper_color": {"api_unable_to_connect.png": (0, 304, 400, 96)},
 }
 
 
@@ -281,6 +284,25 @@ ONE_BIT_PNG_PANEL_TYPE_BUG = (
     "(src/display.cpp:1764) on boards brought up with bbep.begin(<product>), passing a product "
     "number as a panel type: the image is drawn for another panel and never shows "
     "(test_byod_ssd.CrowPanel42.test_shows_the_served_image)")
+GEN2_4CLR_IMAGE_BUG = (
+    "firmware: the trmnl_gen2_4clr env (platformio.ini:910) defines BOARD_TRMNL_GEN2 but not "
+    "BOARD_TRMNL_4CLR, which the 4-color image path is compiled under (src/display.cpp:1752): "
+    "images go out as two 1-bit planes the BWRY panel reads as 2 bits per pixel, so they never "
+    "show right (test_og_gen2.OgGen2Bwry)")
+BMP_FLIP_OVERFLOW_BUG = (
+    "firmware: display_show_image() flips an uncompressed BMP with the panel's dimensions "
+    "(src/display.cpp:1940 flip_image(image_buffer+62, bbep.width(), bbep.height())): on a "
+    "panel bigger than 800x480 it writes past the BMP's 48062-byte buffer (52272 bytes on "
+    "792x528, 240000 on 1200x1600), corrupting the heap: the next free crashes")
+EP397_ROW_SHIFT_BUG = (
+    "firmware (bb_epaper 2.1.9, the Waveshare 3.97\"'s): EP397_800x480's init sequences make the "
+    "RAM Y address count down from 479 but start its counter at 0, so everything shows one row "
+    "too high, its top row at the bottom (test_byod_ssd.Waveshare397)")
+XIAO_C3_BUTTON_WAKE_BUG = (
+    "firmware: the XIAO ESP32-C3's device_list[] row puts the button on GPIO 9 (src/display.cpp:56), "
+    "and goto sleep enables it as a deep-sleep wakeup (src/bl.cpp:2303), which the C3 only has on "
+    "GPIO 0-5: the IDF refuses (\"gpio 9 is an invalid deep sleep wakeup IO\") and the button "
+    "never wakes the device")
 GEN2_NTP_HANG_BUG = (
     "firmware: ClockGen2::waitForSync() (src/misc/clock/clock_gen2.cpp:9) loops until the clock "
     "reads 2020 or later, with no timeout: without an NTP server (no internet, no DNS) the "
@@ -432,4 +454,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden", "partition_table", "ota_slot_label", "boot_slot", "SSD16XX_BMP_BUG", "ONE_BIT_PNG_PANEL_TYPE_BUG", "GEN2_NTP_HANG_BUG", "assert_text"]
+__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden", "partition_table", "ota_slot_label", "boot_slot", "SSD16XX_BMP_BUG", "ONE_BIT_PNG_PANEL_TYPE_BUG", "GEN2_NTP_HANG_BUG", "XIAO_C3_BUTTON_WAKE_BUG", "EP397_ROW_SHIFT_BUG", "GEN2_4CLR_IMAGE_BUG", "BMP_FLIP_OVERFLOW_BUG", "assert_text"]

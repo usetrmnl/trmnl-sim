@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 import setup_cache
-from support import (BUILD, BWRY_BUILD, DEVICE, DEVICES, GEN2_NTP_HANG_BUG, KNOWN_MEMORY_BUGS, TURBO, MockTrmnl, device_image, panel_number, sim,
+from support import (BUILD, BWRY_BUILD, DEVICE, DEVICES, GEN2_NTP_HANG_BUG, KNOWN_MEMORY_BUGS, XIAO_C3_BUTTON_WAKE_BUG, TURBO, MockTrmnl, device_image, panel_number, sim,
                      skip_if)
 from support_x import SSID_24, X_BUILD, onboard, x_sim
 
@@ -40,12 +40,16 @@ QA_SECOND_DISPLAY_INIT = (
     "fails on FastEPD boards (see test_errors.QA_SECOND_DISPLAY_INIT)")
 
 # Arduino 3 builds: its String::concat(buf, len) copies len bytes, not len + 1
-ARDUINO_3 = ("TRMNL_X", "TRMNL_X_PAPERS3", "TRMNL_X_LILYGO_T5PRO", "TRMNL_X_SENSORIAC5", "trmnl_gen2", "trmnl_gen2_4clr")
+# (the envs on pioarduino's platform in platformio.ini)
+ARDUINO_3 = ("TRMNL_X", "TRMNL_X_PAPERS3", "TRMNL_X_LILYGO_T5PRO", "TRMNL_X_SENSORIAC5", "trmnl_gen2", "trmnl_gen2_4clr",
+             "seeed_sticky", "m5_paper_color", "seeed_reTerminal_E1004")
 # The IDF tasks the firmware doesn't size (see IDF_SMALL_STACKS).
 IDF_TASKS = ("IDLE", "ipc")
 # startQA()'s buffer is 48000 bytes: display_show_msg_qa() reads past it on panels whose
 # 1-bit frame is bigger than 48000 - 62 bytes (bb_epaper boards; FastEPD ones don't copy it).
-QA_OVERREADS = DEVICE.og_font and DEVICE.size[0] // 8 * DEVICE.size[1] > 48000 - 62
+# (Not seen on the reTerminal E1004, though its 1200x1600 frame is far bigger: open question.)
+QA_OVERREADS = (DEVICE.og_font and DEVICE.size[0] // 8 * DEVICE.size[1] > 48000 - 62
+                and DEVICE.env != "seeed_reTerminal_E1004")
 
 
 def fixed_on(*envs: str, why: str):
@@ -62,6 +66,7 @@ KNOWN_FAILURES = {
        for d in DEVICES.values() if d.chip == "esp32s3" and d.env not in ARDUINO_3},
     **{env: {"MemcheckOG.test_sntp_server_name_is_not_used_after_free": GEN2_NTP_HANG_BUG}
        for env in ("trmnl_gen2", "trmnl_gen2_4clr")},
+    "seeed_xiao_esp32c3": {"MemcheckOG.test_onboarding_and_refresh_cycles_are_clean": XIAO_C3_BUTTON_WAKE_BUG},
     "TRMNL_X_PAPERS3": {"MemcheckOG.test_qa_screen_is_not_read_past_its_buffer": QA_SECOND_DISPLAY_INIT},
     "TRMNL_X_LILYGO_T5PRO": {"MemcheckOG.test_qa_screen_is_not_read_past_its_buffer": QA_SECOND_DISPLAY_INIT},
 }
