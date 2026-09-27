@@ -5,11 +5,15 @@
 //! Optional environment sensors (`--sensor`) sit on I2C0 next to any fuel gauge or PMIC.
 
 use super::Board;
+use crate::devices::dual_epd::DualSpiEpd;
 use crate::devices::epd::SpiEpd;
 use crate::devices::i2c::I2cBus;
 use crate::devices::i2c::axp2101::Axp2101;
 use crate::devices::i2c::bq27220::Bq27220;
 use crate::devices::i2c::env_sensors::{Aht20, Climate, Scd41};
+use crate::devices::i2c::m5_py32::M5Py32;
+use crate::devices::i2c::m5ioe1::M5Ioe1;
+use crate::devices::ssd1677::Ssd1677;
 use crate::devices::uc8179::{ColorPanel, Uc8179, X3_RESPONSE};
 use crate::savepoint::{StateReader, StateWriter};
 
@@ -65,6 +69,30 @@ pub enum Panel {
     Uc81xx583,
     /// UC81xx, 3.68" 792x528 black and white (Xteink X3, EP368_792x528).
     Uc81xx368,
+    /// bb_epaper's EPD_M5_PAPER_COLOR: a 4" 400x600 Spectra 6 panel (EP40_SPECTRA_400x600,
+    /// GDEP040E01) powered through GPIO0 of the board's PY32 (I2C 0x6e).
+    M5PaperColor,
+    /// bb_epaper's EPD_SEEED_E1004: a 13.3" 1200x1600 Spectra 6 panel (EP133_SPECTRA_1200x1600)
+    /// with two controllers, the left half's on the board's CS and the right half's on CS2
+    /// (GPIO2), powered while GPIO12 is high.
+    SeeedE1004,
+    /// bb_epaper's EPD_M5_PAPER_MONO: a 3.97" 800x480 black-and-white SSD1677 panel
+    /// (EP426_800x480, 4-gray EP426_800x480_4GRAY) whose LDO and RST hang off GPIO3 and GPIO5
+    /// of the board's M5IOE1 expander (I2C 0x4f).
+    M5PaperMono,
+}
+
+/// What switches the panel's supply. Unpowered, the controller ignores its inputs and
+/// holds BUSY low; power coming on resets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EpdPower {
+    Always,
+    /// Powered while this GPIO is driven high.
+    Gpio(u8),
+    /// Powered while GPIO0 of the M5Stack PY32 at I2C 0x6e drives high.
+    M5Py32Gpio0,
+    /// Powered while GPIO3 of the M5IOE1 expander at I2C 0x4f drives high.
+    M5Ioe1Gpio3,
 }
 
 impl Panel {
@@ -76,6 +104,30 @@ impl Panel {
             Panel::Uc8179Bwr => Box::new(Uc8179::new_color(rev, ColorPanel::Bwr)),
             Panel::Uc81xx583 => Box::new(Uc8179::with_size(rev, 648, 480)),
             Panel::Uc81xx368 => Box::new(Uc8179::with_size(rev, 792, 528).with_response(X3_RESPONSE)),
+            Panel::M5PaperColor => Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 400, 600)),
+            Panel::M5PaperMono => Box::new(Ssd1677::new()),
+            Panel::SeeedE1004 => Box::new(DualSpiEpd::new(
+                Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 600, 1600)),
+                Box::new(Uc8179::new_color_sized(rev, ColorPanel::Spectra6, 600, 1600)),
+            )),
+        }
+    }
+
+    /// The second controller's chip select, for panels with two.
+    pub fn cs2(self) -> Option<u8> {
+        match self {
+            Panel::SeeedE1004 => Some(2),
+            _ => None,
+        }
+    }
+
+    /// What powers the panel (bb_epaper's built-in boards switch it on in `begin()`).
+    pub fn power(self) -> EpdPower {
+        match self {
+            Panel::M5PaperColor => EpdPower::M5Py32Gpio0,
+            Panel::SeeedE1004 => EpdPower::Gpio(12),
+            Panel::M5PaperMono => EpdPower::M5Ioe1Gpio3,
+            _ => EpdPower::Always,
         }
     }
 
@@ -89,6 +141,9 @@ impl Panel {
             Panel::Uc8179Bwr => mock_trmnl::Panel::Og,
             Panel::Uc81xx583 => mock_trmnl::Panel::new(mock_trmnl::Inks::Mono, 648, 480),
             Panel::Uc81xx368 => mock_trmnl::Panel::new(mock_trmnl::Inks::Mono, 792, 528),
+            Panel::M5PaperColor => mock_trmnl::Panel::new(mock_trmnl::Inks::Spectra6, 400, 600),
+            Panel::SeeedE1004 => mock_trmnl::Panel::new(mock_trmnl::Inks::Spectra6, 1200, 1600),
+            Panel::M5PaperMono => mock_trmnl::Panel::Og,
         }
     }
 }
@@ -213,6 +268,36 @@ pub static SPECS: &[BoardSpec] = &[
         battery: Battery::Bq27220,
         panel: Panel::Uc81xx368,
     },
+    BoardSpec {
+        model: "m5_paper_mono",
+        envs: &["m5_paper_mono"],
+        name: "M5Paper Mono",
+        chip: Chip::Esp32s3,
+        // bb_epaper's begin(EPD_M5_PAPER_MONO); the panel's RST is on the I/O expander
+        pins: Pins { sck: 15, mosi: 14, cs: 16, rst: 0xff, dc: 17, busy: 18, button: 2 },
+        battery: Battery::None,
+        panel: Panel::M5PaperMono,
+    },
+    BoardSpec {
+        model: "m5_paper_color",
+        envs: &["m5_paper_color"],
+        name: "M5Paper Color",
+        chip: Chip::Esp32s3,
+        // bb_epaper's begin(EPD_M5_PAPER_COLOR); device_list has no SPI pins for it
+        pins: Pins { sck: 15, mosi: 13, cs: 44, rst: 12, dc: 43, busy: 11, button: 1 },
+        battery: Battery::None,
+        panel: Panel::M5PaperColor,
+    },
+    BoardSpec {
+        model: "reterminal_e1004",
+        envs: &["seeed_reTerminal_E1004"],
+        name: "reTerminal E1004",
+        chip: Chip::Esp32s3,
+        // bb_epaper's begin(EPD_SEEED_E1004); CS2 (GPIO2) is the panel's
+        pins: Pins { sck: 7, mosi: 9, cs: 10, rst: 38, dc: 11, busy: 13, button: 4 },
+        battery: Battery::Adc { pin: 1, enable: Some(21) },
+        panel: Panel::SeeedE1004,
+    },
 ];
 
 /// The board for a PlatformIO environment or `DEVICE_MODEL` name.
@@ -237,6 +322,8 @@ pub struct SpiEpdBoard {
     battery_mv: u32,
     out: u64,
     oe: u64,
+    /// The panel's supply is on (see [`EpdPower`]).
+    epd_powered: bool,
 }
 
 impl SpiEpdBoard {
@@ -253,7 +340,12 @@ impl SpiEpdBoard {
             Battery::Axp2101 => _ = i2c.add(Box::new(Axp2101::new())),
             _ => {}
         }
-        SpiEpdBoard {
+        match spec.panel.power() {
+            EpdPower::M5Py32Gpio0 => _ = i2c.add(Box::new(M5Py32::new())),
+            EpdPower::M5Ioe1Gpio3 => _ = i2c.add(Box::new(M5Ioe1::new())),
+            _ => {}
+        }
+        let mut b = SpiEpdBoard {
             spec,
             panel: spec.panel.controller(panel_rev),
             i2c,
@@ -261,11 +353,57 @@ impl SpiEpdBoard {
             battery_mv: 4100,
             out: 0,
             oe: 0,
-        }
+            epd_powered: false,
+        };
+        b.epd_powered = b.epd_supply();
+        b
     }
 
     fn level(&self, pin: u8) -> bool {
         self.out >> pin & 1 != 0
+    }
+
+    /// Is the panel's supply switched on?
+    fn epd_supply(&self) -> bool {
+        match self.spec.panel.power() {
+            EpdPower::Always => true,
+            EpdPower::Gpio(pin) => self.oe >> pin & 1 != 0 && self.level(pin),
+            EpdPower::M5Py32Gpio0 => self.i2c.device::<M5Py32>().is_some_and(|p| p.gpio_high(0)),
+            EpdPower::M5Ioe1Gpio3 => self.i2c.device::<M5Ioe1>().is_some_and(|e| e.gpio(3) == Some(true)),
+        }
+    }
+
+    /// Pass the serial interface's pin levels to the panel (if it is powered).
+    fn drive_panel(&mut self, now: u64) {
+        self.update_epd_power(now);
+        if !self.epd_powered {
+            return;
+        }
+        let (out, oe) = (self.out, self.oe);
+        let p = &self.spec.pins;
+        // Undriven lines idle high (pull-ups on CS/RST on the real board).
+        let lvl = |pin: u8| if oe >> pin & 1 != 0 { out >> pin & 1 != 0 } else { true };
+        let rst = match self.spec.panel {
+            // RST is on the M5IOE1 expander's GPIO5
+            Panel::M5PaperMono => self.i2c.device::<M5Ioe1>().is_none_or(|e| e.gpio(5) != Some(false)),
+            _ => lvl(p.rst),
+        };
+        let mosi_driven = oe >> p.mosi & 1 != 0;
+        let (cs, dc, sck) = (lvl(p.cs), lvl(p.dc), oe >> p.sck & 1 != 0 && self.level(p.sck));
+        let mosi = mosi_driven && self.level(p.mosi);
+        if let Some(cs2) = self.spec.panel.cs2() {
+            self.panel.set_cs2(lvl(cs2));
+        }
+        self.panel.set_pins(now, cs, dc, sck, mosi, rst);
+    }
+
+    /// Follow the panel's supply; power coming on resets the controller (a RST pulse).
+    fn update_epd_power(&mut self, now: u64) {
+        let on = self.epd_supply();
+        if on && !self.epd_powered {
+            self.panel.set_pins(now, true, true, false, false, false);
+        }
+        self.epd_powered = on;
     }
 }
 
@@ -284,31 +422,30 @@ impl Board for SpiEpdBoard {
 
     fn i2c_stop(&mut self, now: u64, _bus: u8) {
         self.i2c.stop(now);
+        if self.spec.panel.power() != EpdPower::Always {
+            // an I/O chip may have switched the panel's supply or reset line
+            self.drive_panel(now);
+        }
     }
 
     fn gpio_out(&mut self, now: u64, out: u64, oe: u64) {
         self.out = out;
         self.oe = oe;
-        let p = &self.spec.pins;
-        // Undriven lines idle high (pull-ups on CS/RST on the real board).
-        let lvl = |pin: u8| if oe >> pin & 1 != 0 { out >> pin & 1 != 0 } else { true };
-        let mosi_driven = oe >> p.mosi & 1 != 0;
-        let (cs, dc, sck, rst) = (lvl(p.cs), lvl(p.dc), oe >> p.sck & 1 != 0 && self.level(p.sck), lvl(p.rst));
-        let mosi = mosi_driven && self.level(p.mosi);
-        self.panel.set_pins(now, cs, dc, sck, mosi, rst);
+        self.drive_panel(now);
     }
 
     fn gpio_in(&mut self, now: u64) -> (u64, u64) {
         let p = &self.spec.pins;
         let mut lv = 0u64;
         let mut mask = 1u64 << p.busy | 1u64 << p.button;
-        if self.panel.busy(now) == self.panel.busy_level() {
+        if self.epd_powered && self.panel.busy(now) == self.panel.busy_level() {
             lv |= 1 << p.busy;
         }
         if !self.button_down {
             lv |= 1 << p.button;
         }
         if let Some(b) = self.panel.mosi_out()
+            && self.epd_powered
             && self.oe >> p.mosi & 1 == 0
         {
             mask |= 1 << p.mosi;
@@ -318,7 +455,7 @@ impl Board for SpiEpdBoard {
     }
 
     fn spi_transfer(&mut self, now: u64, host: u8, mosi: &[u8], miso_len: usize) -> Vec<u8> {
-        if host == 2 {
+        if host == 2 && self.epd_powered {
             self.panel.spi_bytes(now, mosi);
         }
         vec![0xff; miso_len]
@@ -384,6 +521,9 @@ impl Board for SpiEpdBoard {
         w.u64(self.out);
         w.u64(self.oe);
         w.section(|w| self.panel.save_state(w, powered));
+        if powered {
+            w.section(|w| self.i2c.save_state(w));
+        }
     }
 
     fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
@@ -392,7 +532,12 @@ impl Board for SpiEpdBoard {
         self.oe = r.u64()?;
         // Gauge readings follow the battery (sensors keep their own, unsaved, state).
         self.set_battery_mv(self.battery_mv);
-        r.section(|r| self.panel.restore_state(r, powered))
+        r.section(|r| self.panel.restore_state(r, powered))?;
+        if powered {
+            r.section(|r| self.i2c.restore_state(r))?;
+        }
+        self.epd_powered = self.epd_supply();
+        Ok(())
     }
 }
 
@@ -415,5 +560,79 @@ mod tests {
         boards.sort();
         boards.dedup();
         assert_eq!(boards.len(), SPECS.len(), "two boards share a name");
+    }
+
+    /// Send the UC81xx power-on command (BUSY for a while after) over GPSPI2.
+    fn power_on_cmd(b: &mut SpiEpdBoard, now: u64) {
+        let p = b.spec.pins;
+        let oe = 1u64 << p.cs | 1 << p.dc | 1 << p.rst | 1 << p.sck | 1 << p.mosi | b.oe;
+        let keep = b.out & !(1u64 << p.cs | 1 << p.dc);
+        b.gpio_out(now, keep | 1 << p.rst, oe); // CS and D/C low: command
+        b.spi_transfer(now, 2, &[0x04], 0);
+        b.gpio_out(now, keep | 1 << p.rst | 1 << p.cs | 1 << p.dc, oe);
+    }
+
+    fn busy_pin_low(b: &mut SpiEpdBoard, now: u64) -> bool {
+        b.gpio_in(now).0 >> b.spec.pins.busy & 1 == 0
+    }
+
+    #[test]
+    fn m5_paper_color_panel_is_powered_by_the_py32() {
+        use crate::devices::i2c::m5_py32::{ADDR, REG_GPIO_DIR, REG_GPIO_OUT};
+        let mut b = SpiEpdBoard::new(find("m5_paper_color").unwrap(), 0, &[]);
+        power_on_cmd(&mut b, 0);
+        assert!(!b.display_status(1_000_000).0, "unpowered: the command is lost");
+        assert!(busy_pin_low(&mut b, 1_000_000), "unpowered: BUSY reads low");
+        for (reg, v) in [(REG_GPIO_DIR, 1), (REG_GPIO_OUT, 1)] {
+            assert!(b.i2c_start(0, 0, ADDR, false));
+            b.i2c_write(0, 0, reg);
+            b.i2c_write(0, 0, v);
+            b.i2c_stop(0, 0);
+        }
+        assert!(!busy_pin_low(&mut b, 1_000_000), "powered and idle: BUSY_N high");
+        power_on_cmd(&mut b, 2_000_000);
+        assert!(b.display_status(3_000_000).0);
+        assert!(busy_pin_low(&mut b, 3_000_000));
+    }
+
+    #[test]
+    fn m5_paper_mono_panel_power_and_reset_are_on_the_expander() {
+        use crate::devices::i2c::m5ioe1::{ADDR, REG_MODE, REG_OUT};
+        let mut b = SpiEpdBoard::new(find("m5_paper_mono").unwrap(), 0, &[]);
+        let write = |b: &mut SpiEpdBoard, reg: u8, v: u16| {
+            assert!(b.i2c_start(0, 0, ADDR, false));
+            for byte in [reg, v as u8, (v >> 8) as u8] {
+                b.i2c_write(0, 0, byte);
+            }
+            b.i2c_stop(0, 0);
+        };
+        // SSD1677 SW reset: BUSY (high) for a while, unless unpowered or held in reset
+        let sw_reset = |b: &mut SpiEpdBoard, now: u64| {
+            let p = b.spec.pins;
+            let oe = 1u64 << p.cs | 1 << p.dc | 1 << p.sck | 1 << p.mosi;
+            b.gpio_out(now, 0, oe);
+            b.spi_transfer(now, 2, &[0x12], 0);
+            b.gpio_out(now, 1 << p.cs | 1 << p.dc, oe);
+            b.display_status(now + 1_000_000).0
+        };
+        assert!(!sw_reset(&mut b, 0), "unpowered");
+        write(&mut b, REG_MODE, 1 << 2 | 1 << 4); // GPIO3 (LDO) and GPIO5 (RST) outputs, low
+        assert!(!sw_reset(&mut b, 0), "LDO off");
+        write(&mut b, REG_OUT, 1 << 2); // LDO on, RST low
+        assert!(!sw_reset(&mut b, 0), "held in reset");
+        write(&mut b, REG_OUT, 1 << 2 | 1 << 4);
+        assert!(sw_reset(&mut b, 0));
+    }
+
+    #[test]
+    fn e1004_panel_is_powered_by_gpio12() {
+        let mut b = SpiEpdBoard::new(find("reterminal_e1004").unwrap(), 0, &[]);
+        let cs2 = 1u64 << 2;
+        b.gpio_out(0, cs2, cs2);
+        power_on_cmd(&mut b, 0);
+        assert!(!b.display_status(1_000_000).0);
+        b.gpio_out(1_000_000, cs2 | 1 << 12, cs2 | 1 << 12);
+        power_on_cmd(&mut b, 2_000_000);
+        assert!(b.display_status(3_000_000).0);
     }
 }

@@ -11,6 +11,9 @@ pub trait SpiEpd: Send {
     fn set_pins(&mut self, now: u64, cs: bool, dc: bool, sck: bool, mosi: bool, rst: bool);
     /// Bytes a SPI host clocked out while CS was low (D/C as last set by `set_pins`).
     fn spi_bytes(&mut self, now: u64, data: &[u8]);
+    /// Panels with two controllers (see `dual_epd`): the second chip select's level,
+    /// set before each `set_pins`. Single-controller panels have none.
+    fn set_cs2(&mut self, _cs2: bool) {}
     /// The level the controller drives on MOSI while answering a read, if any.
     fn mosi_out(&self) -> Option<bool> {
         None
