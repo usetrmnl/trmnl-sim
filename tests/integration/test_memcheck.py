@@ -53,11 +53,6 @@ def fixed_on(*envs: str, why: str):
     return lambda test: test if DEVICE.env in envs else unittest.expectedFailure(test)
 
 
-def shows_on(*envs: str, why: str):
-    """An expected failure on these environments only: elsewhere the bug doesn't show (`why`)."""
-    return lambda test: unittest.expectedFailure(test) if DEVICE.env in envs else test
-
-
 def expected_failure_if(cond: bool):
     return lambda test: unittest.expectedFailure(test) if cond else test
 
@@ -125,12 +120,14 @@ class MemcheckOG(unittest.TestCase):
             self.assertTrue([t for t in report["stacks"] if t["task"].startswith("IDLE")], "no IDLE task seen")
             assert_no_low_stacks(self, {"stacks": [t for t in report["stacks"] if t["task"].startswith(IDF_TASKS)]})
 
-    @shows_on("trmnl", "xteink_x4", why="only where SNTP's first request goes out after setTimeFromNTP returned")
+    @unittest.expectedFailure
     def test_sntp_server_name_is_not_used_after_free(self):
         # Clock::sync hands configTime() the c_str() of a String that setTimeFromNTP frees on
         # return; SNTP keeps the pointer and resolves it again on every retry.
+        # Without DNS (the server is reached by its IP) the NTP servers' names don't resolve,
+        # so SNTP keeps retrying after setTimeFromNTP returned.
         with MockTrmnl() as mock, sim(BUILD, erase=True, memcheck="log", memcheck_suppress=all_bugs_but(*SNTP_BUG),
-                                      extra_args=("--offline",)) as s:
+                                      faults={"net": {"dns": "servfail"}}, extra_args=("--offline",)) as s:
             device_image(mock, "one", panel_number("1"))
             mock.display = {"image": "one", "refresh_rate": 300}
             self.onboard(s, mock)
