@@ -17,16 +17,25 @@ SSD16XX_BMP = (
     "(writePlane() = PLANE_BOTH, no second plane) and asks for a partial refresh, which is differential "
     "against the old-image RAM; after the full refresh of the setup screens (display_show_msg2: "
     "PLANE_0 only, display.cpp:2835) that RAM doesn't hold the picture on screen, so only scraps of the "
-    "BMP show (see test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh)")
+    "BMP show (on the Sticky, whose panel supply is off in deep sleep, that RAM holds nothing; see "
+    "test_byod_ssd.SsdBoard.test_bmp_after_a_fast_refresh)")
 CROWPANEL_1BIT_PNG = (
     "png_to_epd (display.cpp:1764) passes the CrowPanel's dpList product number (EPD_CROWPANEL42 = 8) "
     "to bbep.setPanelType for 1-bit PNGs: panel type EP295_128x296_4GRAY, so the picture never shows "
     "(see test_images.CROWPANEL_1BIT_PNG)")
 
+GEN2_4CLR = (
+    "trmnl_gen2_4clr lacks BOARD_TRMNL_4CLR, so images don't take the 4-color path (png_draw_4clr): "
+    "only part of the screen changes, in the wrong inks (see test_images.GEN2_4CLR)")
+
+SHOWN_IMAGE_TESTS = ["Redirects.test_image_redirect", "NoContentLength.test_chunked_image"]
 KNOWN_FAILURES = {
-    "xteink_x4": dict.fromkeys(["Redirects.test_image_redirect", "NoContentLength.test_chunked_image"], SSD16XX_BMP),
-    "CrowPanel42": dict.fromkeys(["Redirects.test_image_redirect", "NoContentLength.test_chunked_image"],
-                                 CROWPANEL_1BIT_PNG),
+    # the 800x480 black-and-white SSD16xx boards get BMPs (the Waveshare's picture would also be a
+    # row too high, see test_images.EP397_ROW_SHIFT)
+    **{env: dict.fromkeys(SHOWN_IMAGE_TESTS, SSD16XX_BMP)
+       for env in ("xteink_x4", "TRMNL_4inch26_DIY_Kit", "seeed_sticky", "WAVESHARE_397")},
+    "CrowPanel42": dict.fromkeys(SHOWN_IMAGE_TESTS, CROWPANEL_1BIT_PNG),
+    "trmnl_gen2_4clr": dict.fromkeys(SHOWN_IMAGE_TESTS, GEN2_4CLR),
 }
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
@@ -45,6 +54,9 @@ def tearDownModule():
 
 
 class Case(unittest.TestCase):
+    def assertMatch(self, result: dict):
+        self.assertTrue(result["match"], result)
+
     def setUp(self):
         m = dev().mock
         m.requests.clear()
@@ -85,7 +97,7 @@ class Redirects(Case):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", display_idle=True, timeout_s=15)
             self.assertIn(moved, self.refresh(s))
-            self.assertTrue(s.compare_screen(seven, tolerance=64, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(seven, tolerance=64, max_ratio=0))
 
 
 class NoContentLength(Case):
@@ -97,7 +109,7 @@ class NoContentLength(Case):
         with dev().boot_asleep() as s:
             s.wait(state="deep_sleep", display_idle=True, timeout_s=15)
             self.refresh(s)
-            self.assertTrue(s.compare_screen(eight, tolerance=64, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(eight, tolerance=64, max_ratio=0))
 
     def test_chunked_image_cut_short_is_not_shown(self):
         m = dev().mock
@@ -108,7 +120,7 @@ class NoContentLength(Case):
             s.wait(state="deep_sleep", display_idle=True, timeout_s=15)
             screen = s.screenshot()
             self.refresh(s)
-            self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(screen, tolerance=0, max_ratio=0))
 
     def test_chunked_api_display_answer(self):
         dev().mock.set_fault("/api/display", chunked=True)

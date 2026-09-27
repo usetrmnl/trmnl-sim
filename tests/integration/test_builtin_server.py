@@ -13,13 +13,15 @@ from devices import ANY
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
 # Firmware bugs, by the device they show on (see run.py's DeviceLoader).
+SHOWS = "BuiltinServerOg.test_onboards_and_shows_uploaded_images"
 KNOWN_FAILURES = {
     # the built-in server serves 800x480 black-and-white panels the OG's 1-bit BMP
-    "xteink_x4": {"BuiltinServerOg.test_onboards_and_shows_uploaded_images":
-                  "a 1-bit BMP after the setup screens' full refresh shows only scraps on SSD16xx panels "
-                  "(see test_http.SSD16XX_BMP)"},
-    "CrowPanel42": {"BuiltinServerOg.test_onboards_and_shows_uploaded_images":
-                    "1-bit PNGs never show on the CrowPanel (see test_images.CROWPANEL_1BIT_PNG)"},
+    **{env: {SHOWS: "a 1-bit BMP after the setup screens' full refresh shows only scraps on SSD16xx panels "
+                    "(see test_http.SSD16XX_BMP)"}
+       for env in ("xteink_x4", "TRMNL_4inch26_DIY_Kit", "seeed_sticky", "WAVESHARE_397")},
+    "CrowPanel42": {SHOWS: "1-bit PNGs never show on the CrowPanel (see test_images.CROWPANEL_1BIT_PNG)"},
+    "trmnl_gen2_4clr": {SHOWS: "images don't take the 4-color path without BOARD_TRMNL_4CLR "
+                               "(see test_images.GEN2_4CLR)"},
 }
 
 
@@ -44,6 +46,9 @@ def black_and_white(text: str) -> tuple[bytes, bytes]:
 class BuiltinServerOg(unittest.TestCase):
     """On the device under test (the class keeps the name it had when it ran on the OG only)."""
 
+    def assertMatch(self, result: dict):
+        self.assertTrue(result["match"], result)
+
     def test_onboards_and_shows_uploaded_images(self):
         with sim(erase=True, extra_args=("--offline",)) as s:
             # A black-and-white 8-bit gray PNG of the panel's size: converted to what the panel
@@ -61,8 +66,8 @@ class BuiltinServerOg(unittest.TestCase):
             s.mock.wait_for_request(info["path"], timeout_s=120)
             st = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 300, delta=15)
-            self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
-            self.assertTrue(s.compare_screen(reference, tolerance=64, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0))
+            self.assertMatch(s.compare_screen(reference, tolerance=64, max_ratio=0))
 
             # Switch the image and wake the device: the next request fetches it.
             cursor = s.mock.state()["total_requests"]
@@ -71,7 +76,7 @@ class BuiltinServerOg(unittest.TestCase):
             s.wake()
             s.mock.wait_for_request(info["path"], after=cursor, timeout_s=120)
             s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
-            self.assertTrue(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0))
 
     def test_serves_this_build_s_firmware_for_ota(self):
         with sim(extra_args=("--offline",)) as s:
@@ -84,6 +89,7 @@ class BuiltinServerOg(unittest.TestCase):
 
 class BuiltinServerBwry(unittest.TestCase):
     ENV = "trmnl_4clr"
+    assertMatch = BuiltinServerOg.assertMatch
     @classmethod
     def setUpClass(cls):
         if not (BWRY_BUILD / "firmware.elf").exists():
@@ -98,8 +104,8 @@ class BuiltinServerBwry(unittest.TestCase):
             self.assertEqual(req["headers"]["Model"], "og_4clr")
             s.mock.wait_for_request("/images/bars.png", timeout_s=120)
             s.wait(state="deep_sleep", timeout_s=120)
-            self.assertTrue(s.compare_screen(s.mock.expected("bars"), tolerance=16, max_ratio=0)["match"])
-            self.assertTrue(s.compare_screen(expected_bwry(color_bars), tolerance=16, max_ratio=0)["match"])
+            self.assertMatch(s.compare_screen(s.mock.expected("bars"), tolerance=16, max_ratio=0))
+            self.assertMatch(s.compare_screen(expected_bwry(color_bars), tolerance=16, max_ratio=0))
 
 
 if __name__ == "__main__":

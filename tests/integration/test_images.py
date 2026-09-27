@@ -44,6 +44,56 @@ FASTEPD_WIDE_PNG = (
     "iPitch), running off the top of the framebuffer (StoreProhibited in png_draw, display.cpp:1485), "
     "and the device crashes and restarts, instead of cropping it as png_to_epd announces")
 
+BWR_4GRAY = (
+    "png_to_epd sends PNGs of more than two colors or 2 bits (and 4/8-bit gray, truecolor) down the "
+    "4-gray path (display.cpp:1789), whose two gray bit planes land in this panel's black/white (DTM1) "
+    "and red (DTM2) planes: white comes out black and black red (see test_byod_uc81xx.DiyKitBwr)")
+BWR_2BIT_RED = (
+    "png_draw's PNG_2_BIT_INVERTED case (display.cpp:1378) writes the inverted picture into the "
+    "second plane for 2-bit two-color PNGs, which on this 3-color panel is the red plane (the 1-bit "
+    "case clears it for BBEP_3COLOR, display.cpp:1366): the black comes out red")
+STICKY_4GRAY = (
+    "bb_epaper (the Sticky's pinned 0395f30) starts EP397_800x480_4GRAY refreshes with 0x22 0xD7, "
+    "whose load-LUT bit replaces the custom 4-gray LUT its init sequence wrote with the built-in "
+    "one, which shows the two gray planes as black and white: PNGs on the 4-gray path come out "
+    "inverted (see test_byod_ssd.SeeedSticky.test_shows_a_4_gray_image)")
+SSD1677_WINDOW = (
+    "jpeg_draw (display.cpp:1607) sets an address window for every 8-row block, and this env's pinned "
+    "bb_epaper programs it ascending (bbepSetAddrWindow: X start < end, counter at the start; bytes, "
+    "not pixels, for EP397), while SET_ORIENTATION in the panel's init sequence (bbepSetFlip180) "
+    "puts the SSD1677 in data entry mode 0x02, X counting down from 799: the blocks run off the left "
+    "edge (M5Paper) or scatter into thin lines (Sticky). (bb_epaper 2.1.9 skips the window for "
+    "EP426/EP397, so the X4 and 4.26\" kit are fine)")
+EP397_ROW_SHIFT = (
+    "bb_epaper 2.1.9's EP397_800x480 init sequences make the RAM Y address count down from 479 but "
+    "start the counter at 0: the picture is one row too high, its top row at the bottom (see "
+    "test_byod_ssd.Waveshare397)")
+M5_1BIT_PNG = (
+    "png_to_epd (display.cpp:1764) passes the M5Paper Mono's dpList product number (EPD_M5_PAPER_MONO "
+    "= 30) to bbep.setPanelType for 1-bit PNGs: panel type EP266YR_184x360, a UC81xx 4-color panel, so "
+    "the image goes out with UC81xx commands the SSD1677 doesn't understand and never shows (see "
+    "test_byod_m5.M5PaperMono)")
+E1004_PNG_BUFFER = (
+    "PNG_MAX_BUFFERED_PIXELS=6432 (platformio.ini [env:seeed_reTerminal_E1004]) is sized for 800 px "
+    "rows, and PNGdec keeps two rows in that buffer while refusing only a row that alone doesn't fit "
+    "(png.inl:643): a 1200 px truecolor row (3601 bytes, 7202 for two) runs past it and the picture "
+    "comes out wrong (bands of garbage)")
+GEN2_4CLR = (
+    "the trmnl_gen2_4clr env defines BOARD_TRMNL_GEN2 but not BOARD_TRMNL_4CLR, which png_to_epd's "
+    "4-color path (png_draw_4clr, display.cpp:1752) is compiled under: images go out as two 1-bit "
+    "planes the BWRY panel reads as 2 bits per pixel, so only part of the screen changes, in the wrong "
+    "inks (see test_og_gen2)")
+
+EP397_SHIFTED_TESTS = [
+    "Png.test_1bit_png", "Png.test_2bit_png_with_two_colors_is_drawn_as_1bit", "Png.test_8bit_gray_png_is_reduced",
+    "Png.test_palette_png_is_reduced", "Png.test_truecolor_png_is_reduced", "Png.test_larger_png_is_cropped",
+    "Png.test_new_version_of_a_plugin_image_replaces_the_cached_one", "Png.test_long_filenames_are_shortened",
+    "Png.test_temperature_profile_is_saved", "Png.test_maximum_compatibility_forces_full_refreshes",
+    "Png.test_long_refresh_rates_use_fast_instead_of_partial_refreshes",
+]
+GEN2_4CLR_TESTS = EP397_SHIFTED_TESTS + [
+    "Png.test_2bit_png_uses_4_gray_levels", "Png.test_4bit_gray_png_is_reduced"]
+
 CROWPANEL_1BIT_TESTS = [
     "Png.test_1bit_png", "Png.test_2bit_png_with_two_colors_is_drawn_as_1bit", "Png.test_palette_png_is_reduced",
     "Png.test_larger_png_is_cropped", "Png.test_new_version_of_a_plugin_image_replaces_the_cached_one",
@@ -60,6 +110,22 @@ for env, d in DEVICES.items():
         KNOWN_FAILURES.setdefault(env, {})["Jpeg.test_jpeg_is_dithered_to_1bit"] = COLOR_JPEG
     if d.inks == "gray16":
         KNOWN_FAILURES.setdefault(env, {})["Png.test_larger_png_is_cropped"] = FASTEPD_WIDE_PNG
+KNOWN_FAILURES["TRMNL_7inch5_OG_DIY_Kit_3CLR"] = {
+    **dict.fromkeys(["Png.test_2bit_png_uses_4_gray_levels", "Png.test_4bit_gray_png_is_reduced",
+                     "Png.test_8bit_gray_png_is_reduced", "Png.test_truecolor_png_is_reduced"], BWR_4GRAY),
+    **dict.fromkeys(["Png.test_2bit_png_with_two_colors_is_drawn_as_1bit", "Png.test_palette_png_is_reduced"],
+                    BWR_2BIT_RED),
+}
+KNOWN_FAILURES["seeed_sticky"].update({
+    **dict.fromkeys(["Png.test_2bit_png_uses_4_gray_levels", "Png.test_8bit_gray_png_is_reduced",
+                     "Png.test_truecolor_png_is_reduced"], STICKY_4GRAY),
+    "Jpeg.test_jpeg_is_dithered_to_1bit": SSD1677_WINDOW,
+})
+KNOWN_FAILURES["WAVESHARE_397"].update(dict.fromkeys(EP397_SHIFTED_TESTS, EP397_ROW_SHIFT))
+KNOWN_FAILURES["m5_paper_mono"].update({**dict.fromkeys(CROWPANEL_1BIT_TESTS, M5_1BIT_PNG),
+                                        "Jpeg.test_jpeg_is_dithered_to_1bit": SSD1677_WINDOW})
+KNOWN_FAILURES["seeed_reTerminal_E1004"]["Png.test_truecolor_png_is_reduced"] = E1004_PNG_BUFFER
+KNOWN_FAILURES["trmnl_gen2_4clr"].update(dict.fromkeys(GEN2_4CLR_TESTS, GEN2_4CLR))
 KNOWN_FAILURES["CrowPanel42"].update(dict.fromkeys(CROWPANEL_1BIT_TESTS, CROWPANEL_1BIT_PNG))
 KNOWN_FAILURES["trmnl_4clr"].update({
     "Png.test_truecolor_png_is_reduced": BWRY_TRUECOLOR,
@@ -299,7 +365,9 @@ class Png(Case):
 class Jpeg(Case):
     def test_jpeg_is_dithered_to_1bit(self):
         with self.show("five.jpg", (DATA / f"five_{W}x{H}.jpg").read_bytes(), "image/jpeg") as s:
-            self.assert_shows(s, expected(digit(0, 1, "5"), 1), tolerance=64, max_ratio=0.02)
+            # dithering edges: up to 2% of an 800x480 screen, as many pixels on other panels
+            # (a share of a big panel would let a blank screen pass)
+            self.assert_shows(s, expected(digit(0, 1, "5"), 1), tolerance=64, max_ratio=min(0.02, 7680 / (W * H)))
 
     def test_jpeg_of_the_wrong_size_is_refused(self):
         with self.show("small.jpg", (DATA / "five_640x480.jpg").read_bytes(), "image/jpeg") as s:  # no panel is 640x480
