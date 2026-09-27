@@ -190,6 +190,10 @@ impl Board for TrmnlX {
         self.sync_outputs(now);
     }
 
+    fn uart_is_console(&self, _port: u8) -> bool {
+        false // UART0 is the modem's; the console is USB Serial/JTAG
+    }
+
     fn uart_tx(&mut self, now: u64, port: u8, data: &[u8]) {
         if port == 0 {
             self.modem.host_tx(now, data);

@@ -34,6 +34,8 @@ pub struct Esp32c3 {
     /// Known app builds: (ELF SHA-256, symbols, name). HLE hooks follow the one that boots.
     apps: Vec<([u8; 32], Symbols, String)>,
     active_app: Option<usize>,
+    /// Flash offset of the app booted last (to report a boot from the other OTA slot).
+    boot_offset: Option<u32>,
     trace: Vec<String>,
     pending_halt: Option<String>,
     recent_resets: Vec<u64>,
@@ -150,6 +152,7 @@ impl Esp32c3 {
             rom_syms,
             apps,
             active_app: None,
+            boot_offset: None,
             trace: trace.to_vec(),
             pending_halt: None,
             recent_resets: Vec::new(),
@@ -200,6 +203,7 @@ impl Esp32c3 {
             mc.suppressions = suppressions;
         }
         self.active_app = None;
+        self.boot_offset = None;
         self.bus.p.uart_out.clear();
         self.reset(ResetKind::PowerOn);
         self.boots = 1;
@@ -246,6 +250,11 @@ impl Esp32c3 {
             self.pending_halt = Some("no bootable app image in flash".into());
             return;
         };
+        if self.boot_offset.is_some_and(|o| o != app.offset) {
+            // the bootloader's own "Loaded app from partition" line isn't printed on every chip
+            self.msg(format!("booting the app in the other slot, at {:#x}", app.offset));
+        }
+        self.boot_offset = Some(app.offset);
         let (off, sha, version) = (app.offset, app.elf_sha256, app.version.clone());
         self.hle.wifi.set_abi(hle::wifi::WifiAbi::for_idf(&app.idf_version));
         let Some(i) = self.apps.iter().position(|a| a.0 == sha) else {

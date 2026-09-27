@@ -370,6 +370,9 @@ impl S3Bus {
             _ if a == RNG => self.p.rand(),
             // SENS SAR_MEAS1/2_CTRL2: RTC ADC one-shot conversions finish instantly (mid-scale)
             0x6000_880C | 0x6000_8830 => stored & !0xffff | 1 << 16 | 0x800,
+            // SENS_SAR_TCTRL: the temperature sensor's reading is ready at once (TSENS_READY),
+            // 25 °C in the -10..80 °C range IDF settles on (celsius = 0.4386 * out - 20.52)
+            0x6000_8850 => stored & !0xff | 1 << 8 | ((25.0f32 + 20.52) / 0.4386).ceil() as u32,
             // I2C_MST_ANA_CONF0: BBPLL calibration finishes instantly
             0x6000_E040 => stored | 1 << 24,
 
@@ -658,6 +661,10 @@ impl S3Bus {
         match off {
             0x00 => {
                 self.board.uart_tx(now, u as u8, &[v as u8]);
+                if self.board.uart_is_console(u as u8) {
+                    // e.g. Serial on builds without USB CDC on boot (ARDUINO_USB_CDC_ON_BOOT=0)
+                    self.p.console_out.push(v as u8);
+                }
                 self.p.uart[u].raw |= 1 << 14; // TX_DONE
                 self.irq_dirty = true;
             }

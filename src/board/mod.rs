@@ -32,6 +32,11 @@ pub trait Board: Send {
     fn i2c_stop(&mut self, _now_ns: u64, _bus: u8) {}
     /// Bytes a SoC UART transmitted.
     fn uart_tx(&mut self, _now_ns: u64, _port: u8, _data: &[u8]) {}
+    /// Is this UART the serial console (its output goes to the console log)? UART0, unless
+    /// the board wires it to something else (the TRMNL X's modem).
+    fn uart_is_console(&self, port: u8) -> bool {
+        port == 0
+    }
     /// Bytes arriving at a SoC UART's RX pin by `now_ns`.
     fn uart_rx(&mut self, _now_ns: u64, _port: u8) -> Vec<u8> {
         Vec::new()

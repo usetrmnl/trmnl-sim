@@ -23,10 +23,10 @@ def tearDownModule():
     close_fixtures()
 
 
-def raw_get(s, path: str) -> tuple[int, dict, bytes]:
+def raw_get(s, path: str, timeout: float = 30) -> tuple[int, dict, bytes]:
     """GET from the portal without following redirects: (status, headers, body)."""
     url = urlparse(s.portal_url())
-    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=30)
+    conn = http.client.HTTPConnection(url.hostname, url.port, timeout=timeout)
     try:
         conn.request("GET", path)
         r = conn.getresponse()
@@ -83,7 +83,9 @@ class Probes(unittest.TestCase):
         self.assertIn("api_url", json.loads(body))
 
     def test_sensor_self_test(self):
-        code, _, body = raw_get(self.sim, "/run-test")
+        # two averages of 1000 chip temperature readings, 7 s apart: over 9 s of device time,
+        # more on the clock where the simulation runs slower than real time
+        code, _, body = raw_get(self.sim, "/run-test", timeout=120)
         self.assertEqual(code, 200)
         json.loads(body)
 

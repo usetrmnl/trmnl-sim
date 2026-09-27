@@ -166,6 +166,18 @@ class RefreshCycle(unittest.TestCase):
             self.assertEqual(len(dev.mock.requests), n)
 
 
+def ota_1_offset(build) -> int:
+    """Where the build's partition table puts the second app slot (ota_1)."""
+    table = (build / "partitions.bin").read_bytes()
+    for i in range(0, len(table), 32):
+        e = table[i:i + 32]
+        if e[:2] != b"\xaa\x50":
+            break
+        if (e[2], e[3]) == (0, 0x11):
+            return int.from_bytes(e[4:8], "little")
+    raise AssertionError(f"{build}/partitions.bin has no ota_1 partition")
+
+
 class FirmwareUpdate(unittest.TestCase):
     def test_ota_update_installs_and_boots_other_slot(self):
         firmware = (BUILD / "firmware.bin").read_bytes()
@@ -176,7 +188,7 @@ class FirmwareUpdate(unittest.TestCase):
         with dev.boot() as s:
             dev.mock.wait_for_request("/firmware.bin", timeout_s=120)
             # The bootloader picks the freshly written slot after the restart.
-            s.wait_for_console(r"Loaded app from partition at offset 0x1e0000", timeout_s=300)
+            s.wait_for_console(rf"booting the app in the other slot, at {ota_1_offset(BUILD):#x}", timeout_s=300)
             cursor = len(dev.mock.requests)  # the new app can't have reached the network yet
             req = dev.mock.wait_for_request("/api/display", after=cursor, timeout_s=120)
             self.assertEqual(req.headers["FW-Version"], "1.8.16")
