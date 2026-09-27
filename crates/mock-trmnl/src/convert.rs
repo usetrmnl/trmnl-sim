@@ -6,6 +6,7 @@
 //! | OG (800×480, black/white) | 1-bit BMP, palette index 1 = white, bottom-up rows |
 //! | BWRY (800×480, black/white/yellow/red) | 2-bit palette PNG (the OG-family PNG decoder can't take truecolor rows that wide) |
 //! | X (1872×1404, 16 grays) | 4-bit grayscale PNG |
+//! | Spectra 6 (800×480, black/white/yellow/red/blue/green; reTerminal E1002) | 4-bit palette PNG |
 
 use image::{Rgb, RgbImage, imageops::FilterType};
 
@@ -18,12 +19,15 @@ pub enum Panel {
     Bwry,
     /// TRMNL X: 1872×1404, 16 grays.
     X,
+    /// E Ink Spectra 6 (Seeed reTerminal E1002): 800×480, black, white, yellow, red, blue
+    /// and green.
+    Spectra6,
 }
 
 impl Panel {
     pub fn size(self) -> (u32, u32) {
         match self {
-            Panel::Og | Panel::Bwry => (800, 480),
+            Panel::Og | Panel::Bwry | Panel::Spectra6 => (800, 480),
             Panel::X => (1872, 1404),
         }
     }
@@ -33,6 +37,7 @@ impl Panel {
             Panel::Og => "og",
             Panel::Bwry => "bwry",
             Panel::X => "x",
+            Panel::Spectra6 => "spectra6",
         }
     }
 
@@ -42,12 +47,17 @@ impl Panel {
             Panel::Og => "1-bit BMP",
             Panel::Bwry => "2-bit 4-color PNG",
             Panel::X => "4-bit gray PNG",
+            Panel::Spectra6 => "4-bit 6-color PNG",
         }
     }
 }
 
 /// The TRMNL BWRY inks, in palette order.
 pub const BWRY_PALETTE: [[u8; 3]; 4] = [[0, 0, 0], [255, 255, 255], [255, 255, 0], [255, 0, 0]];
+
+/// The Spectra 6 inks, in the firmware's color order (bb_epaper's color indices).
+pub const SPECTRA6_PALETTE: [[u8; 3]; 6] =
+    [[0, 0, 0], [255, 255, 255], [255, 255, 0], [255, 0, 0], [0, 0, 255], [0, 255, 0]];
 
 /// How a picture that isn't the panel's aspect ratio is fitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,7 +160,7 @@ pub fn passthrough(bytes: &[u8], panel: Panel) -> Result<Converted, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("can't read image: {e}"))?;
     let (width, height) = (img.width(), img.height());
     let preview = match panel {
-        Panel::Bwry => Preview { width, height, channels: 3, pixels: img.to_rgb8().into_raw() },
+        Panel::Bwry | Panel::Spectra6 => Preview { width, height, channels: 3, pixels: img.to_rgb8().into_raw() },
         _ => Preview { width, height, channels: 1, pixels: img.to_luma8().into_raw() },
     };
     Ok(Converted { data: bytes.to_vec(), ext, preview })
@@ -187,10 +197,14 @@ pub fn convert_image(img: &RgbImage, panel: Panel, opts: ConvertOptions) -> Conv
             let pixels = levels.iter().map(|&v| v * 17).collect();
             Converted { data, ext: "png", preview: Preview { width: w, height: h, channels: 1, pixels } }
         }
-        Panel::Bwry => {
-            let idx = dither_bwry(&fitted, opts.dither);
-            let data = png_palette(w, h, &BWRY_PALETTE, &idx);
-            let pixels = idx.iter().flat_map(|&i| BWRY_PALETTE[i as usize]).collect();
+        Panel::Bwry | Panel::Spectra6 => {
+            let (palette, quantize) = match panel {
+                Panel::Bwry => (&BWRY_PALETTE[..], bwry_quantize as fn(u8, u8, u8) -> u8),
+                _ => (&SPECTRA6_PALETTE[..], spectra6_quantize as fn(u8, u8, u8) -> u8),
+            };
+            let idx = dither_palette(&fitted, palette, quantize, opts.dither);
+            let data = png_palette(w, h, palette, &idx);
+            let pixels = idx.iter().flat_map(|&i| palette[i as usize]).collect();
             Converted { data, ext: "png", preview: Preview { width: w, height: h, channels: 3, pixels } }
         }
     }
@@ -261,11 +275,11 @@ fn dither_gray(img: &RgbImage, levels: u32, dither: bool) -> Vec<u8> {
     out
 }
 
-/// Reduce to the BWRY inks; returns palette indices. Without dithering, colors are
-/// classified like the BWRY firmware does (see [`bwry_quantize`]).
-fn dither_bwry(img: &RgbImage, dither: bool) -> Vec<u8> {
+/// Reduce to a color panel's inks; returns palette indices. Without dithering, colors are
+/// classified like that panel's firmware does (`quantize`).
+fn dither_palette(img: &RgbImage, palette: &[[u8; 3]], quantize: fn(u8, u8, u8) -> u8, dither: bool) -> Vec<u8> {
     if !dither {
-        return img.pixels().map(|p| bwry_quantize(p[0], p[1], p[2])).collect();
+        return img.pixels().map(|p| quantize(p[0], p[1], p[2])).collect();
     }
     let w = img.width() as usize;
     let mut buf: Vec<[f32; 3]> = img.pixels().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
@@ -273,9 +287,9 @@ fn dither_bwry(img: &RgbImage, dither: bool) -> Vec<u8> {
     for i in 0..buf.len() {
         let v = buf[i];
         let dist = |c: &[u8; 3]| (0..3).map(|k| (v[k] - c[k] as f32).powi(2)).sum::<f32>();
-        let best = (0..4).min_by(|&a, &b| dist(&BWRY_PALETTE[a]).total_cmp(&dist(&BWRY_PALETTE[b]))).unwrap();
+        let best = (0..palette.len()).min_by(|&a, &b| dist(&palette[a]).total_cmp(&dist(&palette[b]))).unwrap();
         out[i] = best as u8;
-        let c = BWRY_PALETTE[best];
+        let c = palette[best];
         diffuse(&mut buf, w, i, std::array::from_fn(|k| v[k] - c[k] as f32));
     }
     out
@@ -301,6 +315,18 @@ pub fn bwry_quantize(r: u8, g: u8, b: u8) -> u8 {
     } else {
         0
     }
+}
+
+/// The Spectra 6 firmware's color reduction (`GetSpectraPixel` in display.cpp): the
+/// nearest of its reference inks to the color's RGB333 value, as a [`SPECTRA6_PALETTE`]
+/// index.
+pub fn spectra6_quantize(r: u8, g: u8, b: u8) -> u8 {
+    const INKS: [[i32; 3]; 6] = [[0, 0, 0], [192, 192, 192], [192, 192, 0], [192, 0, 0], [0, 0, 192], [0, 192, 0]];
+    let q = |v: u8| (v >> 5) as i32 * 36;
+    let (r, g, b) = (q(r), q(g), q(b));
+    let dist = |c: &[i32; 3]| (r - c[0]).pow(2) + (g - c[1]).pow(2) + (b - c[2]).pow(2);
+    // The first of equally near inks wins, as in the firmware's loop.
+    (0..6).fold(0, |best, j| if dist(&INKS[j]) < dist(&INKS[best]) { j } else { best }) as u8
 }
 
 // ---- encoders ----------------------------------------------------------------------------------
@@ -363,10 +389,11 @@ pub fn png_gray(w: u32, h: u32, bits: u32, levels: &[u8]) -> Vec<u8> {
     encode_png(w, h, png::ColorType::Grayscale, depth, None, &pack(w, h, bits.min(8), levels))
 }
 
-/// A 2-bit indexed PNG with up to four colors.
+/// An indexed PNG: 2 bits per pixel for up to four colors, else 4.
 pub fn png_palette(w: u32, h: u32, palette: &[[u8; 3]], indices: &[u8]) -> Vec<u8> {
     let plte: Vec<u8> = palette.iter().flatten().copied().collect();
-    encode_png(w, h, png::ColorType::Indexed, png::BitDepth::Two, Some(plte), &pack(w, h, 2, indices))
+    let (depth, bits) = if palette.len() <= 4 { (png::BitDepth::Two, 2) } else { (png::BitDepth::Four, 4) };
+    encode_png(w, h, png::ColorType::Indexed, depth, Some(plte), &pack(w, h, bits, indices))
 }
 
 fn encode_png(
@@ -470,6 +497,32 @@ mod tests {
             }
             assert_eq!(c.preview.pixels, back.into_raw());
         }
+    }
+
+    #[test]
+    fn spectra6_is_a_4_bit_palette_png_of_the_six_inks() {
+        let img = RgbImage::from_fn(800, 480, |x, _| Rgb(SPECTRA6_PALETTE[(x / 134).min(5) as usize]));
+        for dither in [false, true] {
+            let c = convert_image(&img, Panel::Spectra6, ConvertOptions { dither, fit: Fit::Contain });
+            assert_eq!((c.data[24], c.data[25]), (4, 3), "IHDR: bit depth 4, indexed");
+            let back = decode(&c.data).to_rgb8();
+            for (i, ink) in SPECTRA6_PALETTE.iter().enumerate() {
+                assert_eq!(back.get_pixel(i as u32 * 134 + 60, 240).0, *ink);
+            }
+            assert_eq!(c.preview.pixels, back.into_raw());
+        }
+    }
+
+    #[test]
+    fn spectra6_quantize_matches_the_firmware() {
+        for (i, ink) in SPECTRA6_PALETTE.iter().enumerate() {
+            assert_eq!(spectra6_quantize(ink[0], ink[1], ink[2]) as usize, i, "{ink:?}");
+        }
+        // Mid gray (RGB333 4,4,4 = 144): white (192) is nearer than black.
+        assert_eq!(spectra6_quantize(128, 128, 128), 1);
+        assert_eq!(spectra6_quantize(64, 64, 64), 0);
+        // Orange lands on red or yellow, never on white.
+        assert!(matches!(spectra6_quantize(255, 128, 0), 2 | 3));
     }
 
     #[test]

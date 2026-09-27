@@ -39,6 +39,7 @@ const I2C0: u32 = 0x6001_3000;
 const TIMG0: u32 = 0x6001_F000;
 const TIMG1: u32 = 0x6002_0000;
 const SYSTIMER: u32 = 0x6002_3000;
+const SPI2: u32 = 0x6002_4000;
 const RNG: u32 = 0x6003_507C;
 const USB_JTAG: u32 = 0x6003_8000;
 const AES: u32 = 0x6003_A000;
@@ -309,6 +310,9 @@ impl S3Bus {
             _ if a == SPI1 + 0x54 || a == SPI0 + 0x54 => 0,
             _ if a == SPI1 + 0xA4 => 0,
 
+            // ---- GPSPI2: transfers complete instantly ----
+            _ if a == SPI2 => stored & !(1 << 24 | 1 << 23), // USR/UPDATE done
+
             // ---- GPIO ----
             _ if a == GPIO + 0x04 => self.p.gpio_out as u32,
             _ if a == GPIO + 0x10 => (self.p.gpio_out >> 32) as u32,
@@ -428,6 +432,7 @@ impl S3Bus {
         }
         match a {
             _ if a == SPI1 => self.spi1_command(v),
+            _ if a == SPI2 && v & (1 << 24) != 0 => self.spi2_transfer(now),
 
             // GPIO
             _ if a == GPIO + 0x04 => self.gpio_set_out(self.p.gpio_out & !0xffff_ffff | v as u64, now),
@@ -1103,14 +1108,37 @@ impl S3Bus {
         }
     }
 
+    // ---- GPSPI2 (CPU-driven transfers through W0..W15, as on the ESP32-C3) ----------------
+
+    fn spi2_transfer(&mut self, now: u64) {
+        let bits = (self.p.store_get(SPI2 + 0x1C) & 0x3ffff) + 1;
+        let user = self.p.store_get(SPI2 + 0x10);
+        let n = (bits as usize).div_ceil(8).min(64);
+        let out: Vec<u8> =
+            (0..n).map(|i| (self.p.store_get(SPI2 + 0x98 + 4 * (i as u32 / 4)) >> (8 * (i % 4))) as u8).collect();
+        let mosi = user & (1 << 27) != 0 || user & 1 != 0;
+        let miso = user & (1 << 28) != 0 || user & 1 != 0;
+        let rx = self.board.spi_transfer(now, 2, if mosi { &out } else { &[] }, if miso { n } else { 0 });
+        if miso {
+            for (i, chunk) in rx.chunks(4).enumerate() {
+                let mut w = [0u8; 4];
+                w[..chunk.len()].copy_from_slice(chunk);
+                self.p.store_set(SPI2 + 0x98 + 4 * i as u32, u32::from_le_bytes(w));
+            }
+        }
+        let raw = self.p.store_get(SPI2 + 0x3C);
+        self.p.store_set(SPI2 + 0x3C, raw | 1 << 12); // TRANS_DONE
+    }
+
     /// AP Memory octal PSRAM command set (16-bit opcodes in OPI mode).
     fn psram_transact(&mut self, opcode: u32, addr: u32, mosi: &[u8], miso_len: usize) -> Vec<u8> {
         let a = addr as usize & (self.psram.len() - 1);
         match opcode & 0xff {
             0x40 => {
-                // mode register read: register number = addr
+                // mode register read from register `addr` on: IDF reads MR0 and MR1 (then
+                // MR2 and MR3) as one 16-bit transfer
                 let r = (addr as usize) & 0xff;
-                (0..miso_len).map(|i| *self.p.psram_mr.get(r + i / 2).unwrap_or(&0)).collect()
+                (0..miso_len).map(|i| *self.p.psram_mr.get(r + i).unwrap_or(&0)).collect()
             }
             0xC0 => {
                 if let Some(&v) = mosi.first() {

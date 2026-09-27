@@ -229,7 +229,12 @@ impl Fake {
                 self.combo_logged = false;
                 self.update_touching();
             }
-            Command::SetRefreshFlashing(_) => {}
+            Command::SetRefreshFlashing(_) | Command::Gesture(_) | Command::SetWifiNetworks(_) => {}
+            Command::PressRepeat { ms: dur, .. } => {
+                self.press_until = Some(self.t + ms(dur));
+                self.p.status.lock().button_down = true;
+                self.wake_on_input("button");
+            }
             Command::SetDocked(d) => {
                 self.p.status.lock().docked = d;
                 self.idf('I', "power", if d { "USB power connected (docked)" } else { "USB power removed" });

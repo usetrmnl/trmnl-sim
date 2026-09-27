@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn screens_fit_their_panels() {
-        for panel in [Panel::Og, Panel::Bwry, Panel::X] {
+        for panel in [Panel::Og, Panel::Bwry, Panel::X, Panel::Spectra6] {
             let img = default_screen(panel);
             assert_eq!(img.dimensions(), panel.size());
             // Some ink, mostly paper.

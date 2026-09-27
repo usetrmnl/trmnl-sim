@@ -196,7 +196,28 @@ fn main() -> Result<()> {
     };
 
     let mut panel = mock_trmnl::Panel::Og;
+    // ESP32-S3 builds with bb_epaper drive an SPI panel: the reTerminal E1002 (Spectra 6).
+    let spi_panel = fw.symbols.has_prefix("_Z16bbepSetPanelType");
     let (mut machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
+        firmware::CHIP_ESP32S3 if spi_panel => {
+            if !fw.symbols.has_prefix("_Z13png_draw_6clr") {
+                anyhow::bail!("unsupported ESP32-S3 board: only the reTerminal E1002 (Spectra 6) has an SPI panel model");
+            }
+            let epd = Uc8179::new_color(cli.panel_rev, devices::uc8179::ColorPanel::Spectra6);
+            panel = mock_trmnl::Panel::Spectra6;
+            let frame = epd.frame.clone();
+            let board = Box::new(board::trmnl_og::TrmnlOg::reterminal_e1002(epd));
+            let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, &cli.trace)?;
+            if let Some(mac) = cli.mac {
+                m.set_mac(mac);
+            }
+            m.set_portal_port(cli.portal_port);
+            m.set_net_config(net);
+            if let Some(mode) = memcheck_mode {
+                m.enable_memcheck(mode, cli.memcheck_suppress.clone());
+            }
+            (Box::new(m), frame)
+        }
         firmware::CHIP_ESP32S3 => {
             let modem_mac = cli.mac.map(|mut m| {
                 m[5] = m[5].wrapping_add(2);

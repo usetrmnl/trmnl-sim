@@ -3,9 +3,10 @@
 //! over GPIO. Refreshes are simulated by integrating the LUT waveform so
 //! grayscale, fast/partial modes and flashing all look roughly like hardware.
 //!
-//! The same command set also drives the 4-color black/white/yellow/red panel of the
-//! TRMNL BWRY (GDEM075F52, `new_bwry`): one 2 bit/pixel image (`DTM1`) and a long
-//! built-in refresh with no LUT registers.
+//! The same command set also drives color panels with one image plane (`DTM1`) and a
+//! long built-in refresh with no LUT registers ([`ColorPanel`]): the 4-color
+//! black/white/yellow/red panel of the TRMNL BWRY (GDEM075F52, 2 bits/pixel) and the
+//! 7.3" Spectra 6 panel of the Seeed reTerminal E1002 (GDEP073E01, 4 bits/pixel).
 
 use std::sync::Arc;
 
@@ -26,37 +27,100 @@ struct Phase {
     frames: u32,
 }
 
-/// 2-bit pixel codes of the 4-color panel, as the host sends them.
+/// Pixel codes of the color panels, as the host sends them (Spectra 6 has no code 4).
 const BWRY_BLACK: u8 = 0;
 const BWRY_WHITE: u8 = 1;
 const BWRY_YELLOW: u8 = 2;
 const BWRY_RED: u8 = 3;
-/// Viewer colors (RGB) for the 4 codes.
-const BWRY_RGB: [[u8; 3]; 4] = {
-    let mut t = [[0u8; 3]; 4];
-    t[BWRY_BLACK as usize] = [0, 0, 0];
-    t[BWRY_WHITE as usize] = [255, 255, 255];
-    t[BWRY_YELLOW as usize] = [255, 255, 0];
-    t[BWRY_RED as usize] = [255, 0, 0];
-    t
-};
-/// The 4-color panel's refresh: the OTP waveform shakes the particles with rapid
-/// black/white flashes (one color every `BWRY_FLASH_MS`) for `BWRY_IMAGE_MS`, then the
-/// image settles. The whole update takes about 16 s (the firmware waits up to 30 s).
-const BWRY_FLASH_MS: u64 = 100;
-const BWRY_IMAGE_MS: u64 = 9_000;
-const BWRY_STAGE_COUNT: usize = (BWRY_IMAGE_MS / BWRY_FLASH_MS) as usize + 1;
-const BWRY_REFRESH_MS: u64 = 16_000;
+const SPECTRA_BLUE: u8 = 5;
+const SPECTRA_GREEN: u8 = 6;
 
-/// Stage `i` of the 4-color refresh: (start ms, what the panel shows from then on,
-/// a solid color or `None` for the image).
-fn bwry_stage(i: usize) -> Option<(u64, Option<u8>)> {
-    match i {
-        _ if i + 1 < BWRY_STAGE_COUNT => {
-            Some((i as u64 * BWRY_FLASH_MS, Some(if i.is_multiple_of(2) { BWRY_BLACK } else { BWRY_WHITE })))
+/// A color panel: one image plane with a built-in (OTP) refresh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorPanel {
+    /// Black/white/yellow/red, 2 bits per pixel (TRMNL BWRY).
+    Bwry,
+    /// E Ink Spectra 6: black/white/yellow/red/blue/green, 4 bits per pixel (reTerminal E1002).
+    Spectra6,
+}
+
+/// The color refresh: the OTP waveform shakes the particles with rapid flashes (one
+/// color every `COLOR_FLASH_MS`) until `image_ms`, then the image settles; BUSY ends at
+/// `refresh_ms` (the firmware waits up to 30-35 s).
+const COLOR_FLASH_MS: u64 = 100;
+
+impl ColorPanel {
+    fn bits(self) -> usize {
+        match self {
+            ColorPanel::Bwry => 2,
+            ColorPanel::Spectra6 => 4,
         }
-        _ if i + 1 == BWRY_STAGE_COUNT => Some((BWRY_IMAGE_MS, None)),
-        _ => None,
+    }
+
+    fn ram_len(self) -> usize {
+        WIDTH * HEIGHT * self.bits() / 8
+    }
+
+    /// Image RAM filled with white.
+    fn white_ram(self) -> Vec<u8> {
+        let per_byte = 8 / self.bits();
+        let byte = (0..per_byte).fold(0u8, |b, _| b << self.bits() | BWRY_WHITE);
+        vec![byte; self.ram_len()]
+    }
+
+    /// Pixel `i`'s code in image RAM (leftmost pixel in the high bits).
+    fn code(self, ram: &[u8], i: usize) -> u8 {
+        let bits = self.bits();
+        let per_byte = 8 / bits;
+        ram[i / per_byte] >> (8 - bits * (i % per_byte + 1)) & ((1 << bits) - 1) as u8
+    }
+
+    /// What a viewer sees for a code (undefined codes leave the particles white).
+    fn rgb(self, code: u8) -> [u8; 3] {
+        match (self, code) {
+            (_, BWRY_BLACK) => [0, 0, 0],
+            (_, BWRY_YELLOW) => [255, 255, 0],
+            (_, BWRY_RED) => [255, 0, 0],
+            (ColorPanel::Spectra6, SPECTRA_BLUE) => [0, 0, 255],
+            (ColorPanel::Spectra6, SPECTRA_GREEN) => [0, 255, 0],
+            _ => [255, 255, 255],
+        }
+    }
+
+    /// The colors the refresh flashes through.
+    fn flashes(self) -> &'static [u8] {
+        match self {
+            ColorPanel::Bwry => &[BWRY_BLACK, BWRY_WHITE],
+            ColorPanel::Spectra6 => {
+                &[BWRY_BLACK, BWRY_WHITE, BWRY_RED, BWRY_YELLOW, SPECTRA_BLUE, SPECTRA_GREEN, BWRY_WHITE]
+            }
+        }
+    }
+
+    fn image_ms(self) -> u64 {
+        match self {
+            ColorPanel::Bwry => 9_000,
+            ColorPanel::Spectra6 => 12_000,
+        }
+    }
+
+    fn refresh_ms(self) -> u64 {
+        match self {
+            ColorPanel::Bwry => 16_000,
+            ColorPanel::Spectra6 => 19_000,
+        }
+    }
+
+    /// Stage `i` of the refresh: (start ms, what the panel shows from then on, a solid
+    /// color or `None` for the image).
+    fn stage(self, i: usize) -> Option<(u64, Option<u8>)> {
+        let flashes = (self.image_ms() / COLOR_FLASH_MS) as usize;
+        let colors = self.flashes();
+        match i {
+            _ if i < flashes => Some((i as u64 * COLOR_FLASH_MS, Some(colors[i % colors.len()]))),
+            _ if i == flashes => Some((self.image_ms(), None)),
+            _ => None,
+        }
     }
 }
 
@@ -127,12 +191,12 @@ pub struct Uc8179 {
 
     /// Physical particle state, 0.0 = white, 1.0 = black.
     state: Vec<f32>,
-    /// 4-color panel: the 2 bit/pixel image RAM, and the refresh in progress
+    /// Color panel: its kind and image RAM, and the refresh in progress
     /// (start, stages shown so far).
-    bwry: Option<Vec<u8>>,
-    /// Show the black/white flashes of a 4-color refresh (else the old image stays up).
+    color: Option<(ColorPanel, Vec<u8>)>,
+    /// Show the flashes of a color refresh (else the old image stays up).
     pub flashing: bool,
-    bwry_refresh: Option<(u64, usize)>,
+    color_refresh: Option<(u64, usize)>,
     pub frame: SharedFrame,
     pub refresh_count: u64,
     /// Fault: BUSY_N held low forever (the controller never finishes).
@@ -172,8 +236,8 @@ impl Uc8179 {
             rev,
             temperature_c: 22,
             state: vec![0.0; WIDTH * HEIGHT],
-            bwry: None,
-            bwry_refresh: None,
+            color: None,
+            color_refresh: None,
             flashing: true,
             frame: Arc::new(Mutex::new(frame)),
             refresh_count: 0,
@@ -181,14 +245,19 @@ impl Uc8179 {
         }
     }
 
-    pub fn is_bwry(&self) -> bool {
-        self.bwry.is_some()
+    pub fn color_panel(&self) -> Option<ColorPanel> {
+        self.color.as_ref().map(|c| c.0)
     }
 
     /// The 4-color (black/white/yellow/red) panel variant.
     pub fn new_bwry(rev: u32) -> Self {
+        Self::new_color(rev, ColorPanel::Bwry)
+    }
+
+    /// A color panel variant.
+    pub fn new_color(rev: u32, kind: ColorPanel) -> Self {
         let mut p = Self::new(rev);
-        p.bwry = Some(vec![BWRY_WHITE * 0x55; WIDTH * HEIGHT / 4]);
+        p.color = Some((kind, kind.white_ram()));
         p.frame.lock().rgb = Some(vec![255; WIDTH * HEIGHT * 3]);
         p
     }
@@ -227,13 +296,16 @@ impl Uc8179 {
         w.u8(self.forced_temp);
         w.u64(self.busy_until);
         w.u8(self.temperature_c as u8);
-        w.opt_bytes(self.bwry.as_deref());
+        w.opt_bytes(self.color.as_ref().map(|c| c.1.as_slice()));
     }
 
     /// Load `save_state` output. Without `powered` the controller comes back as after
     /// power-on, showing the saved image.
     pub fn restore_state(&mut self, r: &mut StateReader, powered: bool) -> anyhow::Result<()> {
-        let mut fresh = if self.is_bwry() { Self::new_bwry(self.rev) } else { Self::new(self.rev) };
+        let mut fresh = match self.color_panel() {
+            Some(kind) => Self::new_color(self.rev, kind),
+            None => Self::new(self.rev),
+        };
         fresh.frame = self.frame.clone();
         fresh.flashing = self.flashing;
         fresh.temperature_c = self.temperature_c;
@@ -287,8 +359,8 @@ impl Uc8179 {
         self.forced_temp = r.u8()?;
         self.busy_until = r.u64()?;
         self.temperature_c = r.u8()? as i8;
-        match (&mut self.bwry, r.opt_bytes()?) {
-            (Some(dst), Some(src)) if dst.len() == src.len() => dst.copy_from_slice(src),
+        match (&mut self.color, r.opt_bytes()?) {
+            (Some((_, dst)), Some(src)) if dst.len() == src.len() => dst.copy_from_slice(src),
             (None, None) => {}
             _ => anyhow::bail!("save point display is of a different panel type"),
         }
@@ -319,8 +391,8 @@ impl Uc8179 {
 
     /// Next time the panel wants to be polled (for refresh animation / busy release).
     pub fn next_event(&self, now: u64) -> Option<u64> {
-        if let Some((start, shown)) = self.bwry_refresh {
-            let next = bwry_stage(shown).map_or(BWRY_REFRESH_MS, |s| s.0);
+        if let (Some((start, shown)), Some(kind)) = (self.color_refresh, self.color_panel()) {
+            let next = kind.stage(shown).map_or(kind.refresh_ms(), |s| s.0);
             return Some(start + next * MS);
         }
         if let Some(r) = &self.refresh {
@@ -427,7 +499,7 @@ impl Uc8179 {
                 self.busy_until = now + 60 * MS;
             }
             0x11 => {} // data stop
-            0x12 if self.bwry.is_some() => self.start_bwry_refresh(now),
+            0x12 if self.color.is_some() => self.start_color_refresh(now),
             0x12 => self.start_refresh(now),
             0x10 | 0x13 if self.partial_mode => {
                 self.data_ptr = 0;
@@ -494,8 +566,8 @@ impl Uc8179 {
     }
 
     fn pixel_data(&mut self, b: u8) {
-        if let Some(ram) = &mut self.bwry {
-            // One full-screen plane, 4 pixels per byte; DTM2 isn't used by this panel.
+        if let Some((_, ram)) = &mut self.color {
+            // One full-screen plane; DTM2 isn't used by these panels.
             if self.cmd == 0x10 && self.data_ptr < ram.len() {
                 ram[self.data_ptr] = b;
             }
@@ -605,23 +677,23 @@ impl Uc8179 {
         log::debug!("uc8179: refresh {:?} reg_lut={} frames={}", region, use_reg_lut, total_frames);
     }
 
-    fn start_bwry_refresh(&mut self, now: u64) {
-        self.busy_until = now + BWRY_REFRESH_MS * MS;
-        self.bwry_refresh = Some((now, 0));
+    fn start_color_refresh(&mut self, now: u64) {
+        let Some(kind) = self.color_panel() else { return };
+        self.busy_until = now + kind.refresh_ms() * MS;
+        self.color_refresh = Some((now, 0));
         self.refresh_count += 1;
-        log::debug!("uc8179: 4-color refresh");
+        log::debug!("uc8179: {kind:?} refresh");
         self.update(now);
     }
 
-    /// Show one stage of the 4-color refresh: a solid color, or (None) the image.
-    fn show_bwry(&mut self, solid: Option<u8>) {
-        let Some(ram) = &self.bwry else { return };
+    /// Show one stage of a color refresh: a solid color, or (None) the image.
+    fn show_color(&mut self, solid: Option<u8>) {
+        let Some((kind, ram)) = &self.color else { return };
         let mut frame = self.frame.lock();
         let frame = &mut *frame;
         let rgb = frame.rgb.get_or_insert_with(|| vec![255; WIDTH * HEIGHT * 3]);
         for i in 0..WIDTH * HEIGHT {
-            let code = solid.unwrap_or_else(|| ram[i / 4] >> (6 - 2 * (i % 4)) & 3);
-            let c = BWRY_RGB[code as usize];
+            let c = kind.rgb(solid.unwrap_or_else(|| kind.code(ram, i)));
             rgb[i * 3..i * 3 + 3].copy_from_slice(&c);
             let luma = (c[0] as u32 * 30 + c[1] as u32 * 59 + c[2] as u32 * 11) / 100;
             frame.pixels[i] = 255 - luma as u8;
@@ -630,12 +702,12 @@ impl Uc8179 {
         frame.generation += 1;
     }
 
-    fn update_bwry(&mut self, now: u64) {
-        let Some((start, mut shown)) = self.bwry_refresh else { return };
+    fn update_color(&mut self, now: u64) {
+        let (Some((start, mut shown)), Some(kind)) = (self.color_refresh, self.color_panel()) else { return };
         let elapsed_ms = now.saturating_sub(start) / MS;
         // Only the latest stage that has started matters.
         let mut stage = None;
-        while let Some((at, what)) = bwry_stage(shown)
+        while let Some((at, what)) = kind.stage(shown)
             && at <= elapsed_ms
         {
             stage = Some(what);
@@ -644,9 +716,9 @@ impl Uc8179 {
         if let Some(solid) = stage
             && (solid.is_none() || self.flashing)
         {
-            self.show_bwry(solid);
+            self.show_color(solid);
         }
-        self.bwry_refresh = if elapsed_ms >= BWRY_REFRESH_MS { None } else { Some((start, shown)) };
+        self.color_refresh = if elapsed_ms >= kind.refresh_ms() { None } else { Some((start, shown)) };
     }
 
     fn expand_lut(l: &[u8; 42]) -> Vec<Phase> {
@@ -696,8 +768,8 @@ impl Uc8179 {
 
     /// Advance the refresh animation to `now`.
     pub fn update(&mut self, now: u64) {
-        if self.bwry.is_some() {
-            return self.update_bwry(now);
+        if self.color.is_some() {
+            return self.update_color(now);
         }
         let Some(r) = &mut self.refresh else { return };
         let target = (((now.saturating_sub(r.start)) / r.frame_ns) as u32).min(r.total_frames);
@@ -757,7 +829,7 @@ mod tests {
         let mut flashes = 0;
         let mut last = None;
         let mut t = 0;
-        while t < BWRY_IMAGE_MS {
+        while t < ColorPanel::Bwry.image_ms() {
             p.update(t * MS);
             let c = first(&p);
             assert!(c == [0, 0, 0] || c == [255, 255, 255], "{c:?} at {t} ms");
@@ -765,10 +837,10 @@ mod tests {
                 flashes += 1;
             }
             last = Some(c);
-            t += BWRY_FLASH_MS / 2;
+            t += COLOR_FLASH_MS / 2;
         }
         assert!(flashes >= 60, "{flashes} flashes");
-        let done = BWRY_REFRESH_MS * MS;
+        let done = ColorPanel::Bwry.refresh_ms() * MS;
         p.update(9_500 * MS);
         assert_eq!(p.next_event(9_500 * MS), Some(done));
         p.update(done);
@@ -777,8 +849,8 @@ mod tests {
         let rgb = f.rgb.as_ref().unwrap();
         let at = |x: usize, y: usize| &rgb[(y * WIDTH + x) * 3..(y * WIDTH + x) * 3 + 3];
         let w4 = WIDTH / 4;
-        assert_eq!(at(10, 5), &BWRY_RGB[0]);
-        assert_eq!(at(w4 + 10, 100), &BWRY_RGB[1]);
+        assert_eq!(at(10, 5), &ColorPanel::Bwry.rgb(0));
+        assert_eq!(at(w4 + 10, 100), &ColorPanel::Bwry.rgb(1));
         assert_eq!(at(2 * w4 + 10, 200), &[255, 255, 0]);
         assert_eq!(at(3 * w4 + 10, 479), &[255, 0, 0]);
         assert_eq!(p.refresh_count, 1);
@@ -794,14 +866,53 @@ mod tests {
         cmd(&mut p, 0, 0x12, &[0x00]);
         let first = |p: &Uc8179| p.frame.lock().rgb.as_ref().map(|c| c[..3].to_vec());
         let before = first(&p);
-        for t in (0..BWRY_IMAGE_MS).step_by(BWRY_FLASH_MS as usize / 2) {
+        for t in (0..ColorPanel::Bwry.image_ms()).step_by(COLOR_FLASH_MS as usize / 2) {
             p.update(t * MS);
             assert_eq!(first(&p), before, "changed at {t} ms");
         }
-        p.update(BWRY_IMAGE_MS * MS);
-        assert_eq!(first(&p), Some(BWRY_RGB[BWRY_RED as usize].to_vec()));
-        assert!(!p.busy_n(BWRY_IMAGE_MS * MS)); // timing unchanged
-        assert!(p.busy_n(BWRY_REFRESH_MS * MS));
+        p.update(ColorPanel::Bwry.image_ms() * MS);
+        assert_eq!(first(&p), Some(ColorPanel::Bwry.rgb(BWRY_RED).to_vec()));
+        assert!(!p.busy_n(ColorPanel::Bwry.image_ms() * MS)); // timing unchanged
+        assert!(p.busy_n(ColorPanel::Bwry.refresh_ms() * MS));
+    }
+
+    #[test]
+    fn spectra6_refresh_shows_the_six_colors() {
+        let kind = ColorPanel::Spectra6;
+        let mut p = Uc8179::new_color(0, kind);
+        // Eighths of each row, 2 pixels per byte (left pixel in the high nibble): the six
+        // colors, the undefined code 4, and a white/black pair.
+        let codes = [BWRY_BLACK, BWRY_WHITE, BWRY_YELLOW, BWRY_RED, SPECTRA_BLUE, SPECTRA_GREEN, 4, 0x10];
+        let e = WIDTH / 2 / 8;
+        let row: Vec<u8> =
+            codes.iter().flat_map(|&c| std::iter::repeat_n(if c == 0x10 { 0x10 } else { c << 4 | c }, e)).collect();
+        let img: Vec<u8> = row.iter().copied().cycle().take(kind.ram_len()).collect();
+        cmd(&mut p, 0, 0x04, &[]);
+        cmd(&mut p, 0, 0x10, &img);
+        cmd(&mut p, 0, 0x12, &[0x00]);
+        // The refresh flashes through the colors before the image settles.
+        let first = |p: &Uc8179| p.frame.lock().rgb.as_ref().unwrap()[..3].to_vec();
+        let mut seen = std::collections::HashSet::new();
+        for t in (0..kind.image_ms()).step_by(COLOR_FLASH_MS as usize) {
+            p.update(t * MS);
+            seen.insert(first(&p));
+        }
+        assert_eq!(seen.len(), 6, "{seen:?}");
+        assert!(!p.busy_n(kind.image_ms() * MS));
+        let done = kind.refresh_ms() * MS;
+        p.update(done);
+        assert!(p.busy_n(done));
+        let f = p.frame.lock();
+        let rgb = f.rgb.as_ref().unwrap();
+        let at = |x: usize| rgb[(100 * WIDTH + x) * 3..(100 * WIDTH + x) * 3 + 3].to_vec();
+        let w8 = WIDTH / 8;
+        let expect: [[u8; 3]; 7] =
+            [[0, 0, 0], [255; 3], [255, 255, 0], [255, 0, 0], [0, 0, 255], [0, 255, 0], [255; 3]];
+        for (k, c) in expect.iter().enumerate() {
+            assert_eq!(at(k * w8 + 10), c.to_vec(), "code {}", codes[k]);
+        }
+        assert_eq!(at(7 * w8 + 10), vec![255; 3]); // 0x10: white, then black
+        assert_eq!(at(7 * w8 + 11), vec![0; 3]);
     }
 
     /// A LUT register: rows of (level patterns, 4 frame counts, repeat), zero-padded to 42 bytes.

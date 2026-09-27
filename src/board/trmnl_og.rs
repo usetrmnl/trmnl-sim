@@ -1,6 +1,11 @@
-//! TRMNL OG: ESP32-C3, UC8179 7.5" panel on GPSPI2, one button, LiPo via divider.
-//! The TRMNL BWRY (`trmnl_4clr`) is the same board with a 4-color panel.
-//! Optional environment sensors (`--sensor`) sit on I2C0 (the firmware's SDA 21 / SCL 20).
+//! Boards with an SPI e-paper panel on GPSPI2, one button and a LiPo read through a
+//! divider (the firmware's `device_list[]` rows):
+//!
+//! - TRMNL OG: ESP32-C3, UC8179 7.5" panel. Optional environment sensors (`--sensor`) sit
+//!   on I2C0 (the firmware's SDA 21 / SCL 20).
+//! - TRMNL BWRY (`trmnl_4clr`): the same board with a 4-color panel.
+//! - Seeed reTerminal E1002: ESP32-S3 (XIAO), 7.3" Spectra 6 panel; the battery divider
+//!   is only connected while the firmware drives its enable pin high.
 
 use super::Board;
 use crate::devices::i2c::I2cBus;
@@ -17,10 +22,17 @@ pub struct Pins {
     pub busy: u8,
     pub button: u8,
     pub battery_adc: u8,
+    /// Switches the battery divider onto `battery_adc` while high.
+    pub battery_enable: Option<u8>,
 }
 
 /// Matches the "og" row of `device_list[]` in the firmware's display.cpp.
-pub const PINS: Pins = Pins { sck: 7, mosi: 8, cs: 6, rst: 10, dc: 5, busy: 4, button: 2, battery_adc: 3 };
+pub const PINS: Pins =
+    Pins { sck: 7, mosi: 8, cs: 6, rst: 10, dc: 5, busy: 4, button: 2, battery_adc: 3, battery_enable: None };
+
+/// The "reterminal_e1002" row.
+pub const RETERMINAL_E1002_PINS: Pins =
+    Pins { sck: 7, mosi: 9, cs: 10, rst: 12, dc: 11, busy: 13, button: 3, battery_adc: 1, battery_enable: Some(21) };
 
 /// An environment sensor on the I2C header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -32,6 +44,7 @@ pub enum Sensor {
 }
 
 pub struct TrmnlOg {
+    name: &'static str,
     pub pins: Pins,
     pub panel: Uc8179,
     i2c: I2cBus,
@@ -50,7 +63,22 @@ impl TrmnlOg {
                 Sensor::Aht20 => i2c.add(Box::new(Aht20::new(Climate::default()))),
             };
         }
-        TrmnlOg { pins: PINS, panel, i2c, button_down: false, battery_mv: 4100, out: 0, oe: 0 }
+        let name = if panel.color_panel().is_some() { "TRMNL BWRY" } else { "TRMNL OG" };
+        TrmnlOg { name, pins: PINS, panel, i2c, button_down: false, battery_mv: 4100, out: 0, oe: 0 }
+    }
+
+    /// Seeed reTerminal E1002 (7.3" Spectra 6 panel).
+    pub fn reterminal_e1002(panel: Uc8179) -> Self {
+        TrmnlOg {
+            name: "reTerminal E1002",
+            pins: RETERMINAL_E1002_PINS,
+            panel,
+            i2c: I2cBus::new(),
+            button_down: false,
+            battery_mv: 4100,
+            out: 0,
+            oe: 0,
+        }
     }
 
     fn level(&self, pin: u8) -> bool {
@@ -114,7 +142,8 @@ impl Board for TrmnlOg {
     }
 
     fn adc_millivolts(&mut self, gpio: u8) -> u32 {
-        if gpio == self.pins.battery_adc { self.battery_mv / 2 } else { 0 }
+        let connected = self.pins.battery_enable.is_none_or(|en| self.oe >> en & 1 != 0 && self.level(en));
+        if gpio == self.pins.battery_adc && connected { self.battery_mv / 2 } else { 0 }
     }
 
     fn next_event_ns(&self, now: u64) -> Option<u64> {
@@ -126,11 +155,10 @@ impl Board for TrmnlOg {
     }
 
     fn info(&self) -> sim_api::BoardInfo {
-        let name = if self.panel.is_bwry() { "TRMNL BWRY" } else { "TRMNL OG" };
         sim_api::BoardInfo {
-            name: name.into(),
+            name: self.name.into(),
             has_button: true,
-            has_refresh_flashing: self.panel.is_bwry(),
+            has_refresh_flashing: self.panel.color_panel().is_some(),
             ..Default::default()
         }
     }
