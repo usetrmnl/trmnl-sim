@@ -86,9 +86,9 @@ impl Panel {
             Panel::Uc8179Bwry => mock_trmnl::Panel::Bwry,
             Panel::Uc8179Spectra6 => mock_trmnl::Panel::Spectra6,
             // The firmware shows images in black and white only on this panel.
-            Panel::Uc8179Bwr => mock_trmnl::Panel::Og, // TODO(mock): 800x480 BWR
-            Panel::Uc81xx583 => mock_trmnl::Panel::Og, // TODO(mock): 648x480
-            Panel::Uc81xx368 => mock_trmnl::Panel::Og, // TODO(mock): 792x528
+            Panel::Uc8179Bwr => mock_trmnl::Panel::Og,
+            Panel::Uc81xx583 => mock_trmnl::Panel::new(mock_trmnl::Inks::Mono, 648, 480),
+            Panel::Uc81xx368 => mock_trmnl::Panel::new(mock_trmnl::Inks::Mono, 792, 528),
         }
     }
 }

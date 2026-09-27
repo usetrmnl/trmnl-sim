@@ -23,7 +23,7 @@ use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Map, Value, json};
 use tiny_http::{Header, Response, Server};
 
-pub use convert::{ConvertOptions, Converted, Fit, Panel, Preview};
+pub use convert::{ConvertOptions, Converted, Fit, Inks, Panel, Preview};
 pub use portal::portal_connect;
 
 /// The port the server listens on unless told otherwise. Fixed, because a device keeps
