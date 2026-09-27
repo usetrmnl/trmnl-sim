@@ -201,7 +201,9 @@ fn main() -> Result<()> {
     let (mut machine, frame): (Box<dyn soc::Machine>, sim_api::SharedFrame) = match fw.chip_id {
         firmware::CHIP_ESP32S3 if spi_panel => {
             if !fw.symbols.has_prefix("_Z13png_draw_6clr") {
-                anyhow::bail!("unsupported ESP32-S3 board: only the reTerminal E1002 (Spectra 6) has an SPI panel model");
+                anyhow::bail!(
+                    "unsupported ESP32-S3 board: only the reTerminal E1002 (Spectra 6) has an SPI panel model"
+                );
             }
             let epd = Uc8179::new_color(cli.panel_rev, devices::uc8179::ColorPanel::Spectra6);
             panel = mock_trmnl::Panel::Spectra6;
