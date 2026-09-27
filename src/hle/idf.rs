@@ -67,13 +67,16 @@ fn sleep_enable_timer(c: &mut HleCtx) -> Flow {
 }
 
 /// esp_err_t esp_deep_sleep_enable_gpio_wakeup(uint64_t gpio_pin_mask, esp_deepsleep_gpio_wake_up_mode_t mode)
+/// Only once the IDF accepted the pins: it refuses GPIOs that can't wake the chip from deep
+/// sleep (on the C3 only GPIO 0-5; e.g. the XIAO ESP32-C3's button on GPIO 9).
 fn deep_sleep_enable_gpio(c: &mut HleCtx) -> Flow {
     let mask = c.cpu.arg(0) as u64 | (c.cpu.arg(1) as u64) << 32;
     let high = c.cpu.arg(2) != 0;
-    if !high {
-        c.state.sleep.gpio_low_mask |= mask;
-    }
-    Flow::Continue
+    Flow::Wrap(Box::new(move |c, ret| {
+        if ret == 0 && !high {
+            c.state.sleep.gpio_low_mask |= mask;
+        }
+    }))
 }
 
 fn sleep_enable_gpio(c: &mut HleCtx) -> Flow {
