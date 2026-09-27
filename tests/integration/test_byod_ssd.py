@@ -14,6 +14,8 @@ class SsdBoard(ByodBoard):
 
     # The picture shows up this many rows higher (wrapping around), see Waveshare397.
     ROW_SHIFT = 0
+    # Update-Source after a button wake: ESP32-S3 boards wake by EXT0, C3 ones by GPIO.
+    BUTTON_SOURCE = "EXT0"
 
     def expect(self, level, bits: int) -> bytes:
         """The screenshot a `bits`-deep image of `level` should give on this board."""
@@ -49,6 +51,15 @@ class SsdBoard(ByodBoard):
                 self.refresh(s, f"/images/{name}.png")
                 result = s.compare_screen(expected, tolerance=16, max_ratio=0.001)
                 self.assertTrue(result["match"], (name, result))
+
+    def test_button_wakes_it(self):
+        with self.dev.boot_asleep() as s:
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=60)
+            n = len(self.dev.mock.requests)
+            s.press(150)
+            req = self.dev.mock.wait_for_request("/api/display", after=n, timeout_s=60)
+            self.assertEqual(req.headers["Update-Source"], self.BUTTON_SOURCE)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
 
     @unittest.expectedFailure
     def test_bmp_after_a_fast_refresh(self):
@@ -100,6 +111,7 @@ class XteinkX4(SsdBoard, unittest.TestCase):
     NAME = "Xteink X4"
     MODEL = "xteink_x4"
     BATTERY_V = 0.0  # device_list[] has batt_pin 0xff
+    BUTTON_SOURCE = "button"
 
     @unittest.expectedFailure
     def test_reports_the_battery_voltage(self):
@@ -179,6 +191,22 @@ class CrowPanel42(SsdBoard, unittest.TestCase):
     MODEL = "crowpanel42"
     SIZE = (400, 300)
     BATTERY_V = 4.2  # BATT_NONE: a fixed 4.2 V
+
+    # Firmware bug: the CrowPanel's device_list[] row has no pins, so display.cpp brings the
+    # panel up with bbep.begin(<product>) (EPD_CROWPANEL42, which selects EP42B_400x300),
+    # but png_to_epd() then calls bbep.setPanelType(dpList[...].OneBit) for 1-bit PNGs
+    # regardless, passing that product number as a panel type: 8 = EP295_128x296_4GRAY.
+    # The image is decoded 128 pixels wide into the 400x300 RAM and refreshed with that
+    # 2.9" panel's init sequence and (SSD1680-format) LUT, so it never shows. 2-bit images
+    # take the begin() path and are fine.
+
+    @unittest.expectedFailure
+    def test_shows_the_served_image(self):
+        super().test_shows_the_served_image()
+
+    @unittest.expectedFailure
+    def test_partial_refresh_after_a_full_one(self):
+        super().test_partial_refresh_after_a_full_one()
 
 
 if __name__ == "__main__":
