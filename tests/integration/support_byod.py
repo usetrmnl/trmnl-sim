@@ -26,7 +26,8 @@ class ByodBoard:
     MODEL      the firmware's DEVICE_MODEL (sent as the Model header)
     SIZE       the panel's (width, height) as the device reports it
     BATTERY_V  expected Battery-Voltage header at the default 4.1 V battery (None: don't check)
-    INKS       "mono", "bwry" or "spectra6": what the panel shows
+    INKS       "mono", "bwry", "spectra6" or "gray16" (a 16-gray parallel panel, served
+               4-bit PNGs like the TRMNL X): what the panel shows
     """
 
     ENV: str
@@ -75,13 +76,15 @@ class ByodBoard:
         else:
             number, board = big_number("42", scale=max(4, h // 30)), checkerboard(max(8, w // 20))
 
+            bits = 4 if self.INKS == "gray16" else 1
+
             def level(x, y):
                 ink = number(x, y) if y < h // 2 else board(x, y)
-                return 0 if ink else 1
+                return 0 if ink else (1 << bits) - 1
 
-            m.images[name + ".png"] = png_image(level, w, h, bits=1)
+            m.images[name + ".png"] = png_image(level, w, h, bits=bits)
             m._stamp(name)
-            expected = expected_gray(level, w, h, bits=1)
+            expected = expected_gray(level, w, h, bits=bits)
         m.display = {"image": name, "refresh_rate": 300}
         return expected
 
