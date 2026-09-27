@@ -264,6 +264,33 @@ impl Board for TrmnlX {
         self.apply_power_inputs();
     }
 
+    /// The modem (dual band) sees every access point; each band's get BSSIDs numbered like
+    /// the S3 radio's (02:5e:51:00:<00 or 05>:<n>).
+    fn set_wifi_networks(&mut self, networks: &[sim_api::WifiNetwork]) {
+        let (mut n24, mut n5) = (0u8, 0u8);
+        let aps = networks
+            .iter()
+            .map(|n| {
+                let five = n.channel > 14;
+                let i = if five { &mut n5 } else { &mut n24 };
+                *i += 1;
+                ModemAp {
+                    ssid: n.ssid.clone(),
+                    password: n.password.clone(),
+                    rssi: n.rssi,
+                    channel: n.channel,
+                    ecn: if n.open { 0 } else { 3 },
+                    bssid: [0x02, 0x5e, 0x51, 0x00, if five { 0x05 } else { 0x00 }, *i],
+                }
+            })
+            .collect();
+        self.modem.set_networks(aps);
+    }
+
+    fn set_wifi_available(&mut self, on: bool) {
+        self.modem.set_wifi_available(on);
+    }
+
     fn charging(&self) -> bool {
         self.charging_now()
     }

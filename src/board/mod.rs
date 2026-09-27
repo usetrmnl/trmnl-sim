@@ -65,6 +65,10 @@ pub trait Board: Send {
         false
     }
     fn set_docked(&mut self, _docked: bool) {}
+    /// The access points in range / all of them in or out of range, for radios on the board
+    /// (the TRMNL X's ESP32-C5 modem); the SoC's own radio is simulated by its WiFi HLE.
+    fn set_wifi_networks(&mut self, _networks: &[sim_api::WifiNetwork]) {}
+    fn set_wifi_available(&mut self, _on: bool) {}
     /// Show (true) or hide the display's refresh flashes.
     fn set_refresh_flashing(&mut self, _on: bool) {}
     /// Apply the peripheral faults this board has (I2C devices absent, panel stuck, modem
