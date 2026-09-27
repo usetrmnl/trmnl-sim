@@ -65,6 +65,13 @@ class Device:
         return 750000 if self.psram else 90000
 
     @property
+    def og_font(self) -> bool:
+        """Draws its message screens (errors, QA) in the OG's font (nicoclean_8) at the OG's
+        rows, centred: the OG's text goldens fit, shifted by half the width difference.
+        Parallel (FastEPD) panels use Inter_18 and get goldens of their own."""
+        return self.inks != "gray16"
+
+    @property
     def default_bmp(self) -> bool:
         """Takes the TRMNL server's 800x480 1-bit BMP as the default screen (other panels get
         a PNG of their size)."""

@@ -137,6 +137,22 @@ def image_size(mock: MockTrmnl, path: str) -> int:
     return len(mock.images[path[len("/images/"):].removesuffix(".bmp")])
 
 
+def assert_text(s: Simulator, name: str, region: tuple[int, int, int, int], device: Device | None = None, **kw):
+    """Assert centred message text (an error, the QA results...) on screen, given the OG's
+    golden `name` and its `region`: the device's own golden if GOLDEN_REGIONS has one, else,
+    on panels drawing in the OG's font at the OG's rows (Device.og_font), the OG's golden moved
+    to stay centred on the panel."""
+    d = device or DEVICE
+    own = GOLDEN_REGIONS.get(d.env, {}).get(name)
+    if own is not None:
+        s.assert_screen(GOLDEN / d.env / name, region=own, **kw)
+    elif d.og_font:
+        x, y, w, h = region
+        s.assert_screen(GOLDEN / name, region=(x + (d.size[0] - 800) // 2, y, w, h), **kw)
+    else:
+        raise AssertionError(f"no {name} golden for {d.name}: add golden/{d.env}/{name} and its GOLDEN_REGIONS entry")
+
+
 def partition_table(flash: bytes) -> list[dict]:
     """The partitions in a flash image (the table at 0x8000): label, type, subtype, offset,
     size."""
@@ -201,6 +217,8 @@ GOLDEN_REGIONS: dict[str, dict[str, tuple[int, int, int, int]]] = {
         # "WiFi connected, unable connect to API." and how to retry (tap the touch bar)
         "api_unable_to_connect.png": (580, 306, 712, 136),
     },
+    # the 960x540 FastEPD panels: Inter_18 at the OG's rows (the centred logo runs into them)
+    "TRMNL_X_PAPERS3": {"api_unable_to_connect.png": (0, 304, 960, 144)},
 }
 
 
@@ -411,4 +429,4 @@ class ProvisionedDevice:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden", "partition_table", "ota_slot_label", "boot_slot", "SSD16XX_BMP_BUG", "ONE_BIT_PNG_PANEL_TYPE_BUG", "GEN2_NTP_HANG_BUG"]
+__all__ = ["BUILD", "SLOW", "slow", "OG_BUILD", "DEVICE", "DEVICES", "ANY", "needs", "only_on", "device_image", "panel_number", "served_path", "device_mock", "BUILDS", "build_of", "build_for_env", "require_build", "BWRY_BUILD", "E1002_BUILD", "GOLDEN", "TEST_MAC", "NETWORK", "MEMCHECK", "KNOWN_MEMORY_BUGS", "sim", "fixture", "close_fixtures", "ProvisionedDevice", "MockTrmnl", "big_number", "Simulator", "skip_if", "image_size", "device_of", "GOLDEN_REGIONS", "golden", "partition_table", "ota_slot_label", "boot_slot", "SSD16XX_BMP_BUG", "ONE_BIT_PNG_PANEL_TYPE_BUG", "GEN2_NTP_HANG_BUG", "assert_text"]
