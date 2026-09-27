@@ -44,6 +44,8 @@ class Device:
     """Goes through the X's factory flow: modem flashing, then shipment mode until docked
     (and back to shipment mode when the setup portal times out); the general tests start
     it from its unboxed state (support_x.unboxed)."""
+    ota_slot: int = 0x1E0000
+    """Offset of the second app slot, which an OTA update installs into (first update)."""
     panel_rev: bool = False
     """Reads the panel revision (Panel-Rev header)."""
     general: str | None = None
@@ -60,7 +62,7 @@ _DEVICES = [
     Device("trmnl", "og", "TRMNL OG", chip="esp32c3", panel_rev=True),
     Device("trmnl_4clr", "og_4clr", "TRMNL BWRY", inks="bwry", chip="esp32c3"),
     Device("TRMNL_X", "x", "TRMNL X", size=(1872, 1404), inks="gray16", battery_v=None, double_click=False,
-           soft_reset_press=False, press_source="EXT0", shipment=True),
+           soft_reset_press=False, press_source="EXT0", shipment=True, ota_slot=0x320000),
     Device("seeed_reTerminal_E1002", "reterminal_e1002", "reTerminal E1002", inks="spectra6"),
     Device("seeed_xiao_esp32c3", "seeed_esp32c3", "XIAO ESP32-C3 + 7.5\" panel", chip="esp32c3", battery_v=0.0),
     Device("seeed_xiao_esp32s3", "seeed_esp32s3", "XIAO ESP32-S3 + 7.5\" panel", battery_v=0.0),

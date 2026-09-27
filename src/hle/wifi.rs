@@ -16,6 +16,8 @@ use super::{Flow, HleCtx, Hooks, MAGIC_BASE};
 use crate::firmware::Symbols;
 
 const ESP_OK: u32 = 0;
+const ESP_ERR_WIFI_NOT_INIT: u32 = 0x3000 + 1;
+const ESP_ERR_WIFI_NOT_STOPPED: u32 = 0x3000 + 4;
 const ESP_ERR_WIFI_NOT_CONNECT: u32 = 0x3000 + 15;
 const ESP_ERR_INVALID_ARG: u32 = 0x102;
 
@@ -99,6 +101,8 @@ pub struct WifiState {
     net_faults: NetFaults,
 
     task_created: bool,
+    /// Between esp_wifi_init and esp_wifi_deinit (the driver's API fails outside).
+    initialized: bool,
     mode: u32,
     started: bool,
     pub abi: WifiAbi,
@@ -150,6 +154,7 @@ impl WifiState {
             net_config: NetConfig::default(),
             net_faults: NetFaults::default(),
             task_created: false,
+            initialized: false,
             mode: 0,
             started: false,
             abi: WifiAbi::IDF_4_4,
@@ -493,6 +498,7 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
     // ...unless it has real behaviour here.
     let real: &[(&'static str, super::HookFn)] = &[
         ("esp_wifi_init", wifi_init),
+        ("esp_wifi_deinit", wifi_deinit),
         ("esp_wifi_set_mode", set_mode),
         ("esp_wifi_get_mode", get_mode),
         ("esp_wifi_start", start),
@@ -539,6 +545,7 @@ fn stack_alloc(c: &mut HleCtx, n: u32) -> u32 {
 // ---- driver API ----------------------------------------------------------------------------------
 
 fn wifi_init(c: &mut HleCtx) -> Flow {
+    c.state.wifi.initialized = true;
     if c.state.wifi.task_created {
         return Flow::Return(Some(ESP_OK));
     }
@@ -557,7 +564,28 @@ fn wifi_init(c: &mut HleCtx) -> Flow {
     }
 }
 
+/// Arduino 3 deinitializes the driver whenever WiFi is turned off (`WiFi.mode(WIFI_OFF)`,
+/// `WiFi.disconnect(true)`); until the next esp_wifi_init its API fails with
+/// ESP_ERR_WIFI_NOT_INIT, so e.g. `WiFi.reconnect()` doesn't connect a torn-down station.
+fn wifi_deinit(c: &mut HleCtx) -> Flow {
+    let w = &mut c.state.wifi;
+    if !w.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
+    if w.started {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_STOPPED));
+    }
+    w.initialized = false;
+    w.connecting = false;
+    w.connected = None;
+    w.events.clear();
+    Flow::Return(Some(ESP_OK))
+}
+
 fn set_mode(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let mode = c.cpu.arg(0);
     if mode > 3 {
         return Flow::Return(Some(ESP_ERR_INVALID_ARG));
@@ -597,6 +625,9 @@ fn set_mode(c: &mut HleCtx) -> Flow {
 }
 
 fn get_mode(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let p = c.cpu.arg(0);
     let mode = c.state.wifi.mode;
     if p != 0 {
@@ -606,6 +637,9 @@ fn get_mode(c: &mut HleCtx) -> Flow {
 }
 
 fn start(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let now = c.env.now_ns();
     c.env.console("wifi: esp_wifi_start()");
     let w = &mut c.state.wifi;
@@ -718,6 +752,9 @@ fn get_config(c: &mut HleCtx) -> Flow {
 }
 
 fn connect(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
     if w.connected.is_none() && !w.connecting {
@@ -729,6 +766,9 @@ fn connect(c: &mut HleCtx) -> Flow {
 }
 
 fn disconnect(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
     w.events.retain(|e| e.id != EV_STA_CONNECTED);
@@ -742,6 +782,9 @@ fn disconnect(c: &mut HleCtx) -> Flow {
 }
 
 fn scan_start(c: &mut HleCtx) -> Flow {
+    if !c.state.wifi.initialized {
+        return Flow::Return(Some(ESP_ERR_WIFI_NOT_INIT));
+    }
     let now = c.env.now_ns();
     let w = &mut c.state.wifi;
     w.scan_results = if w.available { w.networks.iter().filter(|a| w.visible(a)).cloned().collect() } else { vec![] };

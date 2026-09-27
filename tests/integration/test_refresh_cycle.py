@@ -2,7 +2,7 @@
 
 import unittest
 
-from support import BUILD, ProvisionedDevice, big_number
+from support import BUILD, DEVICE, ProvisionedDevice, big_number, device_image, needs
 
 from devices import ANY
 
@@ -27,10 +27,10 @@ class RefreshCycle(unittest.TestCase):
         dev.mock.display = {"image": "default", "refresh_rate": 300}
 
     def test_image_is_rendered_exactly(self):
-        expected = dev.mock.set_image("one", big_number("1"))
+        path, expected = device_image(dev.mock, "one", big_number("1"))
         dev.mock.display = {"image": "one", "refresh_rate": 300}
         with dev.boot() as s:
-            dev.mock.wait_for_request("/images/one.bmp", timeout_s=90)
+            dev.mock.wait_for_request(path, timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=90)
             result = s.compare_screen(expected, tolerance=64, max_ratio=0)
             self.assertTrue(result["match"], result)
@@ -42,7 +42,7 @@ class RefreshCycle(unittest.TestCase):
             self.assertAlmostEqual(st["wake_at_s"] - st["sim_time_s"], 600, delta=15)
 
     def test_timer_wake_fetches_next_image(self):
-        expected = dev.mock.set_image("two", big_number("2"))
+        _, expected = device_image(dev.mock, "two", big_number("2"))
         dev.mock.display = {"image": "two", "refresh_rate": 300}
         with dev.boot_asleep() as s:
             s.wait(state="deep_sleep", timeout_s=90)
@@ -59,7 +59,7 @@ class RefreshCycle(unittest.TestCase):
             n = len(dev.mock.requests)
             s.press(150)
             req = dev.mock.wait_for_request("/api/display", after=n, timeout_s=90)
-            self.assertEqual(req.headers["Update-Source"], "button")
+            self.assertEqual(req.headers["Update-Source"], DEVICE.press_source)
             s.wait(state="deep_sleep", timeout_s=90)
 
     def test_reports_battery_voltage(self):
@@ -76,18 +76,23 @@ class RefreshCycle(unittest.TestCase):
             req = dev.mock.wait_for_request("/api/display", timeout_s=90)
             for h in ("ID", "FW-Version", "Model", "RSSI", "Width", "Height"):
                 self.assertIn(h, req.headers)
-            self.assertEqual((req.headers["Width"], req.headers["Height"]), ("800", "480"))
+            self.assertEqual((req.headers["Width"], req.headers["Height"]), tuple(map(str, DEVICE.size)))
             self.assertEqual(req.headers["RSSI"], "-54")
-            # read from the UC8179 by bit-banging its REV command (the simulator's default)
-            self.assertEqual(req.headers["Panel-Rev"], "0a0c1b2c")
+            if DEVICE.panel_rev:
+                # read from the UC8179 by bit-banging its REV command (the simulator's default)
+                self.assertEqual(req.headers["Panel-Rev"], "0a0c1b2c")
+            else:
+                self.assertNotIn("Panel-Rev", req.headers)
             s.wait(state="deep_sleep", timeout_s=90)
 
+    @needs("panel_rev")
     def test_reports_the_panel_revision_it_reads(self):
         with dev.boot(extra_args=("--panel-rev", "0x00c0ffee")) as s:
             req = dev.mock.wait_for_request("/api/display", timeout_s=90)
             self.assertEqual(req.headers["Panel-Rev"], "00c0ffee")
             s.wait(state="deep_sleep", timeout_s=90)
 
+    @needs("panel_rev")
     def test_omits_the_panel_revision_when_it_reads_zero(self):
         with dev.boot(extra_args=("--panel-rev", "0")) as s:
             req = dev.mock.wait_for_request("/api/display", timeout_s=90)
@@ -147,7 +152,7 @@ class FirmwareUpdate(unittest.TestCase):
         with dev.boot() as s:
             dev.mock.wait_for_request("/firmware.bin", timeout_s=120)
             # The bootloader picks the freshly written slot after the restart.
-            s.wait_for_console(r"Loaded app from partition at offset 0x1e0000", timeout_s=300)
+            s.wait_for_console(rf"Loaded app from partition at offset {DEVICE.ota_slot:#x}", timeout_s=300)
             cursor = len(dev.mock.requests)  # the new app can't have reached the network yet
             req = dev.mock.wait_for_request("/api/display", after=cursor, timeout_s=120)
             self.assertEqual(req.headers["FW-Version"], "1.8.16")
