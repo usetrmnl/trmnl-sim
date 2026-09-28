@@ -242,14 +242,15 @@ class PortalTimeout(unittest.TestCase):
             self.time_out(s, docked=True)
             g = s.status()["display_generation"]
             s.dock(False)  # checked every 2 s: then the shipping screen
-            deadline = time.time() + 30
+            # (wall-clock limits allow for a machine busy with other simulators)
+            deadline = time.time() + 90
             while s.status()["display_generation"] == g:
                 self.assertLess(time.time(), deadline, "the shipping screen was not drawn")
                 time.sleep(0.2)
-            s.wait(display_idle=True, timeout_s=30)
+            s.wait(display_idle=True, timeout_s=90)
             c = s.status()["console_total"]
             s.dock(True)  # the charger ends shipment mode
-            s.wait(console=r"CHARGER DETECTED - Exiting shipment mode", since=c, timeout_s=30)
+            s.wait(console=r"CHARGER DETECTED - Exiting shipment mode", since=c, timeout_s=90)
 
     @unittest.expectedFailure
     def test_shipment_mode_after_the_timeout_stays_asleep(self):

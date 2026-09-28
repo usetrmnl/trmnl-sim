@@ -249,6 +249,8 @@ def classes_by_env() -> dict[str, list[tuple[str, str]]]:
     out: dict[str, list[tuple[str, str]]] = {}
     missing = []
     TEST_COUNTS.clear()
+    bad_known: list[str] = []
+    from devices import DEVICES
     for name in test_modules():
         module = importlib.import_module(name)
         seen = set()
@@ -272,8 +274,17 @@ def classes_by_env() -> dict[str, list[tuple[str, str]]]:
                     missing.append(f"{name}.{type(t).__name__}")
 
         walk(unittest.defaultTestLoader.loadTestsFromModule(module))
+        for env, known in getattr(module, "KNOWN_FAILURES", {}).items():
+            for key in known:
+                cls_name, _, test = key.partition(".")
+                cls = getattr(module, cls_name, None)
+                if env not in DEVICES or cls is None or (test and not hasattr(cls, test)):
+                    bad_known.append(f"{name}: {env} {key!r}")
     from devices import ANY, DEVICES
 
+    if bad_known:
+        sys.exit("KNOWN_FAILURES entries that name no device or test (keys are \"Class.test_name\" or "
+                 "\"Class\"): " + "; ".join(bad_known))
     strays = sorted(e for e in out if e != ANY and e not in DEVICES)
     if strays:
         sys.exit(f"tests name environments devices.py doesn't know: {', '.join(strays)}")

@@ -72,12 +72,18 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
         "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
         "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
     },
-    "m5_paper_color": {
-        "FreshDevice.test_setup_screen FreshDevice.test_setup_screen_names_the_access_point PortalTimeout.test_unattended_portal_times_out_and_sleeps Onboarding.test_unknown_network_shows_wifi_error_and_sleeps Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": SMALL_PANEL,
-    },
-    "TRMNL_X_LILYGO_T5PRO": {
-        "FreshDevice.test_setup_screen FreshDevice.test_setup_screen_names_the_access_point PortalTimeout.test_unattended_portal_times_out_and_sleeps Onboarding.test_unknown_network_shows_wifi_error_and_sleeps Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
-    },
+    "m5_paper_color": dict.fromkeys([
+        "FreshDevice.test_setup_screen", "FreshDevice.test_setup_screen_names_the_access_point",
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps",
+        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps",
+        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
+    ], SMALL_PANEL),
+    "TRMNL_X_LILYGO_T5PRO": dict.fromkeys([
+        "FreshDevice.test_setup_screen", "FreshDevice.test_setup_screen_names_the_access_point",
+        "PortalTimeout.test_unattended_portal_times_out_and_sleeps",
+        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps",
+        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
+    ], PARALLEL_SMALL_PANEL),
 }
 
 
