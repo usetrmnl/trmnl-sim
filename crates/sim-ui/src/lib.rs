@@ -377,9 +377,6 @@ impl SimApp {
                 self.restore_save_point(SavePointSource::File(path));
             }
         });
-        if self.status.savepoints.is_empty() {
-            ui.weak("None yet. Saves in deep sleep capture the whole device.");
-        }
         let mut restore = None;
         for sp in self.status.savepoints.iter().rev() {
             ui.horizontal(|ui| {
@@ -1198,11 +1195,11 @@ mod render_tests {
         let (mut h, _p) = harness(800, 480, BoardInfo::default(), false);
         h.run_steps(5);
         save(&mut h, "og");
-        // the network error modes, expanded
+        // the faults, expanded
         use egui_kittest::kittest::Queryable;
-        h.get_by_label("WiFi / network errors").click();
+        h.get_by_label("FAULTS").click();
         h.run_steps(5);
-        save(&mut h, "og_network_errors");
+        save(&mut h, "og_faults");
     }
 
     #[test]
