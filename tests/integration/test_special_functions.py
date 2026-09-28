@@ -179,7 +179,10 @@ class SpecialFunctions(Case):
             self.run_function(s, {"image": "default", "action": "sleep", "refresh_rate": 1800})
             s.wait(state="deep_sleep", display_idle=True, timeout_s=90)
             self.assertEqual(dev().mock.count("/api/log"), 0)
-            self.assertTrue(s.compare_screen(screen, tolerance=0, max_ratio=0)["match"])
+            # the same picture: PNG devices redraw the cached image (with a fast refresh, whose
+            # simulated grays differ slightly from a full one's), the OG leaves it alone
+            result = s.compare_screen(screen, tolerance=64, max_ratio=0)
+            self.assertTrue(result["match"], result)
 
     def test_sleep_without_the_sleep_action_is_ignored(self):
         with dev().boot() as s:
