@@ -8,8 +8,8 @@ use super::bus::{MMU_ENTRIES, MMU_TABLE, PERIPH_BASE, PERIPH_SIZE, S3Bus};
 use crate::periph::crypto_math::{aes_block, aes_blocks, rsa_op};
 use crate::periph::i2c::I2c;
 use crate::periph::sha::Sha;
-use crate::soc::Console;
 use crate::periph::systimer::Systimer;
+use crate::soc::Console;
 
 /// Interrupt sources (soc/interrupts.h for the S3), = map register offset / 4.
 pub mod src {

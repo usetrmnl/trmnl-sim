@@ -16,28 +16,50 @@ impl SimApp {
         let mut f = current.clone();
 
         section(ui, "Faults");
+        // The network error modes, collapsed (the header says how many are on).
+        let mut wifi = Pending::resolve(&mut self.wifi_pending, self.status.wifi_available);
         let n = &mut f.net;
-        let mut offline = n.offline;
-        if ui.checkbox(&mut offline, "Internet down").on_hover_text("Only the host (10.0.2.2) is reachable").changed() {
-            n.offline = offline;
-        }
-        ui.checkbox(&mut n.no_internet, "No internet behind the AP")
-            .on_hover_text("WiFi and DHCP work, but DNS and every connection time out");
-        let mut slow = n.latency_ms > 0 || n.bandwidth_bps.is_some();
-        if ui
-            .checkbox(&mut slow, "Slow (300 ms, 16 kB/s)")
-            .on_hover_text("Added latency and a bandwidth limit")
-            .changed()
-        {
-            (n.latency_ms, n.bandwidth_bps) = if slow { (300, Some(16_000)) } else { (0, None) };
-        }
-        let mut lossy = n.loss > 0.0;
-        if ui.checkbox(&mut lossy, "Lossy (10% packet loss)").changed() {
-            n.loss = if lossy { 0.1 } else { 0.0 };
-        }
-        let mut dns = n.dns.is_some();
-        if ui.checkbox(&mut dns, "DNS fails").on_hover_text("Every lookup answers SERVFAIL").changed() {
-            n.dns = dns.then_some(DnsFault::ServFail);
+        let slow = n.latency_ms > 0 || n.bandwidth_bps.is_some();
+        let active =
+            [!wifi, n.offline, n.no_internet, slow, n.loss > 0.0, n.dns.is_some()].iter().filter(|&&on| on).count();
+        let title =
+            if active > 0 { format!("WiFi / network errors ({active} on)") } else { "WiFi / network errors".into() };
+        let mut wifi_changed = false;
+        egui::CollapsingHeader::new(title).id_salt("network_faults").default_open(false).show(ui, |ui| {
+            wifi_changed = ui
+                .checkbox(&mut wifi, "Access point available")
+                .on_hover_text("Off: the device's WiFi network disappears (out of range)")
+                .changed();
+            let mut offline = n.offline;
+            if ui
+                .checkbox(&mut offline, "Internet down")
+                .on_hover_text("Only the host (10.0.2.2) is reachable")
+                .changed()
+            {
+                n.offline = offline;
+            }
+            ui.checkbox(&mut n.no_internet, "No internet behind the AP")
+                .on_hover_text("WiFi and DHCP work, but DNS and every connection time out");
+            let mut slow = n.latency_ms > 0 || n.bandwidth_bps.is_some();
+            if ui
+                .checkbox(&mut slow, "Slow (300 ms, 16 kB/s)")
+                .on_hover_text("Added latency and a bandwidth limit")
+                .changed()
+            {
+                (n.latency_ms, n.bandwidth_bps) = if slow { (300, Some(16_000)) } else { (0, None) };
+            }
+            let mut lossy = n.loss > 0.0;
+            if ui.checkbox(&mut lossy, "Lossy (10% packet loss)").changed() {
+                n.loss = if lossy { 0.1 } else { 0.0 };
+            }
+            let mut dns = n.dns.is_some();
+            if ui.checkbox(&mut dns, "DNS fails").on_hover_text("Every lookup answers SERVFAIL").changed() {
+                n.dns = dns.then_some(DnsFault::ServFail);
+            }
+        });
+        if wifi_changed {
+            self.send(Command::SetWifiAvailable(wifi));
+            Pending::set(&mut self.wifi_pending, wifi);
         }
 
         ui.horizontal_wrapped(|ui| {

@@ -581,11 +581,6 @@ impl SimApp {
             self.save_points(ui);
 
             section(ui, "Network");
-            let mut wifi = Pending::resolve(&mut self.wifi_pending, self.status.wifi_available);
-            if ui.checkbox(&mut wifi, "Access point available").changed() {
-                self.send(Command::SetWifiAvailable(wifi));
-                Pending::set(&mut self.wifi_pending, wifi);
-            }
             let net = if self.status.wifi_connected {
                 format!("Connected · {}", self.status.ip.as_deref().unwrap_or("no IP"))
             } else {
@@ -1203,6 +1198,11 @@ mod render_tests {
         let (mut h, _p) = harness(800, 480, BoardInfo::default(), false);
         h.run_steps(5);
         save(&mut h, "og");
+        // the network error modes, expanded
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label("WiFi / network errors").click();
+        h.run_steps(5);
+        save(&mut h, "og_network_errors");
     }
 
     #[test]

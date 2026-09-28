@@ -2,12 +2,12 @@
 //! register file (so unmodelled registers read back what was written); the
 //! models below add side effects and status bits on top.
 
-use crate::soc::Console;
 use super::bus::{C3Bus, MMU_ENTRIES, MMU_TABLE, PERIPH_BASE, PERIPH_SIZE};
 use super::crypto::{AES, GDMA, RSA};
 use crate::periph::i2c::I2c;
 use crate::periph::sha::Sha;
 use crate::periph::systimer::Systimer;
+use crate::soc::Console;
 
 // Interrupt sources (periph_defs.h)
 pub mod src {
