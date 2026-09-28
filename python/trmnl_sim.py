@@ -122,9 +122,11 @@ class Simulator:
             args += ["--host-port", f"{guest}={host}"]
         cov_dir = os.environ.get("TRMNL_SIM_COVERAGE")
         if coverage is None and cov_dir:
-            Path(cov_dir).mkdir(parents=True, exist_ok=True)
+            # one directory per build (named after its environment), for per-device reports
+            build_cov = Path(cov_dir) / self.build_dir.resolve().name
+            build_cov.mkdir(parents=True, exist_ok=True)
             stem = re.sub(r"[^\w.-]+", "_", self.name)
-            fd, coverage = tempfile.mkstemp(prefix=f"{stem}-", suffix=".info", dir=cov_dir)
+            fd, coverage = tempfile.mkstemp(prefix=f"{stem}-", suffix=".info", dir=build_cov)
             os.close(fd)
         self.coverage_path = Path(coverage) if coverage else None
         if self.coverage_path:

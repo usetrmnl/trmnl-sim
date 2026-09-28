@@ -53,7 +53,8 @@ def tracefiles(inputs: list[str], exclude: Path | None = None) -> list[Path]:
     for i in inputs:
         p = Path(i)
         # A directory means the per-simulator tracefiles, not an earlier merge of them.
-        found = sorted(f for f in p.glob("*.info") if f.name != MERGED) if p.is_dir() else [p]
+        # (also in subdirectories: one per build when the test support collects them)
+        found = sorted(f for f in p.rglob("*.info") if f.name != MERGED) if p.is_dir() else [p]
         out += [f for f in found if exclude is None or f.resolve() != exclude.resolve()]
     return out
 

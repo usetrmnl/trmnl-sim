@@ -144,6 +144,15 @@ def report_coverage(cov_dir: str) -> None:
     print(paint(BOLD, f"\nFirmware coverage (src/, lib/); full report in {out / 'html'}"), file=sys.stderr)
     coverage.main([str(out), "-o", str(out / "merged.info"), "--html", str(out / "html"), "--root", str(root), "-q"])
     coverage.main([str(out), "--include", "src/", "--include", "lib/"])
+    builds = sorted(d for d in out.iterdir() if d.is_dir() and d.name != "html" and any(d.glob("*.info")))
+    if len(builds) > 1:
+        print(paint(BOLD, "\nPer build (src/, lib/ lines each build compiles):"))
+        for d in builds:
+            cov = coverage.Coverage()
+            for f in coverage.tracefiles([str(d)]):
+                coverage.parse(f, cov, ["src/", "lib/"])
+            lh, lf, fh, ff = coverage.totals(cov)
+            print(f"  {d.name:32} lines {coverage.pct(lh, lf):>7} ({lh}/{lf})  functions {coverage.pct(fh, ff):>7}")
 
 
 # Started first so the longest ones don't end up running alone at the end (slowest first,
