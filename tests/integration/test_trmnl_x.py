@@ -330,38 +330,32 @@ class FailedJoin(unittest.TestCase):
         self.assertEqual(code, 200, data)
         return c
 
-    def assert_awake(self, st: dict):
-        self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of keeping the portal")
+    def assert_portal_stays(self, s):
+        """For a minute of simulated time the device stays in setup mode (whether its AP
+        stayed up or it brought the portal back), and the portal answers."""
+        t0 = s.status()["sim_time_s"]
+        deadline = time.time() + 120
+        while (st := s.status())["sim_time_s"] < t0 + 60:
+            self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of keeping the portal")
+            self.assertLess(time.time(), deadline, "the simulation stalled")
+            time.sleep(0.5)
+        s.wait(portal=True, timeout_s=30)
+        self.assertEqual(s.portal_request("/")[0], 200)
 
     @unittest.expectedFailure  # WifiCaptive.cpp:196-199, bl.cpp:1097-1107 (above)
-    def test_wrong_password_on_2_4_ghz_brings_the_portal_back(self):
+    def test_wrong_password_on_2_4_ghz_keeps_the_portal(self):
         with shipped().boot() as s:
             self.portal(s)
             c = self.join(s, SSID_24, "2.4GHz")
             s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
-            # The S3 joins on the radio that runs the setup AP, which went down for it.
-            deadline = time.time() + 90
-            while not any("captive portal forwarded" in line for line in s.console(c)):
-                self.assert_awake(s.status())
-                self.assertLess(time.time(), deadline, "the portal did not come back")
-                time.sleep(0.5)
-            s.wait(portal=True, timeout_s=30)
-            self.assertEqual(s.portal_request("/")[0], 200)
+            self.assert_portal_stays(s)
 
     @unittest.expectedFailure  # WifiCaptive.cpp:196-199 and 209-225, bl.cpp:1097-1107 (above)
-    def test_wrong_password_on_5_ghz_keeps_the_portal_up(self):
+    def test_wrong_password_on_5_ghz_keeps_the_portal(self):
         with shipped().boot() as s:
             self.portal(s)
-            self.join(s, SSID_5, "5GHz")
-            # The modem's join fails silently on a production build; give it a minute.
-            t0 = s.status()["sim_time_s"]
-            deadline = time.time() + 120
-            while (st := s.status())["sim_time_s"] < t0 + 60:
-                self.assert_awake(st)
-                self.assertLess(time.time(), deadline, "the simulation stalled")
-                time.sleep(0.5)
-            self.assertIsNotNone(st["portal_url"])
-            self.assertEqual(s.portal_request("/")[0], 200)
+            self.join(s, SSID_5, "5GHz")  # the modem's join fails silently on a production build
+            self.assert_portal_stays(s)
 
 
 if __name__ == "__main__":

@@ -206,28 +206,29 @@ class FailedJoin(unittest.TestCase):
         self.assertEqual(code, 200, data)
         return c
 
-    def assert_portal_comes_back(self, s, since: int):
-        # Joining took the setup AP down; it must come back up for another try.
+    def assert_portal_stays(self, s):
+        """From the failed join on, the device stays in setup mode (whether its AP stayed up
+        or it brought the portal back) and the portal answers."""
+        t0 = s.status()["sim_time_s"]
         deadline = time.time() + 90
-        while not any("captive portal forwarded" in line for line in s.console(since)):
-            st = s.status()
-            self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of reopening the portal")
-            self.assertLess(time.time(), deadline, "the portal did not come back")
+        while (st := s.status())["sim_time_s"] < t0 + 30:
+            self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of keeping the portal")
+            self.assertLess(time.time(), deadline, "the simulation stalled")
             time.sleep(0.5)
         s.wait(portal=True, timeout_s=30)
         self.assertIn("TRMNL-Sim", [n["name"] for n in s.portal_scan()["networks"]])
 
-    def test_wrong_password_brings_the_portal_back(self):
+    def test_wrong_password_keeps_the_portal(self):
         with fresh(networks=[{"ssid": "TRMNL-Sim", "password": "password"}]) as s:
             c = self.join(s, pswd="wrong")
             s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
-            self.assert_portal_comes_back(s, c)
+            self.assert_portal_stays(s)
 
-    def test_wpa2_enterprise_without_identity_brings_the_portal_back(self):
+    def test_wpa2_enterprise_without_identity_keeps_the_portal(self):
         with fresh() as s:
             c = self.join(s, isEnterprise=True)
             s.wait(console=r"requires an identity", since=c, timeout_s=90)
-            self.assert_portal_comes_back(s, c)
+            self.assert_portal_stays(s)
 
 
 class SavedNetworks(unittest.TestCase):
