@@ -186,7 +186,7 @@ fn stop_and_restart() {
     assert_eq!(m.device_url(), Some(format!("http://10.0.2.2:{port}")));
     m.stop();
     assert_eq!(m.device_url(), None);
-    // tiny_http closes its listener from its own accept thread, shortly after stop().
+    // The accept thread drops the listener as it exits, within stop().
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while TcpStream::connect(("127.0.0.1", port)).is_ok() {
         assert!(std::time::Instant::now() < deadline, "port {port} still accepting after stop()");
@@ -203,4 +203,143 @@ fn names_are_url_safe_and_unique() {
     assert_eq!(name_from_file(&st, "/tmp/My Photo.JPG"), "My_Photo");
     assert_eq!(name_from_file(&st, "default.png"), "default_2");
     assert_eq!(sanitize("__x"), "x");
+}
+
+/// Everything the server sends for a GET of `path` (an error if the connection is reset).
+fn raw(port: u16, path: &str) -> std::io::Result<Vec<u8>> {
+    let mut s = TcpStream::connect(("127.0.0.1", port))?;
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())?;
+    let mut resp = Vec::new();
+    s.read_to_end(&mut resp)?;
+    Ok(resp)
+}
+
+fn fault(m: &MockServer, route: Route, spec: &str) {
+    let (f, n) = HttpFault::parse(spec, route).unwrap();
+    m.state().add_fault(route, f, n).unwrap();
+}
+
+#[test]
+fn fault_specs_parse_like_mock_server_py() {
+    let p = |s: &str, r| HttpFault::parse(s, r);
+    assert_eq!(p("500:3", Route::Display), Ok((HttpFault::Status(500), Some(3))));
+    assert_eq!(p("timeout", Route::Image), Ok((HttpFault::Timeout(20.0), None)));
+    assert_eq!(p("timeout=2.5:1", Route::Image), Ok((HttpFault::Timeout(2.5), Some(1))));
+    assert_eq!(p("redirect", Route::Display), Ok((HttpFault::Redirect(307), None)));
+    assert_eq!(p("redirect=308", Route::Image), Ok((HttpFault::Redirect(308), None)));
+    assert_eq!(p("status=202", Route::Display), Ok((HttpFault::JsonStatus(202), None)));
+    assert_eq!(p("truncate", Route::Image), Ok((HttpFault::Truncate(None), None)));
+    assert_eq!(p("truncate=100", Route::Image), Ok((HttpFault::Truncate(Some(100)), None)));
+    assert_eq!(p("slow", Route::Image), Ok((HttpFault::Slow(1024, 20.0), None)));
+    assert_eq!(p("slow=10,1.5:2", Route::Image), Ok((HttpFault::Slow(10, 1.5), Some(2))));
+    for bad in ["99", "600", "500:0", "500:x", "redirect=302", "status", "reset=1", "slow=10", "nope", "truncate"] {
+        let route = if bad == "truncate" { Route::Display } else { Route::Image };
+        assert!(p(bad, route).is_err(), "{bad} should not parse for {route:?}");
+    }
+    // every kind round-trips through its spec
+    for f in HttpFault::ALL {
+        let route = if f.applies_to(Route::Display) { Route::Display } else { Route::Image };
+        assert_eq!(p(&f.spec(), route), Ok((f.clone(), None)), "{f}");
+    }
+}
+
+#[test]
+fn faults_are_consumed_in_order_then_the_route_is_healthy() {
+    let (m, port) = started(Panel::Og);
+    fault(&m, Route::Display, "503:2");
+    fault(&m, Route::Display, "bad-json:1");
+    m.state().enqueue(Map::from_iter([("reset_firmware".to_string(), json!(true))]));
+    assert_eq!(http(port, "GET", "/api/display", &[]).0, 503);
+    assert_eq!(http(port, "GET", "/api/display", &[]).0, 503);
+    let (code, _, body) = http(port, "GET", "/api/display", &[]);
+    assert_eq!((code, body.as_slice()), (200, b"this is not json {{{".as_slice()));
+    // the faulted requests left the one-shot answer for the first healthy one
+    assert_eq!(get_json(port, "/api/display", &[])["reset_firmware"], true);
+    assert!(m.state().display_faults.is_empty());
+    let st = m.state();
+    let log: Vec<(u16, &str)> = st.requests.iter().map(|r| (r.status, r.summary.as_str())).collect();
+    assert_eq!(log[0], (503, "fault 503: HTTP 503"));
+    // a fault without a count stays
+    drop(st);
+    fault(&m, Route::Image, "404");
+    for _ in 0..3 {
+        assert_eq!(http(port, "GET", "/images/default.bmp", &[]).0, 404);
+    }
+    assert_eq!(http(port, "GET", "/api/display", &[]).0, 200, "only images fail");
+    assert!(m.state().add_fault(Route::Display, HttpFault::Garbage, None).is_err());
+}
+
+#[test]
+fn connection_faults() {
+    let (m, port) = started(Panel::Og);
+    fault(&m, Route::Display, "close:1");
+    assert_eq!(raw(port, "/api/display").unwrap(), b"");
+    fault(&m, Route::Display, "reset:1");
+    let e = raw(port, "/api/display").unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset, "{e}");
+    fault(&m, Route::Image, "timeout=0.3:1");
+    let t = std::time::Instant::now();
+    assert_eq!(raw(port, "/images/default.bmp").unwrap(), b"");
+    assert!(t.elapsed() >= std::time::Duration::from_millis(300), "{:?}", t.elapsed());
+    fault(&m, Route::Image, "redirect=308:1");
+    let (code, head, _) = http(port, "GET", "/images/default.bmp?x=1", &[]);
+    assert_eq!(code, 308);
+    assert!(head.contains("Location: /images/default.bmp?x=1"), "{head}");
+    let st = m.state();
+    let statuses: Vec<u16> = st.requests.iter().map(|r| r.status).collect();
+    assert_eq!(statuses, [0, 0, 0, 308]);
+}
+
+#[test]
+fn display_faults() {
+    let (m, port) = started(Panel::Og);
+    fault(&m, Route::Display, "status=202:1");
+    assert_eq!(get_json(port, "/api/display", &[]), json!({"status": 202, "refresh_rate": 900}));
+    fault(&m, Route::Display, "empty-state:1");
+    let v = get_json(port, "/api/display", &[]);
+    assert_eq!((v["filename"].as_str(), v["status"].as_i64()), (Some("empty_state"), Some(0)));
+    assert!(v["image_url"].is_string());
+}
+
+#[test]
+fn image_faults() {
+    let (m, port) = started(Panel::Og);
+    let img = m.state().image(DEFAULT_IMAGE).unwrap().data.clone();
+    let path = "/images/default.bmp";
+    let len_header = |head: &str| head.lines().find_map(|l| l.strip_prefix("Content-Length: ")).map(str::to_string);
+
+    fault(&m, Route::Image, "truncate:1");
+    let resp = raw(port, path).unwrap();
+    let split = resp.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&resp[..split]);
+    assert_eq!(len_header(&head), Some(img.len().to_string()));
+    assert_eq!(&resp[split + 4..], &img[..img.len() / 2]);
+
+    fault(&m, Route::Image, "slow=100,0.3:1");
+    let t = std::time::Instant::now();
+    let (_, _, body) = http(port, "GET", path, &[]);
+    assert!(t.elapsed() >= std::time::Duration::from_millis(300));
+    assert_eq!(body, *img, "all of it, after the stall");
+
+    fault(&m, Route::Image, "empty:1");
+    let (code, head, body) = http(port, "GET", path, &[]);
+    assert_eq!((code, len_header(&head).as_deref(), body.len()), (200, Some("0"), 0));
+
+    fault(&m, Route::Image, "too-big:1");
+    assert_eq!(http(port, "GET", path, &[]).2.len(), fault::TOO_BIG_LENGTH);
+
+    fault(&m, Route::Image, "garbage:1");
+    let (_, head, body) = http(port, "GET", path, &[]);
+    assert!(head.contains("Content-Type: image/png"));
+    assert_eq!(body.len(), img.len().max(4096));
+    assert_ne!(body, *img);
+
+    fault(&m, Route::Image, "no-length:1");
+    let (_, head, body) = http(port, "GET", path, &[]);
+    assert_eq!((len_header(&head), body), (None, img.to_vec()));
+
+    fault(&m, Route::Image, "wrong-type:1");
+    let (_, head, body) = http(port, "GET", path, &[]);
+    assert!(head.contains("Content-Type: image/png"), "a BMP claims PNG: {head}");
+    assert_eq!(body, *img);
 }

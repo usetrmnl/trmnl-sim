@@ -12,12 +12,14 @@
 //! | POST   | `/mock/display`             | `{"image", "refresh_rate", "special_function", "playlist", "auto_advance", "registered", "friendly_id", "api_key", "extra"}` (all optional) | server state |
 //! | POST   | `/mock/queue`               | raw `/api/display` fields for the next answer only (plus `image`) | |
 //! | DELETE | `/mock/queue`               |                                                | |
+//! | POST   | `/mock/faults`              | `{"display": ["503:2", "timeout"], "image": ["truncate:1"]}`: HTTP and connection failures appended to each route's queue, in the firmware's `scripts/mock_server.py` syntax `KIND[=ARG][:COUNT]` (see `mock_trmnl::fault`) | `{"display": [...], "image": [...]}` |
+//! | DELETE | `/mock/faults`              | `?route=display\|image` (default both)          | |
 //! | POST   | `/mock/files`               | file body; `?path=/firmware.bin`               | `{"url"}` |
 //! | GET    | `/mock/requests`            | `?since=N`                                     | `{"total", "requests": [...]}` |
 
 use std::time::UNIX_EPOCH;
 
-use mock_trmnl::{ConvertOptions, Fit, MockServer};
+use mock_trmnl::{ConvertOptions, Fit, HttpFault, MockServer, Route, State};
 use serde_json::{Value, json};
 use tiny_http::{Header, Method, Response};
 
@@ -127,6 +129,38 @@ pub(crate) fn route(
             m.state().queue.clear();
             ok()
         }
+        (Method::Post, "faults") => {
+            let b = body_json(body)?;
+            let obj = b.as_object().ok_or("need a JSON object")?;
+            // Parse everything first: a bad spec adds nothing.
+            let mut add = Vec::new();
+            for (k, v) in obj {
+                let route = Route::parse(k).ok_or_else(|| format!("unknown route {k:?} (display, image)"))?;
+                let specs = v.as_array().ok_or_else(|| format!("{k}: a list of fault specs"))?;
+                for spec in specs {
+                    let spec = spec.as_str().ok_or_else(|| format!("{k}: fault specs are strings"))?;
+                    let (fault, count) = HttpFault::parse(spec, route)?;
+                    add.push((route, fault, count));
+                }
+            }
+            let mut st = m.state();
+            for (route, fault, count) in add {
+                st.add_fault(route, fault, count)?;
+            }
+            Ok(json_reply(200, faults_json(&st)))
+        }
+        (Method::Delete, "faults") => {
+            let mut st = m.state();
+            match qget::<String>(q, "route") {
+                None => st.clear_faults(),
+                Some(r) => {
+                    let route = Route::parse(&r).ok_or_else(|| format!("unknown route {r:?} (display, image)"))?;
+                    st.faults_mut(route).clear();
+                    st.version += 1;
+                }
+            }
+            ok()
+        }
         (Method::Post, "files") => {
             let path = unescape(&qget::<String>(q, "path").ok_or("need ?path=")?);
             let url = m.set_file(&path, mock_trmnl::FileSource::Bytes(body.to_vec().into()));
@@ -199,9 +233,16 @@ fn state_json(m: &MockServer) -> Value {
         "api_key": st.api_key,
         "extra": st.extra,
         "queue": st.queue.iter().cloned().collect::<Vec<_>>(),
+        "faults": faults_json(&st),
         "files": st.files.keys().collect::<Vec<_>>(),
         "total_requests": st.total_requests,
     })
+}
+
+/// Each route's fault queue as specs (`KIND[=ARG][:COUNT]`, the count being what is left).
+fn faults_json(st: &State) -> Value {
+    let specs = |r| st.faults(r).iter().map(|f| f.to_string()).collect::<Vec<_>>();
+    json!({ "display": specs(Route::Display), "image": specs(Route::Image) })
 }
 
 fn request_json(r: &mock_trmnl::Request) -> Value {

@@ -1,11 +1,13 @@
 """The simulator's built-in mock TRMNL server (`/mock/...` control API) instead of trmnl_mock.py:
 onboarding against it, converted images on screen, switching images, OTA files."""
 
+import time
 import unittest
 import urllib.parse
 import urllib.request
 
 from support import BUILD, BWRY_BUILD, DEVICE, panel_number, sim
+from trmnl_sim import SimError
 from trmnl_mock import color_bars, expected_bwry, expected_gray, png_image, png_rgb
 
 from devices import ANY
@@ -77,6 +79,60 @@ class BuiltinServerOg(unittest.TestCase):
             s.mock.wait_for_request(info["path"], after=cursor, timeout_s=120)
             s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
             self.assertMatch(s.compare_screen(s.mock.expected("eight"), tolerance=64, max_ratio=0))
+
+    def test_http_faults_are_survived(self):
+        # scripts/mock_server.py's failures, one wake each: the device gets the fault, sleeps
+        # without crashing, and shows the image once the server is healthy again.
+        faults = [("display", "500"), ("display", "reset"), ("display", "close"), ("display", "bad-json"),
+                  ("display", "timeout=2"), ("image", "truncate"), ("image", "garbage"), ("image", "empty"),
+                  ("image", "reset"), ("image", "slow=1024,20")]
+        data, reference = black_and_white("7")
+        with sim(erase=True, extra_args=("--offline",)) as s:
+            info = s.mock.add_image("seven", data, current=True)
+            onboard(s)
+            s.mock.wait_for_request(info["path"], timeout_s=120)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
+            for route, spec in faults:
+                with self.subTest(route=route, fault=spec):
+                    # a new version of the image, so the device downloads it again
+                    s.mock.add_image("seven", data, current=True)
+                    self.assertEqual(s.mock.faults(**{route: [f"{spec}:1"]})[route], [f"{spec}:1"])
+                    cursor = s.mock.state()["total_requests"]
+                    boots = s.status()["boot_count"]
+                    s.wake()
+                    hit = self.wait_for_fault(s, cursor)
+                    self.assertTrue(hit["summary"].startswith(f"fault {spec}"), hit)
+                    st = s.wait(state="deep_sleep", display_idle=True, timeout_s=120)["status"]
+                    # waking from deep sleep is one boot; a crash would be another
+                    self.assertEqual(st["boot_count"], boots + 1, f"the device restarted after {route} {spec}")
+                    self.assertEqual(s.mock.state()["faults"][route], [], "used up")
+            s.mock.faults(display=["503"])
+            s.mock.clear_faults()
+            self.assertEqual(s.mock.state()["faults"], {"display": [], "image": []})
+            info = s.mock.add_image("seven", data, current=True)
+            cursor = s.mock.state()["total_requests"]
+            s.wake()
+            s.mock.wait_for_request(info["path"], after=cursor, timeout_s=120)
+            s.wait(state="deep_sleep", display_idle=True, timeout_s=120)
+            self.assertMatch(s.compare_screen(reference, tolerance=64, max_ratio=0))
+
+    def wait_for_fault(self, s, after: int, timeout_s: float = 120) -> dict:
+        """The first request from index `after` on that a fault answered."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            hit = next((r for r in s.mock.requests(after) if r["summary"].startswith("fault ")), None)
+            if hit:
+                return hit
+            time.sleep(0.2)
+        self.fail(f"no request met the fault: {[(r['path'], r['summary']) for r in s.mock.requests(after)]}")
+
+    def test_bad_fault_specs_are_refused(self):
+        with sim(extra_args=("--offline",)) as s:
+            for body in ({"display": ["truncate"]}, {"image": ["600"]}, {"display": ["500:0"]}, {"nope": ["500"]},
+                         {"display": ["500", "wat"]}):
+                with self.subTest(body=body), self.assertRaises(SimError):
+                    s._post("/mock/faults", body)
+            self.assertEqual(s.mock.state()["faults"], {"display": [], "image": []}, "nothing added")
 
     def test_serves_this_build_s_firmware_for_ota(self):
         with sim(extra_args=("--offline",)) as s:

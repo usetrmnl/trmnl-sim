@@ -7,23 +7,30 @@
 //!
 //! State lives behind [`MockServer::state`]; front-ends change it directly and the next
 //! device request sees the change. Every request is recorded in [`State::requests`].
+//!
+//! HTTP and connection failures (the firmware's `scripts/mock_server.py` set) are queued
+//! per route with [`State::add_fault`]; see [`fault`].
 
 mod art;
 pub mod convert;
+pub mod fault;
+mod http;
 mod portal;
 
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Map, Value, json};
-use tiny_http::{Header, Response, Server};
 
 pub use convert::{ConvertOptions, Converted, Fit, Inks, Panel, Preview};
+pub use fault::{HttpFault, QueuedFault, Route};
+use http::{Action, Delivery, Wire};
 pub use portal::portal_connect;
 
 /// The port the server listens on unless told otherwise. Fixed, because a device keeps
@@ -121,6 +128,10 @@ pub struct State {
     pub queue: VecDeque<Map<String, Value>>,
     /// `/api/setup` registers the device (otherwise `"status": 404`, "not registered").
     pub registered: bool,
+    /// Faults for `/api/display` requests, consumed first (see [`fault`]).
+    pub display_faults: VecDeque<QueuedFault>,
+    /// Faults for image downloads.
+    pub image_faults: VecDeque<QueuedFault>,
     pub api_key: String,
     pub friendly_id: String,
     /// Extra files by URL path.
@@ -152,6 +163,8 @@ impl State {
             extra: Map::new(),
             queue: VecDeque::new(),
             registered: true,
+            display_faults: VecDeque::new(),
+            image_faults: VecDeque::new(),
             api_key: "sim-test-api-key".into(),
             friendly_id: "SIMTST".into(),
             files: HashMap::new(),
@@ -246,6 +259,39 @@ impl State {
         self.version += 1;
     }
 
+    /// Queue a fault for `route`, `count` times (None: until cleared).
+    pub fn add_fault(&mut self, route: Route, fault: HttpFault, count: Option<u32>) -> Result<(), String> {
+        if !fault.applies_to(route) {
+            return Err(format!("{} doesn't apply to the {} route", fault.kind(), route.name()));
+        }
+        self.faults_mut(route).push_back(QueuedFault { fault, count });
+        self.version += 1;
+        Ok(())
+    }
+
+    /// The fault queue of `route`.
+    pub fn faults(&self, route: Route) -> &VecDeque<QueuedFault> {
+        match route {
+            Route::Display => &self.display_faults,
+            Route::Image => &self.image_faults,
+        }
+    }
+
+    /// The fault queue of `route`, to change (bump [`State::version`] after).
+    pub fn faults_mut(&mut self, route: Route) -> &mut VecDeque<QueuedFault> {
+        match route {
+            Route::Display => &mut self.display_faults,
+            Route::Image => &mut self.image_faults,
+        }
+    }
+
+    /// Empty both fault queues.
+    pub fn clear_faults(&mut self) {
+        self.display_faults.clear();
+        self.image_faults.clear();
+        self.version += 1;
+    }
+
     /// Requests with absolute index >= `since`.
     pub fn requests_since(&self, since: u64) -> impl Iterator<Item = &Request> {
         let first = self.total_requests - self.requests.len() as u64;
@@ -283,6 +329,93 @@ impl State {
             });
         }
         self.identify.clone().unwrap()
+    }
+
+    /// Answer one request, or fail it with the next queued fault of its route: what to do
+    /// with the connection, the status sent (0: none) and a summary for the log.
+    fn answer(&mut self, method: &str, target: &str, headers: &[(String, String)]) -> (Action, u16, String) {
+        let path = target.split('?').next().unwrap_or("");
+        let route = match path {
+            "/api/display" => Some(Route::Display),
+            _ if matches!(method, "GET" | "HEAD") && path.starts_with("/images/") => Some(Route::Image),
+            _ => None,
+        };
+        let Some(f) = route.and_then(|r| fault::take(self.faults_mut(r))) else {
+            let r = self.respond(method, path, headers);
+            return (Action::Send(Wire::new(r.status, r.content_type, r.body)), r.status, r.summary);
+        };
+        use HttpFault::*;
+        let text =
+            |status: u16| Wire::new(status, "text/plain", Arc::new(format!("mock failure {status}\n").into_bytes()));
+        let (action, status, what) = match f {
+            Status(c) => (Action::Send(text(c)), c, format!("HTTP {c}")),
+            Timeout(s) => (Action::Hold(Duration::from_secs_f32(s)), 0, format!("sent nothing for {s} s, then closed")),
+            Reset => (Action::Reset, 0, "TCP RST, nothing sent".into()),
+            Close => (Action::Close, 0, "closed, nothing sent".into()),
+            Redirect(c) => {
+                let w = Wire { location: Some(target.to_string()), ..Wire::new(c, "text/plain", Arc::default()) };
+                (Action::Send(w), c, format!("HTTP {c} Location {target}"))
+            }
+            BadJson => {
+                let w = Wire::new(200, "application/json", Arc::new(b"this is not json {{{".to_vec()));
+                (Action::Send(w), 200, "200, not JSON".into())
+            }
+            JsonStatus(n) => {
+                let body = json!({"status": n, "refresh_rate": self.refresh_rate});
+                let w = Wire::new(200, "application/json", Arc::new(body.to_string().into_bytes()));
+                (Action::Send(w), 200, format!("JSON status {n}"))
+            }
+            EmptyState => {
+                let r = self.respond(method, path, headers);
+                let mut body: Value = serde_json::from_slice(&r.body).unwrap_or_default();
+                body["filename"] = json!("empty_state");
+                let w = Wire::new(200, "application/json", Arc::new(body.to_string().into_bytes()));
+                (Action::Send(w), 200, "filename empty_state".into())
+            }
+            // The image faults change the normal answer.
+            _ => {
+                let r = self.respond(method, path, headers);
+                let len = r.body.len();
+                let mut w = Wire::new(r.status, r.content_type, r.body);
+                let what = match f {
+                    Truncate(n) => {
+                        let n = n.unwrap_or(len / 2).min(len);
+                        w.delivery = Delivery::Cut(n);
+                        format!("sent {n} of {len} bytes, then closed")
+                    }
+                    Slow(n, s) => {
+                        w.delivery = Delivery::Stall(n, Duration::from_secs_f32(s));
+                        format!("sent {} bytes, stalls {s} s, then the rest", n.min(len))
+                    }
+                    Empty => {
+                        w.body = Arc::default();
+                        "Content-Length 0".into()
+                    }
+                    TooBig => {
+                        w.body = Arc::new(vec![0; fault::TOO_BIG_LENGTH]);
+                        format!("{} zero bytes", fault::TOO_BIG_LENGTH)
+                    }
+                    Garbage => {
+                        w.content_type = "image/png";
+                        w.body = Arc::new(random_bytes(len.max(4096)));
+                        format!("image/png, {} random bytes", w.body.len())
+                    }
+                    NoLength => {
+                        w.content_length = false;
+                        format!("{len} bytes without Content-Length")
+                    }
+                    WrongType => {
+                        let really = w.content_type;
+                        w.content_type = if really == "image/png" { "image/bmp" } else { "image/png" };
+                        format!("{len} bytes as {} (really {really})", w.content_type)
+                    }
+                    _ => unreachable!("not an image fault: {f:?}"),
+                };
+                (Action::Send(w), r.status, what)
+            }
+        };
+        self.version += 1;
+        (action, status, format!("fault {}: {what}", f.spec()))
     }
 
     /// Answer one request: (status, content type, body, summary for the log).
@@ -464,7 +597,9 @@ impl Reply {
 type Clock = Box<dyn Fn() -> u64 + Send + Sync>;
 
 struct Running {
-    server: Arc<Server>,
+    addr: SocketAddr,
+    /// Set by stop(): ends the accept loop and cuts faults' waits short.
+    stopping: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -518,24 +653,35 @@ impl MockServer {
         if let (Some(_), Some(p)) = (running.as_ref(), self.port()) {
             return Ok(SocketAddr::from(([127, 0, 0, 1], p)));
         }
-        let server = Arc::new(Server::http(("127.0.0.1", port)).map_err(std::io::Error::other)?);
-        let bound = server.server_addr().to_ip().ok_or_else(|| std::io::Error::other("no IP address"))?;
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        let bound = listener.local_addr()?;
         self.state().port = Some(bound.port());
-        let (srv, me) = (server.clone(), self.clone());
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (stop, me) = (stopping.clone(), self.clone());
         let thread = std::thread::Builder::new().name("mock-trmnl".into()).spawn(move || {
-            for req in srv.incoming_requests() {
-                let me = me.clone();
-                std::thread::spawn(move || me.handle(req));
+            for conn in listener.incoming() {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                match conn {
+                    Ok(stream) => {
+                        let (me, stop) = (me.clone(), stop.clone());
+                        std::thread::spawn(move || me.handle(stream, &stop));
+                    }
+                    Err(e) => log::debug!("mock-trmnl: accept failed: {e}"),
+                }
             }
         })?;
-        *running = Some(Running { server, thread: Some(thread) });
+        *running = Some(Running { addr: bound, stopping, thread: Some(thread) });
         Ok(bound)
     }
 
     /// Stop listening (state and images are kept).
     pub fn stop(&self) {
         if let Some(mut r) = self.inner.running.lock().take() {
-            r.server.unblock();
+            r.stopping.store(true, Ordering::Relaxed);
+            // Wake the accept loop so it sees `stopping` (and drops the listener).
+            let _ = TcpStream::connect_timeout(&r.addr, Duration::from_secs(1));
             if let Some(t) = r.thread.take() {
                 let _ = t.join();
             }
@@ -582,46 +728,41 @@ impl MockServer {
         format!("{}{path}", st.device_url().unwrap_or_default())
     }
 
-    fn handle(&self, mut req: tiny_http::Request) {
-        let method = req.method().to_string();
-        let url = req.url().to_string();
-        let path = url.split('?').next().unwrap_or("").to_string();
-        let headers: Vec<(String, String)> =
-            req.headers().iter().map(|h| (h.field.to_string(), h.value.to_string())).collect();
-        let mut body = Vec::new();
-        let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
+    fn handle(&self, stream: TcpStream, stopping: &AtomicBool) {
+        let _ = stream.set_nodelay(true);
+        let Some(req) = http::read_request(&stream) else { return };
         let sim_time_ns = self.inner.clock.lock().as_ref().map(|c| c());
-        let reply = {
+        let action = {
             let mut st = self.state();
-            let reply = st.respond(&method, &path, &headers);
+            let (action, status, summary) = st.answer(&req.method, &req.target, &req.headers);
             st.record(Request {
                 index: 0,
-                method,
-                path,
-                headers,
-                body,
+                path: req.path().to_string(),
+                method: req.method.clone(),
+                headers: req.headers,
+                body: req.body,
                 at: SystemTime::now(),
                 sim_time_ns,
-                status: reply.status,
-                summary: reply.summary.clone(),
+                status,
+                summary,
             });
-            reply
+            action
         };
-        let len = reply.body.len();
-        // Identity encoding with a Content-Length, like the real server: the firmware's
-        // OTA sizes the update from it.
-        let resp = Response::new(
-            reply.status.into(),
-            vec![Header::from_bytes("Content-Type", reply.content_type).unwrap()],
-            std::io::Cursor::new(reply.body.as_ref().clone()),
-            Some(len),
-            None,
-        )
-        .with_chunked_threshold(usize::MAX);
-        if let Err(e) = req.respond(resp) {
-            log::debug!("mock-trmnl: response failed: {e}");
-        }
+        action.perform(stream, req.method == "HEAD", stopping);
     }
+}
+
+/// `n` bytes of noise (xorshift; nothing depends on its quality).
+fn random_bytes(n: usize) -> Vec<u8> {
+    let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect()
 }
 
 #[cfg(test)]

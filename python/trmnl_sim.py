@@ -30,7 +30,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -599,6 +599,16 @@ class BuiltinServer:
         """Raw /api/display fields for the next answer only, e.g. update_firmware=True,
         firmware_url=..., or reset_firmware=True (plus image=NAME)."""
         self.sim._post("/mock/queue", fields)
+
+    def faults(self, display: Sequence[str] = (), image: Sequence[str] = ()) -> dict:
+        """Append HTTP and connection failures to each route's queue, in the firmware's
+        scripts/mock_server.py syntax KIND[=ARG][:COUNT] (e.g. "503:2", "timeout=20",
+        "reset:1", image "truncate:1"); returns both queues."""
+        return self.sim._post("/mock/faults", {"display": list(display), "image": list(image)})
+
+    def clear_faults(self, route: Optional[str] = None) -> None:
+        """Empty the fault queue of `route` ("display" or "image"), or both."""
+        self.sim._delete("/mock/faults" + (f"?route={route}" if route else ""))
 
     def set_file(self, path: str, data: bytes) -> str:
         """Serve bytes at `path` (e.g. a firmware.bin for OTA); returns the device URL."""

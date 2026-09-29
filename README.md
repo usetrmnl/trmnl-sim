@@ -273,6 +273,16 @@ copy button.
 - **Next request only.** **Firmware update** sends `update_firmware` with a URL on this
   server: this build's `firmware.bin`, or a file you choose (booting another build needs
   its ELF, see `--elf`). **Reset device** sends `reset_firmware`.
+- **HTTP faults.** The failures of the firmware's `scripts/mock_server.py`, queued per
+  route (`/api/display` or image downloads) and used up in order, one request each (a
+  count of "always" fails every request until removed). Both routes: any HTTP status,
+  `timeout` (send nothing for N s, then close), `reset` (TCP RST), `close` (close without
+  a byte), `redirect` (307/308 back to the same path). `/api/display`: `bad-json`,
+  `status` (JSON `"status": N`; 500 wipes the device's credentials), `empty-state`.
+  Images: `truncate` (the full Content-Length, fewer bytes), `slow` (stall after N bytes),
+  `empty`, `too-big`, `garbage`, `no-length`, `wrong-type`. Hover a kind for the firmware
+  error it should cause. Turbo runs in real time while a connection is open, so a
+  `timeout` or `slow` stall lasts as long for the firmware as it says.
 - **Wake the device on changes** ends a deep sleep when you pick an image or queue an
   action, so you see it right away.
 - **Requests** lists every request the device made (time in UTC, method, path, status,
@@ -548,7 +558,8 @@ Two standard-library Python modules live in [python/](python):
   `start()` returns the device URL, `add_image(name, png_or_jpeg_bytes, current=True)`
   converts an image for the panel and `expected(name)` returns the PNG the screen should
   then show; `display(refresh_rate=..., image=..., special_function=..., playlist=...,
-  extra={...})`, `queue(update_firmware=True, firmware_url=...)`, `set_file(path, bytes)`,
+  extra={...})`, `queue(update_firmware=True, firmware_url=...)`,
+  `faults(display=["503:2"], image=["truncate:1"])` / `clear_faults()`, `set_file(path, bytes)`,
   `requests()`, `count(path)` and `wait_for_request(path, after=, timeout_s=)` work like
   their `MockTrmnl` counterparts. See
   [test_builtin_server.py](tests/integration/test_builtin_server.py).
@@ -633,6 +644,7 @@ Useful pieces:
 | `GET /mock/images/NAME/expected`, `DELETE /mock/images/NAME` | the PNG the screen should show for it; remove it |
 | `POST /mock/display {...}` | `image`, `refresh_rate`, `special_function`, `playlist`, `auto_advance`, `registered`, `friendly_id`, `api_key`, `extra` (raw `/api/display` fields; `null` removes) |
 | `POST /mock/queue {...}`, `DELETE /mock/queue` | raw fields (and `image`) for the next `/api/display` answer only |
+| `POST /mock/faults {"display": [...], "image": [...]}`, `DELETE /mock/faults[?route=display\|image]` | append HTTP and connection failures to a route's queue, in `scripts/mock_server.py`'s syntax `KIND[=ARG][:COUNT]` (e.g. `"503:2"`, `"timeout=20"`, `"reset:1"`, `"slow=1024,20"`; no count: until cleared); returns both queues, also in `GET /mock` as `faults` |
 | `POST /mock/files?path=/x.bin` | serve the body at that path; returns its device URL |
 | `GET /mock/requests?since=N` | recorded device requests: method, path, headers, body, status, summary, `sim_time_s` |
 | `POST /savepoint {"path"?: str, "label"?: str}` | take a [save point](#save-points) (also written to `path`, absolute or relative to the simulator's cwd); `{"ok", "savepoint": {"id", "label", "deep_sleep", "sim_time_s", "wake_at_s", "path", "bytes"}}`, 409 if refused |

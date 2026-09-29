@@ -1,7 +1,7 @@
 //! "Server" side panel: drives the built-in mock TRMNL server ([`mock_trmnl::MockServer`]).
 //! Images (added with a file picker or dropped on the window), the playlist, the
-//! `/api/display` answer, one-shot actions (OTA, reset) and a live log of the device's
-//! requests.
+//! `/api/display` answer, one-shot actions (OTA, reset), HTTP and connection faults and a
+//! live log of the device's requests.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use egui::{Color32, RichText, TextureHandle, TextureOptions, Ui, Vec2};
-use mock_trmnl::{ConvertOptions, DEFAULT_IMAGE, FileSource, Fit, Image, MockServer, Request};
+use mock_trmnl::{ConvertOptions, DEFAULT_IMAGE, FileSource, Fit, HttpFault, Image, MockServer, Request, Route};
 use serde_json::{Map, Value, json};
 use sim_api::{BoardInfo, Command, RunState, SimHandle, Status};
 
@@ -52,6 +52,9 @@ pub(crate) struct ServerPanel {
     onboard: Onboard,
     /// A firmware file picked instead of this build's.
     custom_firmware: Option<PathBuf>,
+    /// The fault being set up for each route, and how many requests it takes (0: until
+    /// cleared).
+    fault_edit: [(HttpFault, u32); 2],
     /// Messages for the status bar: (text, error).
     pub notices: Vec<(String, bool)>,
 }
@@ -70,6 +73,7 @@ impl ServerPanel {
             converting: 0,
             onboard: Onboard::Idle,
             custom_firmware: None,
+            fault_edit: [(HttpFault::Status(500), 1), (HttpFault::Truncate(None), 1)],
             notices: Vec::new(),
         }
     }
@@ -149,6 +153,7 @@ impl ServerPanel {
             self.playlist_section(ui, h, status);
             self.response_section(ui, board);
             self.actions_section(ui, h, status);
+            self.faults_section(ui, h, status);
             self.log_section(ui);
         });
     }
@@ -475,7 +480,7 @@ impl ServerPanel {
         }
         egui::CollapsingHeader::new("Advanced").id_salt("mock_advanced").show(ui, |ui| {
             ui.checkbox(&mut st.registered, "/api/setup registers the device")
-                .on_hover_text("Off: /api/setup answers 404 \"MAC Address not registered\"");
+                .on_hover_text("Off: /api/setup answers \"status\": 404, \"MAC ... not registered\"");
             ui.horizontal(|ui| {
                 ui.label("Status");
                 let mut status = st.extra.get("status").and_then(Value::as_i64).unwrap_or(0);
@@ -564,6 +569,72 @@ impl ServerPanel {
         });
     }
 
+    /// HTTP and connection failures per route (the firmware's scripts/mock_server.py set):
+    /// each route's queue is used up in order, one request per use.
+    fn faults_section(&mut self, ui: &mut Ui, h: &SimHandle, status: &Status) {
+        let queued = {
+            let st = self.mock.state();
+            st.display_faults.len() + st.image_faults.len()
+        };
+        ui.horizontal(|ui| {
+            section(ui, &if queued > 0 { format!("HTTP faults ({queued})") } else { "HTTP faults".into() });
+            if queued > 0 && ui.small_button("Clear").clicked() {
+                self.mock.state().clear_faults();
+            }
+        });
+        for (i, route, label) in [(0, Route::Display, "/api/display"), (1, Route::Image, "Images")] {
+            ui.push_id(route.name(), |ui| {
+                let (fault, count) = &mut self.fault_edit[i];
+                let mut add = false;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(label).monospace());
+                    egui::ComboBox::from_id_salt("kind")
+                        .selected_text(kind_label(fault))
+                        .show_ui(ui, |ui| {
+                            for k in HttpFault::kinds(route) {
+                                if ui
+                                    .selectable_label(k.kind() == fault.kind(), kind_label(&k))
+                                    .on_hover_text(k.help())
+                                    .clicked()
+                                {
+                                    *fault = k;
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(fault.help());
+                    fault_args(ui, fault);
+                    ui.add(
+                        egui::DragValue::new(count)
+                            .range(0..=99)
+                            .custom_formatter(|n, _| if n == 0.0 { "always".into() } else { format!("×{n}") }),
+                    )
+                    .on_hover_text("How many requests it fails (drag; 0: every one until cleared)");
+                    add = ui.button("Add").clicked();
+                });
+                if add {
+                    let n = (*count > 0).then_some(*count);
+                    let _ = self.mock.state().add_fault(route, fault.clone(), n);
+                    self.changed(h, status);
+                }
+                let queue: Vec<String> = self.mock.state().faults(route).iter().map(|f| f.to_string()).collect();
+                if !queue.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.weak("Queued:");
+                        for (j, spec) in queue.iter().enumerate() {
+                            ui.label(RichText::new(spec).monospace().small());
+                            if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                                let mut st = self.mock.state();
+                                st.faults_mut(route).remove(j);
+                                st.version += 1;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+    }
+
     fn enqueue<const N: usize>(&mut self, h: &SimHandle, status: &Status, fields: [(&str, Value); N]) {
         let map: Map<String, Value> = fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         self.mock.state().enqueue(map);
@@ -594,8 +665,11 @@ impl ServerPanel {
                         ui.label(RichText::new(clock(r.at)).monospace().small().color(weak)).on_hover_text("UTC");
                         ui.label(RichText::new(&r.method).monospace().small());
                         ui.label(RichText::new(&r.path).monospace().strong());
-                        let code = RichText::new(r.status.to_string()).monospace().small();
-                        ui.label(if r.status >= 400 { code.color(err) } else { code.color(weak) });
+                        // 0: a fault sent no response (timeout, reset, close)
+                        let code = if r.status == 0 { "—".to_string() } else { r.status.to_string() };
+                        let code = RichText::new(code).monospace().small();
+                        let failed = r.status == 0 || r.status >= 400 || r.summary.starts_with("fault ");
+                        ui.label(if failed { code.color(err) } else { code.color(weak) });
                     });
                     let key = key_headers(r);
                     if !key.is_empty() {
@@ -622,6 +696,50 @@ impl ServerPanel {
             });
             ui.separator();
         }
+    }
+}
+
+/// A fault kind as the menu shows it.
+fn kind_label(f: &HttpFault) -> &'static str {
+    if let HttpFault::Status(_) = f { "HTTP status" } else { f.kind() }
+}
+
+/// Editors for a fault's arguments.
+fn fault_args(ui: &mut Ui, f: &mut HttpFault) {
+    let secs = |ui: &mut Ui, s: &mut f32| {
+        ui.add(egui::DragValue::new(s).range(0.0..=600.0).speed(0.5).suffix(" s"));
+    };
+    let bytes = |ui: &mut Ui, b: &mut usize| {
+        ui.add(egui::DragValue::new(b).range(0..=10_000_000).speed(64).suffix(" B"));
+    };
+    match f {
+        HttpFault::Status(c) => {
+            ui.add(egui::DragValue::new(c).range(100..=599));
+        }
+        HttpFault::Timeout(s) => secs(ui, s),
+        HttpFault::Redirect(c) => {
+            ui.selectable_value(c, 307, "307");
+            ui.selectable_value(c, 308, "308");
+        }
+        HttpFault::JsonStatus(n) => {
+            ui.add(egui::DragValue::new(n).range(0..=999))
+                .on_hover_text("202: not registered yet (fast poll); 500: the device WIPES its credentials");
+        }
+        HttpFault::Truncate(n) => {
+            let mut half = n.is_none();
+            if ui.checkbox(&mut half, "half").changed() {
+                *n = if half { None } else { Some(1024) };
+            }
+            if let Some(b) = n {
+                bytes(ui, b);
+            }
+        }
+        HttpFault::Slow(b, s) => {
+            bytes(ui, b);
+            ui.weak("then");
+            secs(ui, s);
+        }
+        _ => {}
     }
 }
 
