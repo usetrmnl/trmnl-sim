@@ -9,7 +9,7 @@ from pathlib import Path
 
 from support import MockTrmnl, big_number, close_fixtures, fixture
 from trmnl_mock import expected_gray, png_image
-from support_x import SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
+from support_x import SSID_5, SSID_24, ProvisionedX, ShippedX, X_BUILD, onboard, x_sim
 
 ENV = "TRMNL_X"  # the PlatformIO environment these tests run (bin/spec TRMNL_X)
 
@@ -305,6 +305,63 @@ class Onboarding(unittest.TestCase):
             expected = expected_gray(digits("7"), 1872, 1404)
             self.assertTrue(s.compare_screen(expected, tolerance=64, max_ratio=0)["match"])
             self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
+
+
+# Firmware bug: when joining the network entered in the portal fails, startPortal() breaks
+# out of its loop (WifiCaptive.cpp:196-199) and bl.cpp:1097-1107 shows WIFI_FAILED and
+# deep-sleeps: the portal is gone and the phone is left waiting. After a failed modem (5 GHz)
+# join it first retries the 5 GHz network on the S3 radio, which can't see it
+# (WifiCaptive.cpp:209-225).
+class FailedJoin(unittest.TestCase):
+    """A join that fails leaves the portal up, so the password can be corrected."""
+
+    def portal(self, s):
+        s.wait_for_console(r"Entering shipment mode light sleep loop", timeout_s=180)
+        s.dock(True)
+        s.wait(portal=True, timeout_s=180)
+        s.dock(False)
+        s.set_networks([{"ssid": SSID_24, "password": "password", "rssi": -54, "channel": 6},
+                        {"ssid": SSID_5, "password": "password", "rssi": -48, "channel": 36}])
+
+    def join(self, s, ssid: str, band: str) -> int:
+        c = s.status()["console_total"]
+        body = {"ssid": ssid, "pswd": "wrong", "server": "http://x", "band": band}
+        code, data = s.portal_request("/connect", body)
+        self.assertEqual(code, 200, data)
+        return c
+
+    def assert_awake(self, st: dict):
+        self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of keeping the portal")
+
+    @unittest.expectedFailure  # WifiCaptive.cpp:196-199, bl.cpp:1097-1107 (above)
+    def test_wrong_password_on_2_4_ghz_brings_the_portal_back(self):
+        with shipped().boot() as s:
+            self.portal(s)
+            c = self.join(s, SSID_24, "2.4GHz")
+            s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
+            # The S3 joins on the radio that runs the setup AP, which went down for it.
+            deadline = time.time() + 90
+            while not any("captive portal forwarded" in line for line in s.console(c)):
+                self.assert_awake(s.status())
+                self.assertLess(time.time(), deadline, "the portal did not come back")
+                time.sleep(0.5)
+            s.wait(portal=True, timeout_s=30)
+            self.assertEqual(s.portal_request("/")[0], 200)
+
+    @unittest.expectedFailure  # WifiCaptive.cpp:196-199 and 209-225, bl.cpp:1097-1107 (above)
+    def test_wrong_password_on_5_ghz_keeps_the_portal_up(self):
+        with shipped().boot() as s:
+            self.portal(s)
+            self.join(s, SSID_5, "5GHz")
+            # The modem's join fails silently on a production build; give it a minute.
+            t0 = s.status()["sim_time_s"]
+            deadline = time.time() + 120
+            while (st := s.status())["sim_time_s"] < t0 + 60:
+                self.assert_awake(st)
+                self.assertLess(time.time(), deadline, "the simulation stalled")
+                time.sleep(0.5)
+            self.assertIsNotNone(st["portal_url"])
+            self.assertEqual(s.portal_request("/")[0], 200)
 
 
 if __name__ == "__main__":

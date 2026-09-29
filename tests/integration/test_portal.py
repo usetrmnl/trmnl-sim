@@ -194,7 +194,8 @@ class JoinOptions(unittest.TestCase):
             s.wait(state="deep_sleep", timeout_s=180)
 
 
-@skip_if("shipment", why="the X joins 2.4 GHz networks on the S3 and 5 GHz ones through its modem: not covered yet")
+@skip_if("shipment", why="its portal comes from shipment mode, and 5 GHz joins go through the modem "
+                     "(test_trmnl_x.FailedJoin)")
 class FailedJoin(unittest.TestCase):
     """A join that fails leaves the portal up again, so the details can be corrected."""
 
