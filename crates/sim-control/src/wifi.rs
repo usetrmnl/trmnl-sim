@@ -6,7 +6,8 @@
 //! ```
 //!
 //! Only `ssid` is required; the rest default to the values above (`password: null` accepts
-//! any password).
+//! any password). `channel` is 1-14 (2.4 GHz) or 32-177 (5 GHz: seen by dual-band radios,
+//! the ESP32-C5 and the TRMNL X's modem).
 
 use serde_json::Value;
 use sim_api::WifiNetwork;
@@ -31,7 +32,13 @@ fn network(v: &Value) -> Result<WifiNetwork, String> {
             "ssid" => {}
             "password" => n.password = if v.is_null() { None } else { Some(str_of(k, v)?.into()) },
             "rssi" => n.rssi = int_of(k, v, -127, 0)? as i8,
-            "channel" => n.channel = int_of(k, v, 1, 14)? as u8,
+            "channel" => {
+                n.channel = int_of(k, v, 1, 177)
+                    .ok()
+                    .filter(|c| !(15..32).contains(c))
+                    .ok_or(format!("network: \"{k}\" must be 1..14 (2.4 GHz) or 32..177 (5 GHz)"))?
+                    as u8
+            }
             "open" => n.open = bool_of(k, v)?,
             "internet" => n.internet = bool_of(k, v)?,
             _ => return Err(format!("network: unknown key \"{k}\"")),
@@ -61,6 +68,7 @@ mod tests {
         let n = parse_networks_str(r#"[{"ssid": "A"}, {"ssid": "B", "password": "pw", "rssi": -80, "open": true, "internet": false, "channel": 11}]"#)
             .unwrap();
         assert_eq!(n[0], WifiNetwork::new("A"));
+        assert_eq!(parse_networks_str(r#"[{"ssid": "5G", "channel": 36}]"#).unwrap()[0].channel, 36);
         assert_eq!(
             n[1],
             WifiNetwork {
@@ -76,9 +84,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        for bad in
-            [r#"{"ssid": "A"}"#, r#"[{"rssi": -50}]"#, r#"[{"ssid": "A", "rssi": 5}]"#, r#"[{"ssid": "A", "x": 1}]"#]
-        {
+        for bad in [
+            r#"{"ssid": "A"}"#,
+            r#"[{"rssi": -50}]"#,
+            r#"[{"ssid": "A", "rssi": 5}]"#,
+            r#"[{"ssid": "A", "x": 1}]"#,
+            r#"[{"ssid": "A", "channel": 20}]"#,
+            r#"[{"ssid": "A", "channel": 200}]"#,
+        ] {
             assert!(parse_networks_str(bad).is_err(), "{bad}");
         }
     }

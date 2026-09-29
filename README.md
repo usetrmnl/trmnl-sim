@@ -337,7 +337,7 @@ mode and waits in light sleep until it is docked. Dock it (side panel, or
 | `--restore FILE` | Start from a [save point](#save-points) instead of booting. Its flash replaces the `--flash` image (and its MAC, `--mac`) |
 | `--board NAME` | The board, as the firmware's `DEVICE_MODEL` (`og`, `xteink_x4`, `m5_papers3`, ... ; `x` for the TRMNL X) or PlatformIO env. Default: the build directory's name, else what the firmware links (OG / BWRY / reTerminal E1002 / X) |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C header (repeatable): `scd41` (CO2, 0x62), `aht20` (temperature/humidity, 0x38) |
-| `--wifi-networks JSON` | Access points in range of the device's own radio, replacing the defaults, e.g. `'[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'` (keys: `ssid`, `password` (null: any), `rssi`, `channel`, `open`, `internet`) |
+| `--wifi-networks JSON` | Access points in range of the device's own radio, replacing the defaults, e.g. `'[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'` (keys: `ssid`, `password` (null: any), `rssi`, `channel` (1-14, or 32-177 for 5 GHz, seen by the ESP32-C5 and the X's modem), `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start, e.g. `'{"power_loss":{"partition":"nvs"}}'` (repeatable, merged) |
 
 The simulated WiFi environment has two networks: **TRMNL-Sim** (any password
