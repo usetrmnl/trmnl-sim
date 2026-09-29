@@ -6,7 +6,7 @@
 //! ```
 //!
 //! Only `ssid` is required; the rest default to the values above (`password: null` accepts
-//! any password). `channel` is 1-14 (2.4 GHz) or 32-177 (5 GHz: seen by dual-band radios,
+//! any password but `fail`). `channel` is 1-14 (2.4 GHz) or 32-177 (5 GHz: seen by dual-band radios,
 //! the ESP32-C5 and the TRMNL X's modem).
 
 use serde_json::Value;

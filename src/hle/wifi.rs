@@ -75,7 +75,7 @@ const MS: u64 = 1_000_000;
 #[derive(Clone, Debug)]
 pub struct SimAp {
     pub ssid: String,
-    /// None: any password is accepted.
+    /// None: any password is accepted (but sim_api::FAIL_PASSWORD).
     pub password: Option<String>,
     pub rssi: i8,
     pub channel: u8,
@@ -346,7 +346,7 @@ impl WifiState {
         match found {
             Some(i) => {
                 let ap = self.networks[i].clone();
-                if ap.password.as_ref().is_some_and(|p| *p != pw) {
+                if !sim_api::password_accepted(ap.password.as_deref(), &pw) {
                     let d = self.disconnected_event(Some(&ap), REASON_HANDSHAKE_TIMEOUT);
                     self.post(now + 1500 * MS, EV_STA_DISCONNECTED, d);
                 } else {

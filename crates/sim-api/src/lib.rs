@@ -129,7 +129,7 @@ pub struct BoardInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WifiNetwork {
     pub ssid: String,
-    /// None: any password is accepted.
+    /// None: any password is accepted, except [`FAIL_PASSWORD`].
     pub password: Option<String>,
     pub rssi: i8,
     pub channel: u8,
@@ -142,6 +142,18 @@ pub struct WifiNetwork {
 impl WifiNetwork {
     pub fn new(ssid: &str) -> Self {
         WifiNetwork { ssid: ssid.into(), password: None, rssi: -54, channel: 6, open: false, internet: true }
+    }
+}
+
+/// The password that an access point which takes any password rejects, so a wrong password
+/// can be tried from the setup portal (or the device) without reconfiguring the networks.
+pub const FAIL_PASSWORD: &str = "fail";
+
+/// Whether an access point with `password` (None: any) accepts `given`.
+pub fn password_accepted(password: Option<&str>, given: &str) -> bool {
+    match password {
+        Some(p) => p == given,
+        None => given != FAIL_PASSWORD,
     }
 }
 
@@ -740,4 +752,17 @@ pub fn channel(frame: SharedFrame) -> (SimHandle, SimPorts) {
         SimHandle { frame: frame.clone(), console: console.clone(), status: status.clone(), commands: tx },
         SimPorts { frame, console, status, commands: rx },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fail_password_is_rejected_where_any_password_goes() {
+        assert!(password_accepted(None, "anything"));
+        assert!(!password_accepted(None, FAIL_PASSWORD));
+        assert!(password_accepted(Some("fail"), "fail"));
+        assert!(!password_accepted(Some("secret"), "wrong"));
+    }
 }

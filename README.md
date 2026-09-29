@@ -199,8 +199,9 @@ voltage, turbo, pause and, on the X, the dock. The serial console is at the bott
 
 **A fresh device** (`--erase`) boots into WiFi setup, like a new TRMNL. Its captive
 portal is forwarded to **http://127.0.0.1:8080/**; open it in a browser, pick
-**TRMNL-Sim** (any password is accepted) and choose the server. To use your own
-device's account, run with its MAC: `--mac D8:3B:DA:12:34:56`.
+**TRMNL-Sim** (any password is accepted, except `fail`, which fails like a wrong one) and
+choose the server. To use your own device's account, run with its MAC:
+`--mac D8:3B:DA:12:34:56`.
 
 ### Fault injection
 
@@ -345,7 +346,9 @@ works) and **Neighbors WiFi** (password `hunter2hunter2`), at −54 and −81 dB
 TRMNL X modem also sees **TRMNL-Sim-5G** (channel 36, −48 dBm, any password); joining
 it makes the firmware do all its HTTP through the modem. The ESP32-C5's own radio is dual
 band: it sees TRMNL-Sim-5G too and joins it directly. Access points on channels 36 and up
-are invisible to the 2.4 GHz-only C3 and S3.
+are invisible to the 2.4 GHz-only C3 and S3. The networks that take any password reject
+the password `fail` (as a wrong password: `4WAY_HANDSHAKE_TIMEOUT`, or `+CWJAP:2` on the
+modem), to try a failed join from the setup portal.
 
 ### Time
 

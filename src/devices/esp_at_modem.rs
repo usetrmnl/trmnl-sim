@@ -979,10 +979,7 @@ impl EspAtModem {
     /// Strongest visible AP with this SSID; Err(ESP-AT CWJAP error code) otherwise.
     fn find_ap(&self, ssid: &str, pwd: &str) -> Result<ModemAp, u8> {
         let ap = self.visible_networks().filter(|a| a.ssid == ssid).max_by_key(|a| a.rssi).ok_or(3u8)?;
-        match &ap.password {
-            Some(p) if p != pwd => Err(2),
-            _ => Ok(ap.clone()),
-        }
+        if sim_api::password_accepted(ap.password.as_deref(), pwd) { Ok(ap.clone()) } else { Err(2) }
     }
 
     fn cwlap(&mut self, t: u64, filter: Option<String>) {

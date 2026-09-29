@@ -20,7 +20,7 @@ const FIRMWARE_PATH: &str = "/firmware.bin";
 const CUSTOM_FIRMWARE_PATH: &str = "/firmware-custom.bin";
 /// Requests shown in the log (newest first).
 const LOG_ROWS: usize = 200;
-/// The simulated access point (any password works).
+/// The simulated access point (any password works but `fail`).
 const SSID: &str = "TRMNL-Sim";
 
 /// Onboarding through the captive portal, driven from the panel.
