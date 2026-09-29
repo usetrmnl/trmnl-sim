@@ -546,7 +546,7 @@ unresponsive modem.
 | `TRMNL_SIM_COVERAGE=DIR` | Record firmware code coverage in every simulator; merge and report it after the run (see [Code coverage](#code-coverage)) |
 | `TRMNL_SIM_NETWORK=1` | Also run the examples against the real trmnl.app |
 | `TRMNL_SIM_BIN` | Simulator binary (default `target/release/trmnl-sim`) |
-| `TRMNL_SIM_REPO` | The trmnl-sim checkout the suite uses for the default binary, its setup cache (`target/spec-cache`) and `scripts/coverage.py` (default: the one it lives in) |
+| `TRMNL_SIM_REPO` | The trmnl-sim checkout the suite uses for the default binary, and its setup cache (`target/spec-cache`) (default: the one it lives in) |
 
 ### Writing tests
 
@@ -732,13 +732,13 @@ mid-run, e.g. to see what one step of a test covers. After an OTA to another bui
 `TRMNL_SIM_COVERAGE=DIR rake spec` makes every simulator the tests start write
 `DIR/<test>-*.info`. At the end, the runner merges them into `DIR/merged.info` and an
 HTML report in `DIR/html/`, and prints the coverage of the firmware's `src/` and
-`lib/`. [scripts/coverage.py](scripts/coverage.py) (standard library only) does the
-merging and reporting on its own:
+`lib/`. `TrmnlSim::Lcov` ([lcov.rb](tests/integration/lib/trmnl_sim/lcov.rb), standard
+library only) does the merging and reporting, also on its own:
 
 ```sh
-scripts/coverage.py DIR --include src/ --include lib/            # per-file table and total
-scripts/coverage.py DIR -o all.info --html cov-html --root ../trmnl-firmware
-genhtml all.info -o cov-html                                     # lcov's report, if installed
+rake "coverage[DIR --include src/ --include lib/]"                 # per-file table and total
+rake "coverage[DIR -o all.info --html cov-html --root ../trmnl-firmware]"
+genhtml all.info -o cov-html                                        # lcov's report, if installed
 ```
 
 Recording costs roughly 5-8% of emulation speed (about 1-3% when off); the report

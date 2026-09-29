@@ -37,7 +37,7 @@
 # Color is on when stderr is a terminal; NO_COLOR=1 turns it off, FORCE_COLOR=1 turns it on.
 #
 # With TRMNL_SIM_COVERAGE=<dir>, every simulator writes an lcov tracefile there; afterwards they
-# are merged into <dir>/merged.info and <dir>/html/ (scripts/coverage.py), and the coverage of the
+# are merged into <dir>/merged.info and <dir>/html/ (TrmnlSim::Lcov), and the coverage of the
 # firmware's own src/ and lib/ is printed.
 
 require "etc"
@@ -315,20 +315,24 @@ module Runner
     failed.empty?
   end
 
+  # The firmware's own sources, in the tracefiles' paths (relative to its checkout).
+  FIRMWARE_SOURCES = %w[src/ lib/].freeze
+
   def report_coverage(dir)
-    script = File.join(Builds::ROOT, "scripts/coverage.py")
     warn bold("\nFirmware coverage (src/, lib/); full report in #{File.join(dir, 'html')}")
+    all = TrmnlSim::Lcov::Report.load([dir])
+    all.write_lcov(File.join(dir, TrmnlSim::Lcov::MERGED))
     # Relative paths in the tracefiles are relative to the firmware checkout.
-    system("python3", script, dir, "-o", File.join(dir, "merged.info"), "--html", File.join(dir, "html"),
-           "--root", Builds::FIRMWARE, "-q")
-    system("python3", script, dir, "--include", "src/", "--include", "lib/")
+    all.write_html(File.join(dir, "html"), root: Builds::FIRMWARE)
+    puts all.total_line
+    own = TrmnlSim::Lcov::Report.load([dir], include: FIRMWARE_SOURCES)
+    puts own.summary, "(#{own.tracefiles} tracefiles)"
     builds = Dir[File.join(dir, "*/")].select { |d| File.basename(d) != "html" && Dir[File.join(d, "*.info")].any? }
     return if builds.size < 2
 
     warn bold("\nPer build (src/, lib/ lines each build compiles):")
     builds.sort.each do |b|
-      total, = Open3.capture2("python3", script, b, "--include", "src/", "--include", "lib/", "-q")
-      warn "  #{File.basename(b).ljust(32)} #{total.strip}"
+      warn "  #{File.basename(b).ljust(32)} #{TrmnlSim::Lcov::Report.load([b], include: FIRMWARE_SOURCES).total_line}"
     end
   end
 

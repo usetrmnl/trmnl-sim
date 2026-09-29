@@ -14,6 +14,7 @@
 #   rake spec:envs                             # the environments with specs, their example counts and builds
 #   rake "firmware[xteink_x4]" "spec[xteink_x4]"   # pio run -e xteink_x4 first, then its specs
 #   rake check                                 # rubocop, and the specs load (no firmware needed)
+#   rake "coverage[cov/ --include src/ -q]"    # merge and report lcov tracefiles (TrmnlSim::Lcov)
 #
 # A task's argument is one string, split like a shell command line, of what runner/runner.rb
 # takes (quote the task in zsh: its brackets are globs). `rake spec` builds the simulator first
@@ -84,6 +85,13 @@ task :firmware, [:envs] do |_, args|
   envs = runner_args(args)
   envs = TRMNL_ENVS if envs.empty?
   sh "pio", "run", "-d", Builds::FIRMWARE, *envs.flat_map { ["-e", _1] }
+end
+
+desc "Merge lcov tracefiles and report (argument: tracefiles or directories, -o FILE, --include PREFIX, " \
+     "--html DIR, --root DIR, -q)"
+task :coverage, [:args] do |_, args|
+  status = TrmnlSim::Lcov.main(runner_args(args))
+  exit(status) unless status.zero?
 end
 
 desc "Check the specs' style (rubocop)"

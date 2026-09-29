@@ -34,7 +34,7 @@ module TrmnlSim
   #   coverage:   record firmware code coverage and write an lcov tracefile here when the
   #               simulator exits (`--coverage`). If $TRMNL_SIM_COVERAGE is set to a directory,
   #               every simulator writes one there (`<name>-*.info`); merge them with
-  #               scripts/coverage.py.
+  #               TrmnlSim::Lcov (`rake coverage`).
   class Simulator
     # Console line index after the last matched line (where `wait(console:)` searches from).
     attr_accessor :cursor
