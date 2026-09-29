@@ -8,9 +8,9 @@ import time
 import unittest
 from urllib.parse import urlparse
 
-from support import MockTrmnl, ProvisionedDevice, close_fixtures, device_mock, fixture, needs, sim
+from support import MockTrmnl, ProvisionedDevice, close_fixtures, device_mock, fixture, needs, sim, skip_if
 
-from devices import ANY
+from devices import ANY, DEVICES
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
@@ -26,6 +26,12 @@ C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the c
 XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
                   "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
                   "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
+# Firmware bug: when joining the network entered in the portal fails (a wrong password, say),
+# startPortal() breaks out of its loop (WifiCaptive.cpp:196-199), and bl.cpp:1097-1107 shows
+# WIFI_FAILED and deep-sleeps for the WiFi retry interval: the portal is gone and the phone
+# is left waiting, instead of it coming back so the password can be corrected.
+PORTAL_GONE_AFTER_FAILED_JOIN = ("WifiCaptive.cpp:196-199: a failed join breaks out of the portal loop and "
+                                 "bl.cpp:1097-1107 shows WIFI_FAILED and deep-sleeps instead of reopening the portal")
 KNOWN_FAILURES = {
     **{env: {
         "JoinOptions.test_static_ip": C5_NTP_FOREVER,
@@ -38,6 +44,9 @@ KNOWN_FAILURES = {
         "SavedNetworks.test_portal_lists_saved_networks_out_of_range": XIAO_C3_BUTTON,
     },
 }
+for env, d in DEVICES.items():
+    if not d.shipment:
+        KNOWN_FAILURES.setdefault(env, {})["FailedJoin"] = PORTAL_GONE_AFTER_FAILED_JOIN
 
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
@@ -177,18 +186,47 @@ class JoinOptions(unittest.TestCase):
             s.wait_for_console(r"WPA2 Enterprise", timeout_s=90)
             s.wait(state="deep_sleep", timeout_s=300)
 
-    def test_wpa2_enterprise_without_identity_fails(self):
-        with device_mock() as mock, fresh() as s:
-            self.join(s, mock, isEnterprise=True)
-            s.wait_for_console(r"requires an identity", timeout_s=90)
-            s.wait(state="deep_sleep", timeout_s=300)
-
     def test_ntp_server_and_hostname_are_saved(self):
         with device_mock() as mock, fresh() as s:
             self.join(s, mock, ntpServer1="time.example.com", hostname="kitchen-trmnl")
             s.wait_for_console(r"Saved NTP server: time.example.com", timeout_s=60)
             s.wait_for_console(r"Saved hostname: kitchen-trmnl", timeout_s=60)
             s.wait(state="deep_sleep", timeout_s=180)
+
+
+@skip_if("shipment", why="the X joins 2.4 GHz networks on the S3 and 5 GHz ones through its modem: not covered yet")
+class FailedJoin(unittest.TestCase):
+    """A join that fails leaves the portal up again, so the details can be corrected."""
+
+    def join(self, s, **fields) -> int:
+        c = s.status()["console_total"]
+        body = {"ssid": "TRMNL-Sim", "pswd": "password", "server": "http://x", **fields}
+        code, data = s.portal_request("/connect", body)
+        self.assertEqual(code, 200, data)
+        return c
+
+    def assert_portal_comes_back(self, s, since: int):
+        # Joining took the setup AP down; it must come back up for another try.
+        deadline = time.time() + 90
+        while not any("captive portal forwarded" in line for line in s.console(since)):
+            st = s.status()
+            self.assertNotEqual(st["state"], "deep_sleep", "went to sleep instead of reopening the portal")
+            self.assertLess(time.time(), deadline, "the portal did not come back")
+            time.sleep(0.5)
+        s.wait(portal=True, timeout_s=30)
+        self.assertIn("TRMNL-Sim", [n["name"] for n in s.portal_scan()["networks"]])
+
+    def test_wrong_password_brings_the_portal_back(self):
+        with fresh(networks=[{"ssid": "TRMNL-Sim", "password": "password"}]) as s:
+            c = self.join(s, pswd="wrong")
+            s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
+            self.assert_portal_comes_back(s, c)
+
+    def test_wpa2_enterprise_without_identity_brings_the_portal_back(self):
+        with fresh() as s:
+            c = self.join(s, isEnterprise=True)
+            s.wait(console=r"requires an identity", since=c, timeout_s=90)
+            self.assert_portal_comes_back(s, c)
 
 
 class SavedNetworks(unittest.TestCase):
