@@ -29,7 +29,7 @@ RSpec.describe "Save points", env: :any do
     dev.boot do |s|
       dev.mock.wait_for_request(image, timeout: 120)
       status = s.wait_for_deep_sleep(timeout: 120, display_idle: true)
-      # (whether it shows `seven` right is refresh_cycle_spec's business; a save point must
+      # (whether it shows `seven` right is general/refresh/refresh_cycle_spec's business; a save point must
       # bring back whatever is on screen)
       screen = s.screenshot
       info = s.save_point(path, label: "asleep showing 7")

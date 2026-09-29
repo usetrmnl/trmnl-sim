@@ -170,7 +170,7 @@ RSpec.describe "Portal", :parallel, env: :any do
 
   # A join that fails leaves the portal up, so the details can be corrected.
   describe "FailedJoin", skip_if: :shipment, why: "its portal comes from shipment mode, and 5 GHz joins go through " \
-                                                  "the modem (trmnl_x_spec FailedJoin)" do
+                                                  "the modem (devices/trmnl_x/trmnl_x_spec FailedJoin)" do
     # Submit the setup page (to a server that doesn't matter) with `fields` changed; returns
     # the console cursor from before it.
     def join(s, **fields)

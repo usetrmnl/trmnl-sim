@@ -126,10 +126,10 @@ module Devices
                size: [960, 540], inks: "gray16", sensors: true),
     Device.new("TRMNL_X_SENSORIAC5", "sensoria_c5", "Sensoria C5",
                size: [1280, 720], inks: "gray16", chip: "esp32c5", battery_v: 0.0, battery_tracks: false, sensors: true,
-               general: "the firmware reboots instead of sleeping (see byod_parallel_spec SensoriaC5)"),
+               general: "the firmware reboots instead of sleeping (see devices/byod/parallel_spec SensoriaC5)"),
     Device.new("trmnl_steam", "trmnl_steam", "TRMNL Steam",
                size: [648, 480], chip: "esp32c3", sensors: true, psram: false,
-               general: "the firmware never boots (see byod_uc81xx_spec TrmnlSteamBoots)"),
+               general: "the firmware never boots (see devices/byod/uc81xx_spec TrmnlSteamBoots)"),
     Device.new("trmnl_gen2", "og_gen2", "TRMNL OG gen 2", chip: "esp32c5", panel_rev: true, sensors: true),
     Device.new("trmnl_gen2_4clr", "og_gen2_4clr", "TRMNL BWRY gen 2", inks: "bwry", chip: "esp32c5", sensors: true)
   ].freeze

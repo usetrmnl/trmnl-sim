@@ -5,7 +5,8 @@
 #
 #   (nothing)                 every device's own specs, the general ones in full on the OG, the
 #                             :smoke examples on every other device
-#   refresh_cycle             a spec file (spec/refresh_cycle_spec.rb), a path, path:line or path[id]
+#   refresh_cycle             a spec file or directory by its path under spec/ or its last part
+#                             (refresh_cycle, devices/byod, trmnl_x/images), a path, path:line or path[id]
 #   refresh_cycle -e "press"  rspec options pass through
 #   xteink_x4                 every spec of a PlatformIO environment (or --env NAME)
 #   -j 1                      one unit at a time
@@ -54,7 +55,8 @@ module Runner
   SPEC_DIR = File.join(HERE, "spec")
   # Started first so the longest ones don't end up running alone at the end (slowest first, from
   # a full run); anything not listed follows in name order.
-  SLOW_FIRST = %w[trmnl_x faults_x memcheck faults refresh_cycle].freeze
+  SLOW_FIRST = %w[devices/trmnl_x/trmnl_x devices/trmnl_x/faults general/tooling/memcheck devices/trmnl_x/memcheck
+                  general/faults general/refresh/refresh_cycle].freeze
   # rspec options that take a value.
   VALUE_OPTIONS = %w[-e --example -E --example-matches -t --tag -f --format -o --out -r --require -I -P --pattern
                      --exclude-pattern --seed --order -O --options --default-path].freeze
@@ -125,14 +127,23 @@ module Runner
   # A selector that names a PlatformIO environment rather than specs.
   def env?(selector) = Devices.known?(selector) || Devices::ALL.any? { _1.env.casecmp?(selector) }
 
-  # A spec file for a selector: a path (optionally with :line or [id]), or a file's short name.
+  # The spec file or directory a selector names: a path (a file optionally with :line or [id]),
+  # or a name under spec/ without _spec.rb, in full (general/refresh/refresh_cycle, devices/byod)
+  # or as far as it is unique (refresh_cycle, byod, trmnl_x/images).
   def spec_path(ref)
-    return ref if ref.include?("/") || ref.match?(/\.rb(\[|:|\z)/)
+    return ref if ref.match?(/_spec\.rb(\[|:|\z)/) || File.exist?(File.join(HERE, ref))
 
-    path = File.join("spec", "#{ref.delete_prefix('test_').delete_suffix('_spec')}_spec.rb")
-    return path if File.exist?(File.join(HERE, path))
+    name = ref.delete_suffix(".rb").delete_suffix("_spec")
+    matches = Dir.glob("spec/**/*", base: HERE).select do |p|
+      rel = p.delete_prefix("spec/")
+      candidate = File.directory?(File.join(HERE, p)) ? rel : rel.delete_suffix("_spec.rb")
+      (p.end_with?("_spec.rb") || File.directory?(File.join(HERE, p))) && !rel.start_with?("support") &&
+        (candidate == name || candidate.end_with?("/#{name}"))
+    end
+    return matches.first if matches.size == 1
 
-    abort "no #{path} (spec files are spec/*_spec.rb; environments: #{Devices::BY_ENV.keys.join(', ')})"
+    abort "#{ref} names #{matches.join(' and ')}: say which" if matches.any?
+    abort "no spec file or directory #{name} under spec/ (environments: #{Devices::BY_ENV.keys.join(', ')})"
   end
 
   # ---- the suite's structure -----------------------------------------------------------------------------
@@ -146,20 +157,22 @@ module Runner
       log, status = Open3.capture2e(*cmd, chdir: HERE)
       abort "loading the specs failed:\n#{log}" unless status.success? && File.exist?(out)
       JSON.parse(File.read(out), symbolize_names: true)
-          .map { |f| f.merge(path: f[:path].delete_prefix("./"), stem: File.basename(f[:path], "_spec.rb")) }
+          .map { |f| f.merge(path: f[:path].delete_prefix("./")) }
+          .map { |f| f.merge(stem: f[:path].delete_prefix("spec/").delete_suffix("_spec.rb")) }
           .sort_by { |f| [SLOW_FIRST.index(f[:stem]) || SLOW_FIRST.size, f[:stem]] }
     end
   end
 
   def rspec_command = %w[bundle exec rspec]
 
-  # A file's units: the whole file, or one per group if it is marked `parallel: true`.
+  # The units a selector stands for: each file of a directory, or the file; a file whole, or one
+  # unit per group if it is marked `parallel: true`. A path:line or path[id] is one unit.
   def split(ref)
-    path = spec_path(ref)
-    file = suite.find { _1[:path] == path }
-    return [Unit.new(paths: [path], name: File.basename(path, "_spec.rb"))] unless file&.dig(:parallel)
+    path = spec_path(ref).delete_prefix("./").chomp("/")
+    files = suite.select { |f| f[:path] == path || f[:path].start_with?("#{path}/") }
+    return [Unit.new(paths: [path], name: path.delete_prefix("spec/"))] if files.empty?
 
-    file[:units].map { |u| Unit.new(paths: [u[:id]], name: "#{file[:stem]} #{u[:description]}") }
+    files.flat_map { |f| units_of(f, f[:units]) }
   end
 
   # Units running `units` (of `file`) with `device` under test: the whole file when that is all

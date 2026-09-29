@@ -36,6 +36,13 @@ module Integration
       block ? s.session(&block) : s
     end
 
+    # No task in a memcheck report's `stacks` came close to overflowing its stack (but those whose
+    # names start with one of `but`).
+    def expect_no_low_stacks(stacks, but: [])
+      low = stacks.select { |t| t["low"] && !t["task"].start_with?(*but) }.map { |t| [t["task"], t["min_free"]] }
+      expect(low).to eq([]), "tasks close to overflowing their stacks: #{low}"
+    end
+
     # Poll (every `every` s of wall-clock time) until the block is true, failing with `message`
     # if that takes more than `within` s.
     def eventually(message, within:, every: 0.5)

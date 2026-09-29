@@ -178,7 +178,7 @@ bin/dev        # build, then run the OG build from ../trmnl-firmware
 bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
 bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy, unit tests, and the integration specs' lint and load check
-rake spec      # integration tests (rake "spec[trmnl_x]" for a subset; rake -T lists the tasks)
+rake spec      # integration tests (rake "spec[portal]" for a subset; rake -T lists the tasks)
 ```
 
 Or by hand:
@@ -392,13 +392,17 @@ is refused too; try again when it is idle.
 
 The integration tests' Rake tasks live with the suite ([tests/integration/Rakefile](tests/integration/Rakefile));
 the repository's Rakefile imports them, so they run from the root too (`rake -T` lists them).
-A task's argument is one string, split like a shell command line (quote the task in zsh):
+A task's argument is one string, split like a shell command line (quote the task in zsh).
+Specs are in [spec/general](tests/integration/spec/general) (on the device under test, by
+area) and [spec/devices](tests/integration/spec/devices) (per device family); name a file or
+directory by its path under spec/, or by its last part when that is unique (`portal`,
+`byod`, `trmnl_x/images`):
 
 ```sh
 rake spec                          # build the sim (rake sim), run the suite
 rake firmware spec                 # also `pio run` the TRMNL devices' envs first
 rake "spec[refresh_cycle -e 'wakes and refreshes on a button press']"
-rake "spec[trmnl_x]"               # only the TRMNL X specs (spec/trmnl_x_spec.rb)
+rake "spec[devices/trmnl_x]"       # only the TRMNL X specs (spec/devices/trmnl_x/)
 rake check                         # rubocop, and every spec loads (no firmware needed)
 ```
 
@@ -437,11 +441,11 @@ no internet. For the TRMNL OG it covers:
 - the first-boot setup screen and captive portal, and the portal's 15-minute timeout;
 - factory QA near a `TRMNL_QA` network (every build but the X's): pass, fail on an
   overheating chip, stopped by the button (needs the firmware's QA fix; see
-  [errors_spec.rb](tests/integration/spec/errors_spec.rb));
+  [errors_spec.rb](tests/integration/spec/general/errors_spec.rb));
 - onboarding, and WiFi failures (unknown SSID, wrong password);
 - `/api/setup` and `/api/display` requests and their headers, including the `Panel-Rev`
   read from the panel;
-- HTTPS ([https_spec.rb](tests/integration/spec/https_spec.rb)), and for trmnl.app the TLS
+- HTTPS ([https_spec.rb](tests/integration/spec/general/network/https_spec.rb)), and for trmnl.app the TLS
   session resumed across deep sleep;
 - pixel-exact image rendering;
 - sleep duration from `refresh_rate`;
@@ -455,19 +459,19 @@ no internet. For the TRMNL OG it covers:
   button wake, no re-onboarding), in-memory slots, power-off save points, and refusing
   other builds and bad files.
 
-For the TRMNL BWRY ([trmnl_bwry_spec.rb](tests/integration/spec/trmnl_bwry_spec.rb); skipped if
+For the TRMNL BWRY ([trmnl_bwry_spec.rb](tests/integration/spec/devices/trmnl_bwry_spec.rb); skipped if
 there is no `trmnl_4clr` build): the device identity (`Model: og_4clr`), a 4-color image
 rendered exactly (compared as RGB), the panel's long refresh, and a save point keeping the
 color image.
 
-For the Seeed reTerminal E1002 ([reterminal_e1002_spec.rb](tests/integration/spec/reterminal_e1002_spec.rb);
+For the Seeed reTerminal E1002 ([reterminal_e1002_spec.rb](tests/integration/spec/devices/reterminal_e1002_spec.rb);
 skipped if there is no `seeed_reTerminal_E1002` build): the setup screen (the OG's
 goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switched battery
 divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with and without
 alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
 and a save point keeping the color image.
 
-For the gen-2 OG and BWRY ([og_gen2_spec.rb](tests/integration/spec/og_gen2_spec.rb), a class
+For the gen-2 OG and BWRY ([og_gen2_spec.rb](tests/integration/spec/devices/og_gen2_spec.rb), a class
 each; skipped without a `trmnl_gen2` / `trmnl_gen2_4clr` build in `TRMNL_FIRMWARE_BUILDS`):
 the BYOD checks (onboarding through the portal, identity headers, a served image), the
 fuel gauge's voltage, `USB-Connected`/`Battery-Charging` from the charger lines, timer and
@@ -475,22 +479,22 @@ button wake, deep-sleep and power-off save points, onboarding on 5 GHz with the 
 radio (`WiFi-Band`), HTTPS on the crypto accelerators, and memcheck and coverage runs; the
 BWRY's colors and the long refresh (its image bug is an expected failure).
 
-For the Sensoria C5 ([byod_parallel_spec.rb](tests/integration/spec/byod_parallel_spec.rb)): the
+For the Sensoria C5 ([parallel_spec.rb](tests/integration/spec/devices/byod/parallel_spec.rb)): the
 setup screen, onboarding and a 16-gray ramp on its 1280×720 panel, and its reboot on the
 way to sleep (an expected failure, see above).
 
-For the BYOD boards ([byod_uc8179_spec.rb](tests/integration/spec/byod_uc8179_spec.rb),
-[byod_uc81xx_spec.rb](tests/integration/spec/byod_uc81xx_spec.rb),
-[byod_ssd_spec.rb](tests/integration/spec/byod_ssd_spec.rb),
-[byod_m5_spec.rb](tests/integration/spec/byod_m5_spec.rb),
-[byod_parallel_spec.rb](tests/integration/spec/byod_parallel_spec.rb); a class per board, skipped
+For the BYOD boards ([uc8179_spec.rb](tests/integration/spec/devices/byod/uc8179_spec.rb),
+[uc81xx_spec.rb](tests/integration/spec/devices/byod/uc81xx_spec.rb),
+[ssd16xx_spec.rb](tests/integration/spec/devices/byod/ssd16xx_spec.rb),
+[m5_spec.rb](tests/integration/spec/devices/byod/m5_spec.rb),
+[parallel_spec.rb](tests/integration/spec/devices/byod/parallel_spec.rb); a class per board, skipped
 if its env isn't built): every board onboards through the portal and is checked for its
 `Model`/`Width`/`Height`/`Battery-Voltage` headers and a served image shown exactly
 ([byod.rb](tests/integration/spec/support/byod.rb)); plus per board 4-gray and 16-gray
 images, partial refreshes, button wake, battery from the gauge or PMIC, colors, each E1004
 controller's half, and the firmware bugs listed [above](#what-is-simulated).
 
-For the TRMNL X ([trmnl_x_spec.rb](tests/integration/spec/trmnl_x_spec.rb); skipped if there is
+For the TRMNL X ([trmnl_x_spec.rb](tests/integration/spec/devices/trmnl_x/trmnl_x_spec.rb); skipped if there is
 no `TRMNL_X` build):
 
 - the factory flow: modem flashing, then shipment mode until docked;
@@ -503,7 +507,7 @@ no `TRMNL_X` build):
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
 - a left tap showing the previous cached image without touching the network;
-- the touch bar ([touchbar_x_spec.rb](tests/integration/spec/touchbar_x_spec.rb)): browsing with
+- the touch bar ([touchbar_spec.rb](tests/integration/spec/devices/trmnl_x/touchbar_spec.rb)): browsing with
   taps, holds and (slide mode) swipes, the WiFi-reset and power-off confirmations, and
   switching between tap and slide mode;
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
@@ -518,8 +522,8 @@ so those examples are skipped (`needs: :double_click`, `needs: :soft_reset_press
 what the X doesn't have (factory QA, sensors, Panel-Rev). Its goldens are in
 [golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`Golden::REGIONS`).
 
-Fault injection ([faults_spec.rb](tests/integration/spec/faults_spec.rb) on the device under test,
-[faults_x_spec.rb](tests/integration/spec/faults_x_spec.rb) on the X): HTTP 500 and malformed
+Fault injection ([faults_spec.rb](tests/integration/spec/general/faults_spec.rb) on the device under test,
+[faults_spec.rb](tests/integration/spec/devices/trmnl_x/faults_spec.rb) on the X): HTTP 500 and malformed
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
 modem path); slow, high-latency and lossy links; DNS failure; an access point without
 internet; power loss mid-write in NVS (torn pages), in otadata and during an OTA (the old
@@ -616,7 +620,7 @@ The Ruby client library (standard library only) lives in
   `faults(display: ["503:2"], image: ["truncate:1"])` / `clear_faults`, `set_file(path, bytes)`,
   `requests`, `count(path)` and `wait_for_request(path, after:, timeout:)` work like
   their `MockTrmnl` counterparts. See
-  [builtin_server_spec.rb](tests/integration/spec/builtin_server_spec.rb).
+  [builtin_server_spec.rb](tests/integration/spec/general/network/builtin_server_spec.rb).
 
 ```ruby
 require "trmnl_sim"   # with tests/integration/lib on the load path
@@ -664,7 +668,7 @@ Useful pieces:
 - `sim.save_point(path = nil, label: nil)` takes a save point (into memory, and to `path`
   if given); `sim.restore(path)` or `sim.restore(id: n)` restores one, `sim.save_points`
   lists the in-memory ones, and `Simulator.new(BUILD, restore: path)` starts from a file. See
-  [savepoints_spec.rb](tests/integration/spec/savepoints_spec.rb).
+  [savepoints_spec.rb](tests/integration/spec/general/refresh/savepoints_spec.rb).
 - `ProvisionedDevice` ([provisioned_device.rb](tests/integration/spec/support/provisioned_device.rb))
   onboards once, then boots copies of that flash. Tests start from a registered device in
   seconds. [trmnl_x.rb](tests/integration/spec/support/trmnl_x.rb) does the same for the X:
@@ -784,7 +788,7 @@ block ends if there were violations (`sim.assert_no_memory_errors` checks explic
 `TRMNL_SIM_MEMCHECK=1 rake spec` runs the whole suite that way. Known firmware bugs are
 listed in `KNOWN_MEMORY_BUGS` in [firmware_bugs.rb](tests/integration/spec/support/firmware_bugs.rb), passed as
 `--memcheck-suppress` so the rest of each run is still checked, with a pending (expected
-to fail) example for each in [memcheck_spec.rb](tests/integration/spec/memcheck_spec.rb).
+to fail) example for each in [memcheck_spec.rb](tests/integration/spec/general/tooling/memcheck_spec.rb).
 
 How it works: HLE hooks on the IDF heap's `multi_heap_*` layer, which every allocation
 goes through exactly once (`malloc`, `heap_caps_*`, `new`, newlib in ROM; IDF 4.4 and

@@ -66,8 +66,9 @@ RSpec.describe "Setup mode", env: :any do
     end
   end
 
-  describe "PortalTimeout", skip_if: :shipment,
-                            why: "the portal times out back into shipment mode (trmnl_x_spec PortalTimeout)" do
+  describe "PortalTimeout",
+           skip_if: :shipment,
+           why: "the portal times out back into shipment mode (devices/trmnl_x/trmnl_x_spec PortalTimeout)" do
     it "unattended portal times out and sleeps", known_failure: timed_out_failures do
       fresh_device do |s|
         s.set_portal_client(false) # nobody joins, so turbo can run to the timeout

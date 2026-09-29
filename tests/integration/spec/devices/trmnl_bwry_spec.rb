@@ -4,7 +4,7 @@ require "tmpdir"
 
 # TRMNL BWRY (`trmnl_4clr`): the OG board with a 4-color black/white/yellow/red panel.
 
-RSpec.describe "TRMNL BWRY", env: "trmnl_4clr" do
+RSpec.describe "TRMNL BWRY", :parallel, env: "trmnl_4clr" do
   fixture(:dev) { ProvisionedDevice.new(Builds.for_env("trmnl_4clr")) }
 
   let(:red) { ->(_x, _y) { TrmnlSim::Images::BWRY_RGB[:red] } }
@@ -81,6 +81,26 @@ RSpec.describe "TRMNL BWRY", env: "trmnl_4clr" do
           s.wait_for_deep_sleep(timeout: 120)
           expect(color_type(s)).to eq(2)
           expect(dev.mock.paths).not_to include("/api/setup")
+        end
+      end
+    end
+  end
+
+  describe "MemcheckBwry" do
+    # display_show_image hands an uncompressed 1-bit BMP to the driver as the frame buffer; on
+    # the 4-color panel writePlane reads it as 2 bits per pixel, 48 KB past the end of the 48 KB
+    # buffer.
+    it "does not send a 1bit bmp as a 2bit plane",
+       pending: "display_show_image() sends a 1-bit BMP as the BWRY's 2-bit plane (src/display.cpp:1829)" do
+      TrmnlSim::MockTrmnl.open do |mock|
+        sim(Builds.for_env("trmnl_4clr"), erase: true, memcheck: "log", memcheck_suppress: FirmwareBugs::SNTP_USE_AFTER_FREE,
+                                          extra_args: ["--offline"]) do |s|
+          mock.display = { image: "default", refresh_rate: 300 } # the OG's BMP
+          s.wait(portal: true, timeout: 90)
+          s.portal_connect("TRMNL-Sim", "password", server: mock.device_url)
+          mock.wait_for_request("/api/display", timeout: 120)
+          s.wait_for_deep_sleep(timeout: 180)
+          s.assert_no_memory_errors
         end
       end
     end

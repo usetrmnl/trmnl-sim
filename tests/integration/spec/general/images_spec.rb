@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Image formats and bad images on the device under test (see devices.rb; the TRMNL X has its own,
-# images_x_spec): PNG in every depth and color type, JPEG, BMP variants, and images the device must
+# devices/trmnl_x/images_spec): PNG in every depth and color type, JPEG, BMP variants, and images the device must
 # refuse. Images are the panel's size; what should be on screen is the same picture, reduced to what
 # the panel shows.
 
@@ -14,7 +14,7 @@ crowpanel_1bit_png =
   "png_to_epd (display.cpp:1764) calls bbep.setPanelType(dpList[...].OneBit) for 1-bit PNGs, but the " \
   "CrowPanel's dpList row holds bb_epaper product numbers for bbep.begin() (its device_list[] row has " \
   "no pins): EPD_CROWPANEL42 = 8 is taken as panel type EP295_128x296_4GRAY, and the picture never " \
-  "shows (see byod_ssd_spec CrowPanel42)"
+  "shows (see devices/byod/ssd16xx_spec CrowPanel42)"
 bwry_truecolor =
   "trmnl_4clr doesn't set PNG_MAX_BUFFERED_PIXELS (platformio.ini [env:trmnl_4clr]; trmnl does), so " \
   "PNGdec's default row buffer is too small for 800 px truecolor rows: the decode corrupts the heap " \
@@ -35,7 +35,7 @@ fastepd_wide_png =
 bwr_4gray =
   "png_to_epd sends PNGs of more than two colors or 2 bits (and 4/8-bit gray, truecolor) down the " \
   "4-gray path (display.cpp:1789), whose two gray bit planes land in this panel's black/white (DTM1) " \
-  "and red (DTM2) planes: white comes out black and black red (see byod_uc81xx_spec DiyKitBwr)"
+  "and red (DTM2) planes: white comes out black and black red (see devices/byod/uc81xx_spec DiyKitBwr)"
 bwr_2bit_red =
   "png_draw's PNG_2_BIT_INVERTED case (display.cpp:1378) writes the inverted picture into the " \
   "second plane for 2-bit two-color PNGs, which on this 3-color panel is the red plane (the 1-bit " \
@@ -44,7 +44,7 @@ sticky_4gray =
   "bb_epaper (the Sticky's pinned 0395f30) starts EP397_800x480_4GRAY refreshes with 0x22 0xD7, " \
   "whose load-LUT bit replaces the custom 4-gray LUT its init sequence wrote with the built-in " \
   "one, which shows the two gray planes as black and white: PNGs on the 4-gray path come out " \
-  "inverted (see byod_ssd_spec SeeedSticky \"shows a 4 gray image\")"
+  "inverted (see devices/byod/ssd16xx_spec SeeedSticky \"shows a 4 gray image\")"
 ssd1677_window =
   "jpeg_draw (display.cpp:1607) sets an address window for every 8-row block, and this env's pinned " \
   "bb_epaper programs it ascending (bbepSetAddrWindow: X start < end, counter at the start; bytes, " \
@@ -56,7 +56,7 @@ m5_1bit_png =
   "png_to_epd (display.cpp:1764) passes the M5Paper Mono's dpList product number (EPD_M5_PAPER_MONO " \
   "= 30) to bbep.setPanelType for 1-bit PNGs: panel type EP266YR_184x360, a UC81xx 4-color panel, so " \
   "the image goes out with UC81xx commands the SSD1677 doesn't understand and never shows (see " \
-  "byod_m5_spec M5PaperMono)"
+  "devices/byod/m5_spec M5PaperMono)"
 e1004_png_buffer =
   "PNG_MAX_BUFFERED_PIXELS=6432 (platformio.ini [env:seeed_reTerminal_E1004]) is sized for 800 px " \
   "rows, and PNGdec keeps two rows in that buffer while refusing only a row that alone doesn't fit " \

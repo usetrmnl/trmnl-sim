@@ -35,7 +35,8 @@ references where relevant.
 
 - Rake tasks (tests/integration/Rakefile, imported by the root Rakefile); a task's argument is
   one shell-style string. `rake "spec[<file>]"`: a spec file by short name (`portal` =
-  spec/portal_spec.rb), a path, `path:line` or `path[id]`; rspec options pass through
+  spec/general/setup/portal_spec.rb; also a directory, e.g. `devices/byod`), a path, `path:line`
+  or `path[id]`; rspec options pass through
   (`rake "spec[portal -e 'wrong password']"`). `rake "spec[<env>]"`: everything for one
   PlatformIO environment. `rake spec` (default tier): every device's own specs, the general
   ones in full on the OG and the `:smoke` examples on the rest (~9 min).
@@ -44,7 +45,7 @@ references where relevant.
   tests/integration/runner/runner.rb. `rake firmware[...]` runs pio: only when asked.
 - While iterating, run ONE group or example at a time under a hard limit and clean up:
   `perl -e 'alarm 90; exec @ARGV' rake "spec[portal -e FailedJoin]"; pkill -f target/release/trmnl-sim`
-  (or `cd tests/integration && bundle exec rspec spec/portal_spec.rb:42`, with
+  (or `cd tests/integration && bundle exec rspec spec/general/setup/portal_spec.rb:42`, with
   `TRMNL_SIM_DEVICE=<env>` for another device under test). No full-suite runs for debugging;
   a full run is for a final regression check (run it in the background).
 - `spec/support/devices.rb` has a `Device` profile per environment (size, inks, chip, battery,

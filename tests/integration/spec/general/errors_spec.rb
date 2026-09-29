@@ -256,7 +256,7 @@ RSpec.describe "Errors", :parallel, env: :any do
   # A fresh device near a "TRMNL_QA" network runs the factory test: 7 s of CPU and radio
   # load, comparing the chip temperature (and battery voltage) before and after. Every build
   # but the TRMNL X's has it (setup() in src/main.cpp calls startQA() until it passed once;
-  # the X has its own factory flow, see trmnl_x_spec).
+  # the X has its own factory flow, see devices/trmnl_x/trmnl_x_spec).
   describe "FactoryQa", skip_if: :shipment,
                         why: "its factory flow flashes the modem and ships; it runs no QA test (main.cpp)" do
     # Start a fresh device next to the QA network; yields it once the stress test runs.

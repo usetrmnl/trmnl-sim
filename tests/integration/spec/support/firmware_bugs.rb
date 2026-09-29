@@ -4,7 +4,8 @@
 # and says so (`known_failure:` / `pending:` metadata) with one of these reasons, or its own.
 module FirmwareBugs
   # Firmware memory bugs memcheck found, tolerated so the rest of a run is still checked
-  # (memcheck_spec has a pending example for each, which fails once the bug is fixed):
+  # (the memcheck specs, general/tooling/ and with the devices, have a pending example for each,
+  # which fails once the bug is fixed):
   KNOWN_MEMORY_BUGS = [
     # Clock::sync passes a String's c_str() to configTime(), which keeps the pointer for SNTP;
     # the String is freed when setTimeFromNTP returns, and later SNTP retries resolve the freed
@@ -27,6 +28,9 @@ module FirmwareBugs
     # 48000-byte buffer (factory QA only): 62 bytes past its end on 800x480 panels.
     "_Z19display_show_msg_qaPhPKfS1_b"
   ].freeze
+  # The SNTP use-after-free's functions (the first KNOWN_MEMORY_BUGS), for examples that check
+  # for the others.
+  SNTP_USE_AFTER_FREE = KNOWN_MEMORY_BUGS.first(2).freeze
 
   # Firmware bugs that keep general tests from passing on some devices (each has a
   # device-specific test of its own too).
@@ -35,17 +39,17 @@ module FirmwareBugs
     "(src/display.cpp:1947 writePlane()) and asks for a partial refresh (display.cpp:1949); a " \
     "partial refresh is differential against the old-image RAM, which after the full or fast " \
     "refresh at boot doesn't hold what's on screen, so the BMP never appears " \
-    "(byod_ssd_spec SsdBoard \"bmp after a fast refresh\")"
+    "(devices/byod/ssd16xx_spec SsdBoard \"bmp after a fast refresh\")"
   ONE_BIT_PNG_PANEL_TYPE =
     "firmware: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) for 1-bit PNGs " \
     "(src/display.cpp:1764) on boards brought up with bbep.begin(<product>), passing a product " \
     "number as a panel type: the image is drawn for another panel and never shows " \
-    "(byod_ssd_spec CrowPanel42 \"shows the served image\")"
+    "(devices/byod/ssd16xx_spec CrowPanel42 \"shows the served image\")"
   GEN2_4CLR_IMAGE =
     "firmware: the trmnl_gen2_4clr env (platformio.ini:910) defines BOARD_TRMNL_GEN2 but not " \
     "BOARD_TRMNL_4CLR, which the 4-color image path is compiled under (src/display.cpp:1752): " \
     "images go out as two 1-bit planes the BWRY panel reads as 2 bits per pixel, so they never " \
-    "show right (og_gen2_spec OgGen2Bwry)"
+    "show right (devices/og_gen2_spec OgGen2Bwry)"
   BMP_FLIP_OVERFLOW =
     "firmware: display_show_image() flips an uncompressed BMP with the panel's dimensions " \
     "(src/display.cpp:1940 flip_image(image_buffer+62, bbep.width(), bbep.height())): on a " \
@@ -54,7 +58,7 @@ module FirmwareBugs
   EP397_ROW_SHIFT =
     "firmware (bb_epaper 2.1.9, the Waveshare 3.97\"'s): EP397_800x480's init sequences make the " \
     "RAM Y address count down from 479 but start its counter at 0, so everything shows one row " \
-    "too high, its top row at the bottom (byod_ssd_spec Waveshare397)"
+    "too high, its top row at the bottom (devices/byod/ssd16xx_spec Waveshare397)"
   XIAO_C3_BUTTON_WAKE =
     "firmware: the XIAO ESP32-C3's device_list[] row puts the button on GPIO 9 (src/display.cpp:56), " \
     "and goto sleep enables it as a deep-sleep wakeup (src/bl.cpp:2303), which the C3 only has on " \
