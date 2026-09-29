@@ -3,7 +3,7 @@
 #
 #   scripts/integration-tests.sh                       # uses ../trmnl-firmware/.pio/build/{trmnl,trmnl_4clr,TRMNL_X,seeed_reTerminal_E1002}
 #   scripts/integration-tests.sh --build-firmware      # also runs `pio run` for those envs first
-#   scripts/integration-tests.sh test_refresh_cycle    # any unittest selector(s)
+#   scripts/integration-tests.sh refresh_cycle         # spec files (spec/<name>_spec.rb), paths, rspec options
 #   scripts/integration-tests.sh -j 4                  # parallel workers (default: CPU count)
 #   scripts/integration-tests.sh xteink_x4             # every test of a PlatformIO env (--list-envs lists them)
 #   scripts/integration-tests.sh --build-firmware xteink_x4   # build that env first, then run its tests
@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 FIRMWARE="${TRMNL_FIRMWARE:-../trmnl-firmware}"
 if [[ "${1:-}" == "--build-firmware" ]]; then
   shift
-  # The environments named among the arguments (not test_* modules, flags or their values),
+  # The environments named among the arguments (not spec files, paths, flags or their values),
   # else the TRMNL devices'.
   envs=()
   args=("$@")
@@ -26,9 +26,9 @@ if [[ "${1:-}" == "--build-firmware" ]]; then
     case "${args[$i]}" in
       --env) envs+=("${args[$((i + 1))]:-}"); i=$((i + 1)) ;;
       --env=*) envs+=("${args[$i]#--env=}") ;;
-      -j | --jobs | -k | -p) i=$((i + 1)) ;;
-      -* | test_*) ;;
-      *) envs+=("${args[$i]}") ;;
+      -j | --jobs | -e | --example | -t | --tag | -f | --format | -o | --out | --seed) i=$((i + 1)) ;;
+      -* | */* | *.rb | *.rb:* | *.rb\[*) ;;
+      *) [[ -f "tests/integration/spec/${args[$i]}_spec.rb" ]] || envs+=("${args[$i]}") ;;
     esac
   done
   ((${#envs[@]})) || envs=(trmnl trmnl_4clr TRMNL_X seeed_reTerminal_E1002)
@@ -45,4 +45,6 @@ BIN="$(pwd)/target/release/trmnl-sim"
 export TRMNL_SIM_BIN="$BIN"
 
 cd tests/integration
-exec python3 run.py -v "$@"
+export BUNDLE_GEMFILE="$PWD/Gemfile"
+bundle check >/dev/null 2>&1 || bundle install --quiet
+exec bundle exec ruby run.rb "$@"

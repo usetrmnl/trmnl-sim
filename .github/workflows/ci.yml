@@ -59,6 +59,19 @@ jobs:
       - name: unit tests
         run: cargo test --workspace --no-default-features
 
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: tests/integration
+
+      # Style, and the specs load and their metadata is valid (no firmware needed).
+      - name: integration specs (rubocop, dry run)
+        working-directory: tests/integration
+        run: |
+          bundle exec rubocop
+          bundle exec rspec --dry-run --format progress
+
   integration:
     needs: unit
     runs-on: ubuntu-latest
@@ -88,6 +101,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+
+      # PlatformIO needs Python; the integration tests are Ruby (RSpec).
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: trmnl-sim/tests/integration
 
       - name: Install PlatformIO Core and the ESP32 ROM images
         run: |
@@ -122,7 +142,7 @@ jobs:
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
           TRMNL_SIM_COVERAGE: ${{ github.workspace }}/sim-coverage
           FORCE_COLOR: "1"
-        run: python run.py -v --no-cache
+        run: bundle exec ruby run.rb --no-cache
 
       - name: Collect screen diffs
         if: failure()

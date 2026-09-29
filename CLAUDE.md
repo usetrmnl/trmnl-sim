@@ -31,25 +31,33 @@ Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's c
 density and naming; comments explain hardware behaviour and why, with firmware file:line
 references where relevant.
 
-## Integration tests (tests/integration)
+## Integration tests (tests/integration, RSpec)
 
-- `bin/spec <selector>`: a module, class or test. `bin/spec <env>`: everything for one
-  PlatformIO environment. `bin/spec` (default tier): every device's own tests, the general
-  tests in full on the OG and `devices.SMOKE` on the rest (~9 min). `--comprehensive` (~24
-  min), `--exhaustive`, `--slow`, `--dry-run`, `--list-envs`.
-- While iterating, run ONE class or test at a time under a hard limit and clean up:
-  `perl -e 'alarm 90; exec @ARGV' bin/spec test_x.Class; pkill -f target/release/trmnl-sim`.
-  No full-suite runs for debugging; a full run is for a final regression check (run it in
-  the background).
-- `devices.py` has a `Device` profile per environment (size, inks, chip, battery, button,
-  ...) plus FAMILIES / REPRESENTATIVES / SMOKE. Every test class declares the environment it
-  runs: `ENV = "<env>"`, or `ENV = ANY` for general tests, which run on the device under
-  test (`TRMNL_SIM_DEVICE`, default `trmnl`) and must adapt to its `Device` (use
-  `support.device_image`, `needs(...)`, `only_on(...)`, `assert_golden`).
-- A test that fails because the firmware is wrong stays in and is marked: the module's
-  `KNOWN_FAILURES = {"<env>": {"Class.test": "what the firmware does wrong, file:line"}}`, or
-  `@unittest.expectedFailure` with a comment. Verify the root cause in the firmware source
-  first. Never weaken an assertion or work around a firmware bug in the simulator.
+- `bin/spec <file>`: a spec file by short name (`bin/spec portal` = spec/portal_spec.rb), a
+  path, `path:line` or `path[id]`; rspec options pass through (`bin/spec portal -e "wrong
+  password"`). `bin/spec <env>`: everything for one PlatformIO environment. `bin/spec`
+  (default tier): every device's own specs, the general ones in full on the OG and the
+  `:smoke` examples on the rest (~9 min). `--comprehensive` (~24 min), `--exhaustive`,
+  `--slow`, `--dry-run`, `--list-envs`. The runner is tests/integration/run.rb.
+- While iterating, run ONE group or example at a time under a hard limit and clean up:
+  `perl -e 'alarm 90; exec @ARGV' bin/spec portal -e FailedJoin; pkill -f target/release/trmnl-sim`
+  (or `cd tests/integration && bundle exec rspec spec/portal_spec.rb:42`, with
+  `TRMNL_SIM_DEVICE=<env>` for another device under test). No full-suite runs for debugging;
+  a full run is for a final regression check (run it in the background).
+- `spec/support/devices.rb` has a `Device` profile per environment (size, inks, chip, battery,
+  button, ...) plus FAMILIES / REPRESENTATIVES. Every group declares the environment it runs:
+  `env: "<env>"`, or `env: :any` for general specs, which run on the device under test
+  (`TRMNL_SIM_DEVICE`, default `trmnl`) and must adapt to its `Device` (use `device_image`,
+  `needs:` / `only_on:` metadata, `match_golden`). Metadata is documented in
+  `spec/support/metadata.rb`; the client library (`TrmnlSim::Simulator`, `MockTrmnl`) is in
+  `tests/integration/lib`. Everything the suite needs lives under tests/integration (it is
+  meant to move to a repository of its own): keep it self-contained, reaching this checkout
+  only through `TrmnlSim::REPO` / `Builds::ROOT` (`TRMNL_SIM_REPO`).
+- A test that fails because the firmware is wrong stays in and is marked:
+  `known_failure: { "<env>" => "what the firmware does wrong, file:line" }` on the example
+  (or group), or `pending: "..."` with a comment for device-specific specs. Verify the root
+  cause in the firmware source first. Never weaken an assertion or work around a firmware
+  bug in the simulator.
 - A test that fails because the simulator is wrong gets the simulator fixed: general,
   minimal changes that keep the other chips and boards behaving identically.
 - Golden screenshots: per-device ones live in `golden/<env>/`. Look at every new or
@@ -69,11 +77,11 @@ references where relevant.
   I2C chips, the ESP-AT modem, SPI flash.
 - `crates/`: `sim-api` (emulator/front-end contract), `sim-ui` (egui), `sim-control` (HTTP
   API), `mock-trmnl` (built-in server, image conversion), `vnet` (user-mode network).
-- `python/`: `trmnl_sim.Simulator` (control API client) and `trmnl_mock.MockTrmnl`.
+- `tests/integration/lib/trmnl_sim/`: `TrmnlSim::Simulator` (control API client), `MockTrmnl`, `Images`.
 
 ## Adding a board
 
 Add a `BoardSpec` row (or a board module for non-SPI panels), a `Device` in
-`tests/integration/devices.py` (and its family in `FAMILIES`), and a test class using the
-`support_byod.ByodBoard` mixin; then run `bin/spec <env>` and classify every failure as
-above. Update the README's supported-device tables.
+`tests/integration/spec/support/devices.rb` (and its family in `FAMILIES`), and a board
+group using the BYOD support (`spec/support/byod.rb`); then run `bin/spec <env>` and
+classify every failure as above. Update the README's supported-device tables.

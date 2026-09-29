@@ -166,18 +166,19 @@ Firmware bugs these boards show (each is an expected-failure test):
   `rom/`. The simulator looks for a ROM ELF in `rom/` of its checkout, `rom/` next to the
   executable, `~/.cache/trmnl-sim/rom-elfs` (`$XDG_CACHE_HOME`), then PlatformIO's
   `tool-esp-rom-elfs` packages; `--rom path/to/rom.elf` (or `TRMNL_SIM_ROM`) overrides it.
-- Python 3.9+ for the integration tests (standard library only).
+- Ruby 3.2+ with Bundler for the integration tests (RSpec; the client library itself is
+  standard library only). PlatformIO, which builds the firmware, needs Python.
 
 ## Quick start
 
 ```sh
-bin/setup      # install Rust (rustup), a C toolchain, Python 3, the ESP32 ROM ELFs
+bin/setup      # install Rust (rustup), a C toolchain, the test gems, the ESP32 ROM ELFs
 bin/build      # cargo build --release
 bin/dev        # build, then run the OG build from ../trmnl-firmware
 bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
 bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy and unit tests
-bin/spec       # integration tests (bin/spec test_trmnl_x for a subset)
+bin/spec       # integration tests (bin/spec trmnl_x for a subset)
 ```
 
 Or by hand:
@@ -209,7 +210,7 @@ The simulator can inject faults that are hard to produce on hardware. The side p
 **Faults** section has the common ones: internet down, no internet behind the access
 point, a slow (300 ms, 16 kB/s) or lossy (10%) link, failing DNS, a power cut in the
 middle of the next NVS write, a missing fuel gauge (X), a stuck panel, and an unresponsive
-modem (X). The [control API](#control-api) (`POST /faults`), `--faults JSON` and the Python
+modem (X). The [control API](#control-api) (`POST /faults`), `--faults JSON` and the Ruby
 client (`sim.set_faults(...)`) have the full set:
 
 | Fault | JSON (`POST /faults`, `--faults`) | |
@@ -238,7 +239,7 @@ failure and no internet fail the request (after the modem's 10 s timeout where i
 wait), latency delays the response, the bandwidth limit throttles the body, and a cut
 truncates the body after N bytes (a stall times out after 30 s); packet loss isn't applied
 there. HTTP-level faults (500s, malformed JSON, truncated or slow bodies, timeouts) are set
-per path on the Python mock server: `mock.set_fault("/api/display", status=500)`.
+per path on the Ruby mock server: `mock.set_fault("/api/display", status: 500)`.
 
 `[sim] power lost: program #3 at 0xa060 (+0x40) in partition nvs, cut torn` marks a
 power cut on the console; `GET /faults` also lists the partition table and counts flash
@@ -368,7 +369,7 @@ A save point captures the device so you can jump straight back to e.g. "onboarde
 image X showing" instead of redoing setup. In the side panel, **Save** keeps one in memory
 (listed below it, **⟲** restores it), **Save as…** also writes a `.trmnlsave` file, and
 **Open…** restores a file. The same is available as `POST /savepoint` / `POST /restore`,
-from Python, and with `--restore FILE` on the command line.
+from the Ruby client, and with `--restore FILE` on the command line.
 
 - **Taken in deep sleep** (the useful case), it holds everything that survives deep sleep
   on the device plus what the simulator needs to resume it: flash, RTC memory, the RTC_CNTL
@@ -392,21 +393,22 @@ is refused too; try again when it is idle.
 ```sh
 scripts/integration-tests.sh                  # build the sim, run the whole suite
 scripts/integration-tests.sh --build-firmware # also `pio run` for the tested envs first
-scripts/integration-tests.sh test_refresh_cycle.RefreshCycle.test_button_press_wakes_and_refreshes
-scripts/integration-tests.sh test_trmnl_x     # only the TRMNL X tests
+scripts/integration-tests.sh refresh_cycle -e "wakes and refreshes on a button press"
+scripts/integration-tests.sh trmnl_x          # only the TRMNL X specs (spec/trmnl_x_spec.rb)
 ```
 
 How much runs:
 
 | Command | Runs |
 |---|---|
-| `bin/spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (`SMOKE` in [devices.py](tests/integration/devices.py)): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
-| `bin/spec --comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES`: devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `bin/spec --list-envs` marks them with `*`) |
+| `bin/spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (the examples tagged `:smoke`): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
+| `bin/spec --comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES` in [devices.rb](tests/integration/spec/support/devices.rb): devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `bin/spec --list-envs` marks them with `*`) |
 | `bin/spec --exhaustive` | the general tests in full on every device |
 | `bin/spec <env>` | everything for one device: its own tests and all the general tests |
 
-`--dry-run` prints the test groups a command would run. Tests marked `@slow` (support.py;
-e.g. the screen wiper, 100 full refreshes) are skipped unless `--slow` is given.
+`--dry-run` prints the units (rspec processes) a command would run. Examples marked `slow:`
+(e.g. the screen wiper, 100 full refreshes) are skipped unless `--slow` is given. Anything
+else starting with `-` goes to rspec: `bin/spec portal -e "wrong password"`.
 
 To test one device, name its PlatformIO environment (`bin/spec` is the same script):
 
@@ -414,25 +416,25 @@ To test one device, name its PlatformIO environment (`bin/spec` is the same scri
 bin/spec xteink_x4                    # every test that runs the xteink_x4 build
 bin/spec TRMNL_X trmnl_gen2           # several environments (names are case-insensitive)
 bin/spec --build-firmware xteink_x4   # pio run -e xteink_x4 first, then its tests
-bin/spec --list-envs                  # the environments with tests, test counts, builds present
+bin/spec --list-envs                  # the environments with specs, example counts, builds present
 ```
 
-Every test class declares the environment whose build it runs: `ENV = "<env>"` on the
-class, or on its module for all of its classes (BYOD board classes already set `ENV`). The
-runner refuses to select by environment while any class lacks one, and fails up front if the
-requested environment hasn't been built.
+Every group declares the environment whose build it runs: `env: "<env>"` metadata on the
+group, or on its file's top-level group (`env: :any` for the general tests). The runner
+refuses to load a spec whose examples lack one, and fails up front if the requested
+environment hasn't been built.
 
-The suite ([tests/integration](tests/integration)) runs in about two minutes and needs
+The suite ([tests/integration/spec](tests/integration/spec), RSpec) runs in about two minutes and needs
 no internet. For the TRMNL OG it covers:
 
 - the first-boot setup screen and captive portal, and the portal's 15-minute timeout;
 - factory QA near a `TRMNL_QA` network (every build but the X's): pass, fail on an
   overheating chip, stopped by the button (needs the firmware's QA fix; see
-  [test_errors.py](tests/integration/test_errors.py));
+  [errors_spec.rb](tests/integration/spec/errors_spec.rb));
 - onboarding, and WiFi failures (unknown SSID, wrong password);
 - `/api/setup` and `/api/display` requests and their headers, including the `Panel-Rev`
   read from the panel;
-- HTTPS ([test_https.py](tests/integration/test_https.py)), and for trmnl.app the TLS
+- HTTPS ([https_spec.rb](tests/integration/spec/https_spec.rb)), and for trmnl.app the TLS
   session resumed across deep sleep;
 - pixel-exact image rendering;
 - sleep duration from `refresh_rate`;
@@ -446,19 +448,19 @@ no internet. For the TRMNL OG it covers:
   button wake, no re-onboarding), in-memory slots, power-off save points, and refusing
   other builds and bad files.
 
-For the TRMNL BWRY ([test_trmnl_bwry.py](tests/integration/test_trmnl_bwry.py); skipped if
+For the TRMNL BWRY ([trmnl_bwry_spec.rb](tests/integration/spec/trmnl_bwry_spec.rb); skipped if
 there is no `trmnl_4clr` build): the device identity (`Model: og_4clr`), a 4-color image
 rendered exactly (compared as RGB), the panel's long refresh, and a save point keeping the
 color image.
 
-For the Seeed reTerminal E1002 ([test_reterminal_e1002.py](tests/integration/test_reterminal_e1002.py);
+For the Seeed reTerminal E1002 ([reterminal_e1002_spec.rb](tests/integration/spec/reterminal_e1002_spec.rb);
 skipped if there is no `seeed_reTerminal_E1002` build): the setup screen (the OG's
 goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switched battery
 divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with and without
 alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
 and a save point keeping the color image.
 
-For the gen-2 OG and BWRY ([test_og_gen2.py](tests/integration/test_og_gen2.py), a class
+For the gen-2 OG and BWRY ([og_gen2_spec.rb](tests/integration/spec/og_gen2_spec.rb), a class
 each; skipped without a `trmnl_gen2` / `trmnl_gen2_4clr` build in `TRMNL_FIRMWARE_BUILDS`):
 the BYOD checks (onboarding through the portal, identity headers, a served image), the
 fuel gauge's voltage, `USB-Connected`/`Battery-Charging` from the charger lines, timer and
@@ -466,22 +468,22 @@ button wake, deep-sleep and power-off save points, onboarding on 5 GHz with the 
 radio (`WiFi-Band`), HTTPS on the crypto accelerators, and memcheck and coverage runs; the
 BWRY's colors and the long refresh (its image bug is an expected failure).
 
-For the Sensoria C5 ([test_byod_parallel.py](tests/integration/test_byod_parallel.py)): the
+For the Sensoria C5 ([byod_parallel_spec.rb](tests/integration/spec/byod_parallel_spec.rb)): the
 setup screen, onboarding and a 16-gray ramp on its 1280×720 panel, and its reboot on the
 way to sleep (an expected failure, see above).
 
-For the BYOD boards ([test_byod_uc8179.py](tests/integration/test_byod_uc8179.py),
-[test_byod_uc81xx.py](tests/integration/test_byod_uc81xx.py),
-[test_byod_ssd.py](tests/integration/test_byod_ssd.py),
-[test_byod_m5.py](tests/integration/test_byod_m5.py),
-[test_byod_parallel.py](tests/integration/test_byod_parallel.py); a class per board, skipped
+For the BYOD boards ([byod_uc8179_spec.rb](tests/integration/spec/byod_uc8179_spec.rb),
+[byod_uc81xx_spec.rb](tests/integration/spec/byod_uc81xx_spec.rb),
+[byod_ssd_spec.rb](tests/integration/spec/byod_ssd_spec.rb),
+[byod_m5_spec.rb](tests/integration/spec/byod_m5_spec.rb),
+[byod_parallel_spec.rb](tests/integration/spec/byod_parallel_spec.rb); a class per board, skipped
 if its env isn't built): every board onboards through the portal and is checked for its
 `Model`/`Width`/`Height`/`Battery-Voltage` headers and a served image shown exactly
-([support_byod.py](tests/integration/support_byod.py)); plus per board 4-gray and 16-gray
+([byod.rb](tests/integration/spec/support/byod.rb)); plus per board 4-gray and 16-gray
 images, partial refreshes, button wake, battery from the gauge or PMIC, colors, each E1004
 controller's half, and the firmware bugs listed [above](#what-is-simulated).
 
-For the TRMNL X ([test_trmnl_x.py](tests/integration/test_trmnl_x.py); skipped if there is
+For the TRMNL X ([trmnl_x_spec.rb](tests/integration/spec/trmnl_x_spec.rb); skipped if there is
 no `TRMNL_X` build):
 
 - the factory flow: modem flashing, then shipment mode until docked;
@@ -494,7 +496,7 @@ no `TRMNL_X` build):
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
 - a left tap showing the previous cached image without touching the network;
-- the touch bar ([test_touchbar_x.py](tests/integration/test_touchbar_x.py)): browsing with
+- the touch bar ([touchbar_x_spec.rb](tests/integration/spec/touchbar_x_spec.rb)): browsing with
   taps, holds and (slide mode) swipes, the WiFi-reset and power-off confirmations, and
   switching between tap and slide mode;
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
@@ -502,15 +504,15 @@ no `TRMNL_X` build):
 
 `bin/spec TRMNL_X` also runs the general tests on the X (onboarded on 2.4 GHz). Their
 factory-fresh device is an *unboxed* X (shipped, then docked once: it restarted into the
-setup portal; `support_x.unboxed`), and their button presses are its touch bar gestures
-(`support_x.XSim`): a short press is a tap in the middle, a 5 s press the WiFi reset (both
+setup portal; `TrmnlX.unboxed`), and their button presses are its touch bar gestures
+(`TrmnlX::XSim`): a short press is a tap in the middle, a 5 s press the WiFi reset (both
 edges, then a middle hold). The OG's double click and 15 s press have no equivalent there,
-so those tests are skipped (`@needs("double_click")`, `@needs("soft_reset_press")`), as is
+so those examples are skipped (`needs: :double_click`, `needs: :soft_reset_press`), as is
 what the X doesn't have (factory QA, sensors, Panel-Rev). Its goldens are in
-[golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`support.golden`).
+[golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`Golden::REGIONS`).
 
-Fault injection ([test_faults.py](tests/integration/test_faults.py) on the device under test,
-[test_faults_x.py](tests/integration/test_faults_x.py) on the X): HTTP 500 and malformed
+Fault injection ([faults_spec.rb](tests/integration/spec/faults_spec.rb) on the device under test,
+[faults_x_spec.rb](tests/integration/spec/faults_x_spec.rb) on the X): HTTP 500 and malformed
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
 modem path); slow, high-latency and lossy links; DNS failure; an access point without
 internet; power loss mid-write in NVS (torn pages), in otadata and during an OTA (the old
@@ -526,103 +528,151 @@ unresponsive modem.
 | `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
 | `TRMNL_FIRMWARE_BUILDS` | Where the BYOD and gen-2 boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
+| `TRMNL_SIM_DEVICE=ENV` | The device the general tests run on with plain `bundle exec rspec` (bin/spec sets it per unit) |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
-| `TRMNL_SIM_MEMCHECK=1` | Run every simulator with [`--memcheck=halt`](#memory-checking); a test fails on any memory error |
+| `TRMNL_SIM_MEMCHECK=1` | Run every simulator with [`--memcheck=halt`](#memory-checking); an example fails on any memory error |
 | `TRMNL_SIM_COVERAGE=DIR` | Record firmware code coverage in every simulator; merge and report it after the run (see [Code coverage](#code-coverage)) |
-| `TRMNL_SIM_NETWORK=1` | Also run tests against the real trmnl.app |
+| `TRMNL_SIM_NETWORK=1` | Also run the examples against the real trmnl.app |
 | `TRMNL_SIM_BIN` | Simulator binary (default `target/release/trmnl-sim`) |
+| `TRMNL_SIM_REPO` | The trmnl-sim checkout the suite uses for the default binary, its setup cache (`target/spec-cache`) and `scripts/coverage.py` (default: the one it lives in) |
 
 ### Writing tests
 
-Give every new test module (or class) an `ENV` naming the PlatformIO environment it runs,
-so `bin/spec <env>` picks it up.
+A spec file (`tests/integration/spec/<area>_spec.rb`) has one top-level group, with the
+environment it runs as metadata, and a nested group per scenario:
 
-Two standard-library Python modules live in [python/](python):
+```ruby
+RSpec.describe "Refresh cycle", env: :any do               # general: the device under test
+  fixture(:dev) { ProvisionedDevice.new }                  # onboarded once (cached), shared
+  before { dev.reset }                                     # forget requests, faults, queued answers
 
-- **`trmnl_sim.Simulator`** launches a headless simulator with the control API and
-  wraps every action.
-- **`trmnl_mock.MockTrmnl`** is a fake TRMNL API server. It serves `/api/setup`,
+  describe "RefreshCycle" do
+    it "fetches the next image on a timer wake", :smoke do
+      _, expected = device_image(dev.mock, "two", device_number("2"))
+      dev.mock.display = { image: "two", refresh_rate: 300 }
+      dev.boot_asleep do |s|                               # resumed from a save point
+        s.wait_for_deep_sleep
+        req = dev.mock.next_request("/api/display") { s.wake }
+        expect(req).to have_header("Update-Source", "timer")
+        s.wait(state: "deep_sleep", display_idle: true, timeout: 120)
+        expect(s).to show_image(expected, tolerance: 64)
+      end
+    end
+
+    it "resets WiFi on a long press", needs: :button,
+                                      known_failure: { "seeed_xiao_esp32c3" => "GPIO 9 can't wake a C3 (bl.cpp:2303)" } do
+      ...
+    end
+  end
+end
+```
+
+Metadata ([metadata.rb](tests/integration/spec/support/metadata.rb)) says where examples
+apply: `env: "<env>"` (skipped when that build is missing) or `env: :any`; `needs: :button`
+(a `Device` feature of the device under test), `skip_if: :shipment, why:`,
+`only_on: %w[trmnl], why:`, `needs_build: "trmnl_4clr"`, `slow: "why"`, `:smoke` (one per
+area, run on every device by default), and for firmware bugs `known_failure: { env =>
+reason }` (expected to fail on those devices) or `pending: reason` (everywhere). A pending
+example that passes fails the run, so a firmware fix shows up. `parallel: true` on a file's
+top-level group lets the runner give each nested group its own process (its fixtures are
+built lazily). Helpers and matchers: `device`, `build`, `sim(...)`, `device_image`,
+`device_number`, `panel_number`, `device_mock`, `text_lines`, `show_image`, `match_golden`,
+`match_screenshot`, `show_message`, `have_header`; see
+[spec/support](tests/integration/spec/support).
+
+The Ruby client library (standard library only) lives in
+[tests/integration/lib](tests/integration/lib):
+
+- **`TrmnlSim::Simulator`** launches a headless simulator with the control API and
+  wraps every action. `Simulator.open(build, ...) { |sim| }` closes it after the block.
+- **`TrmnlSim::MockTrmnl`** is a fake TRMNL API server. It serves `/api/setup`,
   `/api/display`, `/api/log`, images and firmware files, and records every request.
   It also generates BMP images (OG), 1/2/4/8-bit gray PNGs (`set_png`, X) and 4-color
   palette PNGs (`set_color_png`, BWRY; `set_spectra6_png`, 4-bit, reTerminal E1002; like the TRMNL server, colors are reduced to the
   panel's four first, since the OG-family PNG decoder can't take 800 px truecolor rows), with
   server-style `plugin-<id>-<timestamp>` filenames the X uses for its image cache, and
-  returns the PNG you should expect on screen. Request header lookups are
-  case-insensitive. `set_fault(path, status=, body=, delay=, hang=, truncate=, rate=,
-  close=, times=)` makes a path (or a `prefix*`) misbehave: an HTTP error, a malformed
-  body, a timeout, a body cut short, a slow download or a dropped connection;
-  `device_host` lets the device reach it by a name (with `--dns NAME=10.0.2.2`).
-  `MockTrmnl(tls=True)` serves HTTPS (TLS 1.2, ECDHE-ECDSA with a throwaway P-384
-  certificate made with `openssl`); each request's `tls_resumed` says whether its
-  connection resumed an earlier TLS session.
-- **`sim.mock`** (`trmnl_sim.BuiltinServer`) drives the simulator's
+  returns the PNG you should expect on screen (`TrmnlSim::Images` has the encoders and test
+  pictures). Request header lookups are case-insensitive. `set_fault(path, status:, body:,
+  delay:, hang:, truncate:, rate:, close:, redirect:, chunked:, times:)` makes a path (or a
+  `prefix*`) misbehave: an HTTP error, a malformed body, a timeout, a body cut short, a slow
+  download or a dropped connection; `device_host` lets the device reach it by a name (with
+  `--dns NAME=10.0.2.2`). `MockTrmnl.new(tls: true)` serves HTTPS (TLS 1.2, ECDHE-ECDSA with
+  a throwaway P-384 certificate); each request's `tls_resumed` says whether its connection
+  resumed an earlier TLS session.
+- **`sim.mock`** (`TrmnlSim::BuiltinServer`) drives the simulator's
   [built-in server](#built-in-mock-server) instead, so no second server is needed:
-  `start()` returns the device URL, `add_image(name, png_or_jpeg_bytes, current=True)`
+  `start` returns the device URL, `add_image(name, png_or_jpeg_bytes, current: true)`
   converts an image for the panel and `expected(name)` returns the PNG the screen should
-  then show; `display(refresh_rate=..., image=..., special_function=..., playlist=...,
-  extra={...})`, `queue(update_firmware=True, firmware_url=...)`,
-  `faults(display=["503:2"], image=["truncate:1"])` / `clear_faults()`, `set_file(path, bytes)`,
-  `requests()`, `count(path)` and `wait_for_request(path, after=, timeout_s=)` work like
+  then show; `display(refresh_rate: ..., image: ..., special_function: ..., playlist: ...,
+  extra: {...})`, `queue(update_firmware: true, firmware_url: ...)`,
+  `faults(display: ["503:2"], image: ["truncate:1"])` / `clear_faults`, `set_file(path, bytes)`,
+  `requests`, `count(path)` and `wait_for_request(path, after:, timeout:)` work like
   their `MockTrmnl` counterparts. See
-  [test_builtin_server.py](tests/integration/test_builtin_server.py).
+  [builtin_server_spec.rb](tests/integration/spec/builtin_server_spec.rb).
 
-```python
-from trmnl_sim import Simulator
-from trmnl_mock import MockTrmnl, big_number
+```ruby
+require "trmnl_sim"   # with tests/integration/lib on the load path
+include TrmnlSim
 
-with MockTrmnl() as mock, Simulator(BUILD, erase=True, turbo=True, extra_args=("--offline",)) as sim:
-    expected = mock.set_image("hello", big_number("42"))
-    mock.display = {"image": "hello", "refresh_rate": 600}
+MockTrmnl.open do |mock|
+  Simulator.open(BUILD, erase: true, turbo: true, extra_args: ["--offline"]) do |sim|
+    expected = mock.set_image("hello", Images.big_number("42"))
+    mock.display = { image: "hello", refresh_rate: 600 }
 
-    sim.wait(portal=True)                                  # fresh device in setup mode
-    sim.portal_connect("TRMNL-Sim", "pw", server=mock.device_url)
+    sim.wait(portal: true)                                   # fresh device in setup mode
+    sim.portal_connect("TRMNL-Sim", "pw", server: mock.device_url)
 
     req = mock.wait_for_request("/api/display")
-    assert req.headers["Access-Token"] == mock.api_key
-    sim.wait(state="deep_sleep")
-    assert sim.compare_screen(expected)["match"]           # exact pixels
+    raise unless req.headers["Access-Token"] == mock.api_key
+    sim.wait(state: "deep_sleep")
+    raise unless sim.compare_screen(expected)["match"]       # exact pixels
 
-    sim.press(150)                                         # short press wakes it
-    req = mock.wait_for_request("/api/display", after=len(mock.requests) - 1)
-    assert req.headers["Update-Source"] == "button"
+    req = mock.next_request("/api/display") { sim.press(150) }  # a short press wakes it
+    raise unless req.headers["Update-Source"] == "button"
+  end
+end
 ```
 
 Useful pieces:
 
-- `sim.wait(...)` blocks until all given conditions hold:
-  - `console=` (regex over serial output, continuing from the last match)
-  - `state=` (`running`, `deep_sleep`, `halted`, …)
-  - `min_refreshes=`
-  - `display_idle=`
-  - `wifi_connected=`
-  - `portal=`
-  - `min_boots=`
+- `sim.wait(...)` blocks until all given conditions hold (`timeout:` in seconds):
+  - `console:` (a regex over serial output, continuing from the last match)
+  - `state:` (`running`, `deep_sleep`, `halted`, …)
+  - `min_refreshes:`
+  - `display_idle:`
+  - `wifi_connected:`
+  - `portal:`
+  - `min_boots:`
+  
+  `wait_for_console(/regex/)`, `wait_for_deep_sleep` and `wait_for_refresh` are shortcuts.
 - `sim.press(ms)` holds the button for exactly `ms` of *virtual* time, so hold-duration
   logic is deterministic. `button(down)` holds or releases it indefinitely.
-- `sim.touch("left" | "center" | "right", ms)` taps the TRMNL X touch bar the same way;
-  `sim.dock(True/False)` puts it on or takes it off the dock.
-- `sim.assert_screen(golden, region=(x, y, w, h))` compares against a golden PNG. It
-  creates the golden if missing, and writes `*.actual.png` on mismatch.
-- `sim.save_point(path=None, label=None)` takes a save point (into memory, and to `path`
-  if given); `sim.restore(path)` or `sim.restore(id=N)` restores one, `sim.save_points()`
-  lists the in-memory ones, and `Simulator(BUILD, restore=path)` starts from a file. See
-  [test_savepoints.py](tests/integration/test_savepoints.py).
-- `ProvisionedDevice` in `tests/integration/support.py` onboards once, then boots
-  copies of that flash. Tests start from a registered device in seconds.
-  `tests/integration/support_x.py` does the same for the X: `ShippedX` is a device fresh
-  from the factory (QA done, modem flashed, in shipment mode) and `ProvisionedX`
-  onboards a copy of it on 5 GHz (or `ssid=SSID_24`).
-- `sim.set_faults(net={...}, power_loss={...}, ...)`, `sim.set_net_faults(dns="servfail")`,
-  `sim.arm_power_loss("nvs", cut="torn")`, `sim.clear_faults()` and `sim.faults()` inject
-  [faults](#fault-injection); `Simulator(..., faults={...})` starts with them.
-- `Simulator(..., memcheck="halt")` runs under the [memory checker](#memory-checking);
-  `sim.memcheck()` returns its report and `sim.assert_no_memory_errors()` fails on
-  violations (also done when the `with` block ends).
+- `sim.touch("left" | "center" | "right", ms:)` taps the TRMNL X touch bar the same way;
+  `sim.dock(true/false)` puts it on or takes it off the dock; `sim.pause { }` makes what the
+  block does happen at one instant of virtual time.
+- `expect(sim).to match_screenshot(path, region: [x, y, w, h])` compares against a golden
+  PNG. It creates the golden if missing, and writes `*.actual.png` on mismatch;
+  `match_golden(name)` picks the device under test's golden (and fails if it is missing).
+- `sim.save_point(path = nil, label: nil)` takes a save point (into memory, and to `path`
+  if given); `sim.restore(path)` or `sim.restore(id: n)` restores one, `sim.save_points`
+  lists the in-memory ones, and `Simulator.new(BUILD, restore: path)` starts from a file. See
+  [savepoints_spec.rb](tests/integration/spec/savepoints_spec.rb).
+- `ProvisionedDevice` ([provisioned_device.rb](tests/integration/spec/support/provisioned_device.rb))
+  onboards once, then boots copies of that flash. Tests start from a registered device in
+  seconds. [trmnl_x.rb](tests/integration/spec/support/trmnl_x.rb) does the same for the X:
+  `TrmnlX::ShippedX` is a device fresh from the factory (QA done, modem flashed, in shipment
+  mode) and `TrmnlX::ProvisionedX` onboards a copy of it on 5 GHz (or `ssid: TrmnlX::SSID_24`).
+- `sim.set_faults(net: {...}, power_loss: {...}, ...)`, `sim.set_net_faults(dns: "servfail")`,
+  `sim.arm_power_loss("nvs", cut: "torn")`, `sim.clear_faults` and `sim.faults` inject
+  [faults](#fault-injection); `Simulator.new(..., faults: {...})` starts with them.
+- `Simulator.new(..., memcheck: "halt")` runs under the [memory checker](#memory-checking);
+  `sim.memcheck` returns its report and `sim.assert_no_memory_errors` fails on
+  violations (also done when an `open` block ends).
 
 ### Control API
 
-`--control 127.0.0.1:7878` serves JSON over HTTP; the Python client is a thin wrapper.
+`--control 127.0.0.1:7878` serves JSON over HTTP; the Ruby client (`TrmnlSim::Simulator`) is a thin wrapper.
 
 | | |
 |---|---|
@@ -674,12 +724,12 @@ IDF sources keep their absolute paths.
 trmnl-sim ../trmnl-firmware/.pio/build/trmnl --headless --seconds 30 --coverage og.info --coverage-include src/,lib/
 ```
 
-`POST /coverage` (Python: `sim.write_coverage(path, reset=False)`) writes a tracefile
+`POST /coverage` (Ruby: `sim.write_coverage(path, reset: false)`) writes a tracefile
 mid-run, e.g. to see what one step of a test covers. After an OTA to another build
 (`--elf`), both builds' lines are reported, merged by file and line.
 
 `TRMNL_SIM_COVERAGE=DIR bin/spec` makes every simulator the tests start write
-`DIR/<test>-*.info`. At the end, `run.py` merges them into `DIR/merged.info` and an
+`DIR/<test>-*.info`. At the end, the runner merges them into `DIR/merged.info` and an
 HTML report in `DIR/html/`, and prints the coverage of the firmware's `src/` and
 `lib/`. [scripts/coverage.py](scripts/coverage.py) (standard library only) does the
 merging and reporting on its own:
@@ -721,13 +771,13 @@ instead of waiting for them to crash it:
 Each distinct violation (same kind and block, or same pc) is reported once on the
 console and counted after that. `--memcheck=halt` stops the machine at the first one
 (`sim.wait` then fails with it); plain `--memcheck` carries on. `GET /memcheck`
-(Python: `sim.memcheck()`) returns the full report, and a summary with the stack marks
-is printed when the run ends. `Simulator(memcheck="halt")` fails the `with` block if
-there were violations (`sim.assert_no_memory_errors()` checks explicitly), and
+(Ruby: `sim.memcheck`) returns the full report, and a summary with the stack marks
+is printed when the run ends. `Simulator.open(..., memcheck: "halt") { }` fails when the
+block ends if there were violations (`sim.assert_no_memory_errors` checks explicitly), and
 `TRMNL_SIM_MEMCHECK=1 bin/spec` runs the whole suite that way. Known firmware bugs are
-listed in `KNOWN_MEMORY_BUGS` in [support.py](tests/integration/support.py), passed as
-`--memcheck-suppress` so the rest of each run is still checked, with an expected failure
-for each in [test_memcheck.py](tests/integration/test_memcheck.py).
+listed in `KNOWN_MEMORY_BUGS` in [firmware_bugs.rb](tests/integration/spec/support/firmware_bugs.rb), passed as
+`--memcheck-suppress` so the rest of each run is still checked, with a pending (expected
+to fail) example for each in [memcheck_spec.rb](tests/integration/spec/memcheck_spec.rb).
 
 How it works: HLE hooks on the IDF heap's `multi_heap_*` layer, which every allocation
 goes through exactly once (`malloc`, `heap_caps_*`, `new`, newlib in ROM; IDF 4.4 and
@@ -840,7 +890,7 @@ needs that build's ELF via `--elf`; otherwise the run halts with a clear message
   first accesses to unmodelled registers.
 - **Memory corruption or a crash in freed memory**: run with `--memcheck` (see
   [Memory checking](#memory-checking)) to catch the bad access where it happens.
-- **Something hangs or crashes on the TRMNL X**: `POST /debug` (Python: `sim.debug()`)
+- **Something hangs or crashes on the TRMNL X**: `POST /debug` (Ruby: `sim.debug`)
   prints both cores' registers, a windowed-ABI backtrace (through HLE calls) and the
   running FreeRTOS task. `SIM_PEEK=addr,addr` adds memory words to that dump.
   `RUST_LOG=modem=debug` logs every AT command and modem reply.

@@ -2,23 +2,23 @@
 # Run the integration tests: real firmware builds in the simulator against a mock server.
 #
 #   bin/spec                      # every device: its own tests, the general tests in full on the
-#                                 # OG and a smoke test per area (devices.SMOKE) on the others
+#                                 # OG and a smoke test per area (the examples tagged :smoke) on the others
 #   bin/spec --comprehensive      # the general tests in full on one device per family too
 #   bin/spec --exhaustive         # the general tests in full on every device (slow)
 #   bin/spec --dry-run [...]      # print what would run
-#   bin/spec --slow [...]         # also the tests marked @slow (e.g. the screen wiper)
-#   bin/spec -j 1                 # one module at a time (-j N: at most N at once)
+#   bin/spec --slow [...]         # also the examples marked slow: (e.g. the screen wiper)
+#   bin/spec -j 1                 # one unit at a time (-j N: at most N at once)
 #   bin/spec --no-cache           # redo the factory flow and onboarding (as CI does)
-#   bin/spec test_trmnl_x         # a module, class or test (unittest selectors)
-#   bin/spec test_refresh_cycle.RefreshCycle.test_long_press_resets_wifi
-#   bin/spec xteink_x4            # every test of a PlatformIO environment (by its env name)
-#   bin/spec --list-envs          # the environments with tests, their test counts and builds
+#   bin/spec trmnl_x              # a spec file (spec/trmnl_x_spec.rb), path, path:line or path[id]
+#   bin/spec refresh_cycle -e "long press"   # rspec options pass through (-e, --tag, ...)
+#   bin/spec xteink_x4            # every spec of a PlatformIO environment (by its env name)
+#   bin/spec --list-envs          # the environments with specs, their example counts and builds
 #   bin/spec --build-firmware xteink_x4   # pio run -e xteink_x4 first, then its tests
 #
-# Uses ../trmnl-firmware/.pio/build/<env> (TRMNL_FIRMWARE=<checkout> to use another one); tests
+# Uses ../trmnl-firmware/.pio/build/<env> (TRMNL_FIRMWARE=<checkout> to use another one); specs
 # skip themselves when their build is missing (asking for an env whose build is missing fails).
 # Onboarded devices etc. are cached in target/spec-cache/, keyed by the firmware, the
-# simulator and the test support code, so they are rebuilt whenever one changes.
+# simulator and the spec support code, so they are rebuilt whenever one changes.
 # The firmware is only built with --build-firmware. See scripts/integration-tests.sh for more variables.
 set -euo pipefail
 cd "$(dirname "$0")/.."

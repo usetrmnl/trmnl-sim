@@ -1,5 +1,5 @@
 //! Onboarding through the device's captive portal, like a phone would (what
-//! `Simulator.portal_connect` does in the Python client).
+//! `Simulator#portal_connect` does in the Ruby client).
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
