@@ -421,10 +421,7 @@ module TrmnlSim
       JSON.parse(data)
     end
 
-    # ---- built-in mock server ---------------------------------------------------------------------------
-
-    # The simulator's built-in mock TRMNL server (an alternative to MockTrmnl).
-    def mock = @mock ||= BuiltinServer.new(self)
+    private
 
     # ---- HTTP ------------------------------------------------------------------------------------------
 
@@ -445,8 +442,6 @@ module TrmnlSim
 
       JSON.parse(data)
     end
-
-    private
 
     def checked(method, path, response)
       code, _, data = response

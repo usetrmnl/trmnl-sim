@@ -291,19 +291,6 @@ RSpec.describe "TRMNL X", :parallel, env: "TRMNL_X" do
         end
       end
     end
-
-    it "onboards against the built-in server" do
-      shipped.boot do |s|
-        s.mock.start
-        s.mock.add_image("seven", TrmnlSim::Images.png_image(TrmnlX.digits("7"), 1872, 1404), current: true)
-        s.mock.display(refresh_rate: 300)
-        TrmnlX.onboard(s, s.mock, TrmnlX::SSID_24)
-        expect(s.mock.count("/images/seven.png")).to eq(1)
-        expected = TrmnlSim::Images.expected_gray(TrmnlX.digits("7"), 1872, 1404)
-        expect(s).to show_image(expected, tolerance: 64, max_ratio: 0)
-        expect(s).to show_image(s.mock.expected("seven"), tolerance: 64, max_ratio: 0)
-      end
-    end
   end
 
   # A join that fails leaves the portal up, so the password can be corrected.

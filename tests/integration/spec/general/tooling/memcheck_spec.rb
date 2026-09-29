@@ -126,15 +126,9 @@ RSpec.describe "Memcheck", env: :any do
 
     it "does not read the api display body past its end", known_failure: { every_env - arduino3 => body_overread } do
       # bodyAsString() calls String::concat(body, size), which copies size + 1 bytes of a
-      # body that isn't NUL-terminated. The built-in server sends a Content-Length, which
-      # takes the path with a malloc'd body.
-      sim(erase: true, memcheck: "log", memcheck_suppress: all_bugs_but.(body_bug), extra_args: ["--offline"]) do |s|
-        url = s.mock.start
-        s.mock.display(refresh_rate: 300)
-        s.wait(portal: true, timeout: 90)
-        s.portal_connect("TRMNL-Sim", "password", server: url)
-        s.mock.wait_for_request("/api/display", timeout: 120)
-        s.wait_for_deep_sleep(timeout: 120)
+      # body that isn't NUL-terminated. MockTrmnl sends a Content-Length, which takes the path
+      # with a malloc'd body.
+      onboarded(memcheck: "log", memcheck_suppress: all_bugs_but.(body_bug)) do |s, _mock|
         s.assert_no_memory_errors
       end
     end

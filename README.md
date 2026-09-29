@@ -611,16 +611,6 @@ The Ruby client library (standard library only) lives in
   `--dns NAME=10.0.2.2`). `MockTrmnl.new(tls: true)` serves HTTPS (TLS 1.2, ECDHE-ECDSA with
   a throwaway P-384 certificate); each request's `tls_resumed` says whether its connection
   resumed an earlier TLS session.
-- **`sim.mock`** (`TrmnlSim::BuiltinServer`) drives the simulator's
-  [built-in server](#built-in-mock-server) instead, so no second server is needed:
-  `start` returns the device URL, `add_image(name, png_or_jpeg_bytes, current: true)`
-  converts an image for the panel and `expected(name)` returns the PNG the screen should
-  then show; `display(refresh_rate: ..., image: ..., special_function: ..., playlist: ...,
-  extra: {...})`, `queue(update_firmware: true, firmware_url: ...)`,
-  `faults(display: ["503:2"], image: ["truncate:1"])` / `clear_faults`, `set_file(path, bytes)`,
-  `requests`, `count(path)` and `wait_for_request(path, after:, timeout:)` work like
-  their `MockTrmnl` counterparts. See
-  [builtin_server_spec.rb](tests/integration/spec/general/network/builtin_server_spec.rb).
 
 ```ruby
 require "trmnl_sim"   # with tests/integration/lib on the load path
