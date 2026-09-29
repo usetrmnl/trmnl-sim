@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from support import MockTrmnl, ProvisionedDevice, close_fixtures, device_mock, fixture, needs, sim, skip_if
 
-from devices import ANY, DEVICES
+from devices import ANY
 
 ENV = ANY  # general tests: they run on the device under test (see devices.py)
 
@@ -26,12 +26,6 @@ C5_NTP_FOREVER = ("clock_gen2.cpp:9-11: waitForSync() loops until NTP sets the c
 XIAO_C3_BUTTON = ("XIAO C3: its button is GPIO 9 (display.cpp:56), which can't wake a C3 from deep sleep "
                   "(bl.cpp:2303's esp_deep_sleep_enable_gpio_wakeup fails); and were it woken, bl.cpp:731-733's 2 s "
                   "delay outlasts the press and button.cpp:66-71 then waits for another press forever")
-# Firmware bug: when joining the network entered in the portal fails (a wrong password, say),
-# startPortal() breaks out of its loop (WifiCaptive.cpp:196-199), and bl.cpp:1097-1107 shows
-# WIFI_FAILED and deep-sleeps for the WiFi retry interval: the portal is gone and the phone
-# is left waiting, instead of it coming back so the password can be corrected.
-PORTAL_GONE_AFTER_FAILED_JOIN = ("WifiCaptive.cpp:196-199: a failed join breaks out of the portal loop and "
-                                 "bl.cpp:1097-1107 shows WIFI_FAILED and deep-sleeps instead of reopening the portal")
 KNOWN_FAILURES = {
     **{env: {
         "JoinOptions.test_static_ip": C5_NTP_FOREVER,
@@ -44,10 +38,6 @@ KNOWN_FAILURES = {
         "SavedNetworks.test_portal_lists_saved_networks_out_of_range": XIAO_C3_BUTTON,
     },
 }
-for env, d in DEVICES.items():
-    if not d.shipment:
-        KNOWN_FAILURES.setdefault(env, {})["FailedJoin"] = PORTAL_GONE_AFTER_FAILED_JOIN
-
 PARALLEL_BY_CLASS = True  # run.py gives each class its own worker
 
 dev = fixture(ProvisionedDevice)
@@ -197,7 +187,7 @@ class JoinOptions(unittest.TestCase):
 @skip_if("shipment", why="its portal comes from shipment mode, and 5 GHz joins go through the modem "
                      "(test_trmnl_x.FailedJoin)")
 class FailedJoin(unittest.TestCase):
-    """A join that fails leaves the portal up again, so the details can be corrected."""
+    """A join that fails leaves the portal up, so the details can be corrected."""
 
     def join(self, s, **fields) -> int:
         c = s.status()["console_total"]
@@ -221,6 +211,12 @@ class FailedJoin(unittest.TestCase):
     def test_wrong_password_keeps_the_portal(self):
         with fresh(networks=[{"ssid": "TRMNL-Sim", "password": "password"}]) as s:
             c = self.join(s, pswd="wrong")
+            s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
+            self.assert_portal_stays(s)
+
+    def test_unknown_network_keeps_the_portal(self):
+        with fresh() as s:
+            c = self.join(s, ssid="No Such Network")
             s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
             self.assert_portal_stays(s)
 

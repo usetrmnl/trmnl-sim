@@ -44,15 +44,11 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
         "FreshDevice.test_setup_screen": SMALL_PANEL,
         "FreshDevice.test_setup_screen_names_the_access_point": SMALL_PANEL,
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": SMALL_PANEL,
-        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": SMALL_PANEL,
-        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": SMALL_PANEL,
     },
     "TRMNL_X_PAPERS3": {
         "FreshDevice.test_setup_screen": PARALLEL_SMALL_PANEL,
         "FreshDevice.test_setup_screen_names_the_access_point": PARALLEL_SMALL_PANEL,
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": PARALLEL_SMALL_PANEL,
-        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
-        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": PARALLEL_SMALL_PANEL,
     },
     "trmnl_gen2": {
         "FreshDevice.test_setup_screen": C5_AP_NAME,
@@ -69,20 +65,14 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
         "FreshDevice.test_setup_screen": WAVESHARE_ROW,
         "FreshDevice.test_setup_screen_names_the_access_point": WAVESHARE_ROW,
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps": WAVESHARE_ROW,
-        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
-        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps": WAVESHARE_ROW,
     },
     "m5_paper_color": dict.fromkeys([
         "FreshDevice.test_setup_screen", "FreshDevice.test_setup_screen_names_the_access_point",
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps",
-        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps",
-        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
     ], SMALL_PANEL),
     "TRMNL_X_LILYGO_T5PRO": dict.fromkeys([
         "FreshDevice.test_setup_screen", "FreshDevice.test_setup_screen_names_the_access_point",
         "PortalTimeout.test_unattended_portal_times_out_and_sleeps",
-        "Onboarding.test_unknown_network_shows_wifi_error_and_sleeps",
-        "Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
     ], PARALLEL_SMALL_PANEL),
 }
 
@@ -90,16 +80,14 @@ KNOWN_FAILURES: dict[str, dict[str, str]] = {
 def regions(w: int, h: int) -> dict:
     """Where the screens' texts are (display_show_msg in the firmware's display.cpp): the
     version line at (40, 48) left of the top-right QR code, the portal's texts at fixed
-    heights, the WiFi error 192 px above the bottom; centred. On the OG's 800x480 panel:
-    body (0, 56, 800, 424), top_right (320, 0, 480, 56), ssid_line (140, 368, 520, 44),
-    timed_out (260, 320, 280, 48), wifi_failed (100, 288, 600, 44). Other panels compare
-    with their own goldens (golden/<env>/, see support.golden)."""
+    heights; centred. On the OG's 800x480 panel: body (0, 56, 800, 424), top_right (320, 0,
+    480, 56), ssid_line (140, 368, 520, 44), timed_out (260, 320, 280, 48). Other panels
+    compare with their own goldens (golden/<env>/, see support.golden)."""
     return {
         "body": (0, 56, w, h - 56),
         "top_right": (320, 0, w - 320, 56),
         "ssid_line": ((w - 520) // 2, 368, 520, 44),
         "timed_out": ((w - 280) // 2, 320, 280, 48),
-        "wifi_failed": ((w - 600) // 2, h - 192, 600, 44),
     }
 
 
@@ -173,22 +161,6 @@ class Onboarding(unittest.TestCase):
             self.assertEqual(display.headers["Update-Source"], "powercycle")
             s.wait(state="deep_sleep", timeout_s=90)
 
-    def _join_and_expect_wifi_error(self, ssid, password):
-        with sim(erase=True, extra_args=("--offline",)) as s:
-            s.wait(portal=True, timeout_s=90)
-            s.portal_connect(ssid, password)
-            s.wait_for_console(f'connecting to "{ssid}"', timeout_s=60)
-            s.wait(portal=False, timeout_s=60)  # the setup AP goes away while joining
-            s.wait(state="deep_sleep", display_idle=True, timeout_s=180)
-            # "Can't establish WiFi connection. Will keep trying..." (the missing
-            # apostrophe is a known firmware font bug; update the golden once fixed)
-            assert_golden(s, "wifi_failed_message.png", region=REGIONS["wifi_failed"])
-
-    def test_unknown_network_shows_wifi_error_and_sleeps(self):
-        self._join_and_expect_wifi_error("No Such Network", "x")
-
-    def test_wrong_password_shows_wifi_error_and_sleeps(self):
-        self._join_and_expect_wifi_error("Neighbors WiFi", "not-the-password")
 
 if __name__ == "__main__":
     unittest.main()

@@ -180,7 +180,7 @@ REPRESENTATIVES = [devices[0] for devices in FAMILIES.values()]
 SMOKE = [
     "test_setup_mode.FreshDevice.test_setup_screen_names_the_access_point",
     "test_setup_mode.Onboarding.test_onboarding_registers_with_server",
-    "test_setup_mode.Onboarding.test_wrong_password_shows_wifi_error_and_sleeps",
+    "test_portal.FailedJoin.test_wrong_password_keeps_the_portal",
     "test_portal.ScanList.test_access_points_are_merged_by_ssid",
     "test_refresh_cycle.RefreshCycle.test_reports_device_identity",
     "test_refresh_cycle.RefreshCycle.test_reports_battery_voltage",

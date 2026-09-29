@@ -307,11 +307,6 @@ class Onboarding(unittest.TestCase):
             self.assertTrue(s.compare_screen(s.mock.expected("seven"), tolerance=64, max_ratio=0)["match"])
 
 
-# Firmware bug: when joining the network entered in the portal fails, startPortal() breaks
-# out of its loop (WifiCaptive.cpp:196-199) and bl.cpp:1097-1107 shows WIFI_FAILED and
-# deep-sleeps: the portal is gone and the phone is left waiting. After a failed modem (5 GHz)
-# join it first retries the 5 GHz network on the S3 radio, which can't see it
-# (WifiCaptive.cpp:209-225).
 class FailedJoin(unittest.TestCase):
     """A join that fails leaves the portal up, so the password can be corrected."""
 
@@ -342,7 +337,6 @@ class FailedJoin(unittest.TestCase):
         s.wait(portal=True, timeout_s=30)
         self.assertEqual(s.portal_request("/")[0], 200)
 
-    @unittest.expectedFailure  # WifiCaptive.cpp:196-199, bl.cpp:1097-1107 (above)
     def test_wrong_password_on_2_4_ghz_keeps_the_portal(self):
         with shipped().boot() as s:
             self.portal(s)
@@ -350,7 +344,6 @@ class FailedJoin(unittest.TestCase):
             s.wait(console=r"connect attempt failed", since=c, timeout_s=60)
             self.assert_portal_stays(s)
 
-    @unittest.expectedFailure  # WifiCaptive.cpp:196-199 and 209-225, bl.cpp:1097-1107 (above)
     def test_wrong_password_on_5_ghz_keeps_the_portal(self):
         with shipped().boot() as s:
             self.portal(s)
