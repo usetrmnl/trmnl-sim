@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the fast checks CI runs: fmt, clippy (with and without the GUI), unit tests, and for the
 # integration specs rubocop and a dry run (they load and their metadata is valid).
-# No firmware builds needed. The integration tests are bin/spec.
+# No firmware builds needed. The integration tests are `rake spec`.
 #
 #   bin/test
 set -euo pipefail
@@ -16,5 +16,5 @@ cargo clippy --workspace --all-targets -q -- -D warnings
 cargo clippy --workspace --all-targets --no-default-features -q -- -D warnings
 say "unit tests"
 cargo test --workspace -q
-say "integration specs: rubocop, and they load (rspec --dry-run)"
-(cd tests/integration && bundle exec rubocop && bundle exec rspec --dry-run --format progress >/dev/null)
+say "integration specs: rubocop, and they load (rake check)"
+(cd tests/integration && bundle exec rake check >/dev/null)

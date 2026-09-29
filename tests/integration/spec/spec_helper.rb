@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 # Integration tests: real firmware builds in the simulator against mock servers. Run them with
-# bin/spec (see tests/integration/run.rb); `bundle exec rspec <file>` works too, for the device
-# under test (TRMNL_SIM_DEVICE, default the OG).
+# `rake spec` (see the Rakefile); `bundle exec rspec <file>` works too, for the device under test
+# (TRMNL_SIM_DEVICE, default the OG).
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 require "trmnl_sim"

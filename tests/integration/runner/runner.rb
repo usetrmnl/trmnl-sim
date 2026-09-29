@@ -1,19 +1,20 @@
 # frozen_string_literal: true
 
-# Runs the integration specs (bin/spec is the front end):
+# The integration test runner behind the Rake tasks (see Rakefile; `rake -T` lists them).
+# `Runner.main(argv)` takes what `rake "spec[...]"` is given:
 #
-#   ruby run.rb                     # every device's own specs, the general ones in full on the OG,
-#                                   # the :smoke examples on every other device
-#   ruby run.rb refresh_cycle       # a spec file (spec/refresh_cycle_spec.rb), a path, path:line or path[id]
-#   ruby run.rb refresh_cycle -e "long press"   # rspec options pass through
-#   ruby run.rb -j 1                # one unit at a time
-#   ruby run.rb --no-cache          # build the devices the specs start from afresh
-#   ruby run.rb xteink_x4           # every spec of a PlatformIO environment (or --env NAME)
-#   ruby run.rb --list-envs         # the environments and how many examples each has
-#   ruby run.rb --comprehensive     # also the full general suite on a device per family
-#   ruby run.rb --exhaustive        # the full general suite on every device
-#   ruby run.rb --dry-run ...       # print what would run
-#   ruby run.rb --slow ...          # also the examples marked slow:
+#   (nothing)                 every device's own specs, the general ones in full on the OG, the
+#                             :smoke examples on every other device
+#   refresh_cycle             a spec file (spec/refresh_cycle_spec.rb), a path, path:line or path[id]
+#   refresh_cycle -e "press"  rspec options pass through
+#   xteink_x4                 every spec of a PlatformIO environment (or --env NAME)
+#   -j 1                      one unit at a time
+#   --no-cache                build the devices the specs start from afresh
+#   --comprehensive           also the full general suite on a device per family
+#   --exhaustive              the full general suite on every device
+#   --dry-run                 print what would run
+#   --list-envs               the environments and how many examples each has
+#   --slow                    also the examples marked slow:
 #
 # With no selectors, every device's own specs run, the general ones (env: :any) in full on the
 # TRMNL OG, and the examples tagged :smoke (one per area) on every other device.
@@ -44,12 +45,12 @@ require "open3"
 require "rbconfig"
 require "tmpdir"
 
-require_relative "lib/trmnl_sim"
-require_relative "spec/support/devices"
-require_relative "spec/support/builds"
+require_relative "../lib/trmnl_sim"
+require_relative "../spec/support/devices"
+require_relative "../spec/support/builds"
 
-module Run
-  HERE = __dir__
+module Runner
+  HERE = Builds::HERE
   SPEC_DIR = File.join(HERE, "spec")
   # Started first so the longest ones don't end up running alone at the end (slowest first, from
   # a full run); anything not listed follows in name order.
@@ -140,7 +141,7 @@ module Run
   def suite
     @suite ||= begin
       out = File.join(Dir.mktmpdir("trmnl-plan-"), "plan.json")
-      cmd = [*rspec_command, "--dry-run", "--require", File.join(HERE, "runner/plan_formatter"),
+      cmd = [*rspec_command, "--dry-run", "--require", File.join(__dir__, "plan_formatter"),
              "--format", "PlanFormatter", "--out", out, "--no-color"]
       log, status = Open3.capture2e(*cmd, chdir: HERE)
       abort "loading the specs failed:\n#{log}" unless status.success? && File.exist?(out)
@@ -180,7 +181,7 @@ module Run
       device = Devices.fetch(name) # PlatformIO names are case-sensitive; accept trmnl_x
       unless Builds.built?(device.env)
         abort "no #{device.env} build at #{Builds.for_env(device.env)}: run `pio run -e #{device.env}` in the " \
-              "firmware checkout (or bin/spec --build-firmware #{device.env})"
+              "firmware checkout (or rake \"firmware[#{device.env}]\")"
       end
       warn yellow("#{device.env}: the general specs don't run: #{device.general}") if device.general
       suite.flat_map do |file|
@@ -212,7 +213,7 @@ module Run
   def list_envs
     general = suite.sum { |f| f[:units].select { _1[:env] == "any" }.sum { _1[:examples] } }
     smoke = suite.sum { |f| f[:units].select { _1[:env] == "any" }.sum { _1[:smoke] } }
-    puts "#{general} general examples; bin/spec runs them in full on the OG and the #{smoke} smoke examples on " \
+    puts "#{general} general examples; rake spec runs them in full on the OG and the #{smoke} smoke examples on " \
          "the other devices, --comprehensive in full on the devices marked *, --exhaustive in full everywhere\n\n"
     puts " environment                       own total  build"
     Devices::ALL.sort_by { _1.env.downcase }.each do |d|
@@ -320,5 +321,3 @@ module Run
 
   def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 end
-
-exit(Run.main(ARGV) ? 0 : 1) if $PROGRAM_NAME == __FILE__

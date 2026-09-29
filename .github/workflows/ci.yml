@@ -68,9 +68,7 @@ jobs:
       # Style, and the specs load and their metadata is valid (no firmware needed).
       - name: integration specs (rubocop, dry run)
         working-directory: tests/integration
-        run: |
-          bundle exec rubocop
-          bundle exec rspec --dry-run --format progress
+        run: bundle exec rake check
 
   integration:
     needs: unit
@@ -142,7 +140,9 @@ jobs:
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
           TRMNL_SIM_COVERAGE: ${{ github.workspace }}/sim-coverage
           FORCE_COLOR: "1"
-        run: bundle exec ruby run.rb --no-cache
+          # the headless build above (rake spec would otherwise build the default one)
+          TRMNL_SIM_BIN: ${{ github.workspace }}/trmnl-sim/target/release/trmnl-sim
+        run: bundle exec rake "spec[--no-cache]"
 
       - name: Collect screen diffs
         if: failure()

@@ -23,7 +23,7 @@ module Builds
   NETWORK = ENV["TRMNL_SIM_NETWORK"] == "1"
   # Turbo (network-aware fast-forward) unless TRMNL_SIM_REALTIME=1.
   TURBO = ENV["TRMNL_SIM_REALTIME"] != "1"
-  # TRMNL_SIM_SLOW=1 (bin/spec --slow): also run the examples marked `slow:`.
+  # TRMNL_SIM_SLOW=1 (rake "spec[--slow]"): also run the examples marked `slow:`.
   SLOW = ENV["TRMNL_SIM_SLOW"] == "1"
   # TRMNL_SIM_MEMCHECK=1: every simulator runs with --memcheck=halt, and a test fails on any
   # memory error (the simulator halts at it, or leaving its block raises).

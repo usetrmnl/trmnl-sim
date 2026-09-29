@@ -4,7 +4,7 @@
 #
 # General tests (groups with `env: :any`: setup, portal, WiFi, HTTP, errors, faults...) run
 # against whichever device is under test: TRMNL_SIM_DEVICE=<env> (the runner sets it for
-# `bin/spec <env>`), else the TRMNL OG. They read what they need to know about it from its
+# `rake "spec[<env>]"`), else the TRMNL OG. They read what they need to know about it from its
 # `Device` (panel size, inks, button, battery...), skip what doesn't apply (`needs:`, `only_on:`
 # metadata), and `known_failure:` metadata marks what a device's firmware gets wrong.
 module Devices
@@ -138,7 +138,7 @@ module Devices
 
   # ---- how much of the general suite runs where (the runner's tiers) ---------------------------------
   #
-  # Devices share firmware code paths by chip, panel controller and inks. `bin/spec` runs every
+  # Devices share firmware code paths by chip, panel controller and inks. `rake spec` runs every
   # device's own tests, the full general suite on the OG, and the examples tagged :smoke (one
   # per area) on every other device; `--comprehensive` runs the full general suite on one
   # representative per family as well; `--exhaustive`, on every device.

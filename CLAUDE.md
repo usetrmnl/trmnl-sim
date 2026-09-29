@@ -23,9 +23,9 @@ suite); read the relevant section before changing a subsystem.
 |---|---|
 | `bin/setup` | toolchains and ROM ELFs (`scripts/fetch-rom-elfs.sh` → gitignored `rom/`) |
 | `bin/build` | release build of the simulator |
-| `bin/test` | fmt, clippy (with and without the GUI), unit tests; run before committing |
+| `bin/test` | fmt, clippy (with and without the GUI), unit tests, `rake check`; run before committing |
 | `bin/dev [og\|bwry\|x\|e1002\|gen2\|gen2bwry\|<build dir>]` | run a firmware build in the window |
-| `bin/spec ...` | integration tests (below) |
+| `rake spec ...` | integration tests (below; `rake -T` lists the tasks) |
 
 Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's comment
 density and naming; comments explain hardware behaviour and why, with firmware file:line
@@ -33,14 +33,17 @@ references where relevant.
 
 ## Integration tests (tests/integration, RSpec)
 
-- `bin/spec <file>`: a spec file by short name (`bin/spec portal` = spec/portal_spec.rb), a
-  path, `path:line` or `path[id]`; rspec options pass through (`bin/spec portal -e "wrong
-  password"`). `bin/spec <env>`: everything for one PlatformIO environment. `bin/spec`
-  (default tier): every device's own specs, the general ones in full on the OG and the
-  `:smoke` examples on the rest (~9 min). `--comprehensive` (~24 min), `--exhaustive`,
-  `--slow`, `--dry-run`, `--list-envs`. The runner is tests/integration/run.rb.
+- Rake tasks (tests/integration/Rakefile, imported by the root Rakefile); a task's argument is
+  one shell-style string. `rake "spec[<file>]"`: a spec file by short name (`portal` =
+  spec/portal_spec.rb), a path, `path:line` or `path[id]`; rspec options pass through
+  (`rake "spec[portal -e 'wrong password']"`). `rake "spec[<env>]"`: everything for one
+  PlatformIO environment. `rake spec` (default tier): every device's own specs, the general
+  ones in full on the OG and the `:smoke` examples on the rest (~9 min).
+  `rake spec:comprehensive` (~24 min), `spec:exhaustive`, `spec:plan[...]` (dry run),
+  `spec:envs`; `--slow`, `-j N`, `--no-cache` go in the argument. The runner is
+  tests/integration/runner/runner.rb. `rake firmware[...]` runs pio: only when asked.
 - While iterating, run ONE group or example at a time under a hard limit and clean up:
-  `perl -e 'alarm 90; exec @ARGV' bin/spec portal -e FailedJoin; pkill -f target/release/trmnl-sim`
+  `perl -e 'alarm 90; exec @ARGV' rake "spec[portal -e FailedJoin]"; pkill -f target/release/trmnl-sim`
   (or `cd tests/integration && bundle exec rspec spec/portal_spec.rb:42`, with
   `TRMNL_SIM_DEVICE=<env>` for another device under test). No full-suite runs for debugging;
   a full run is for a final regression check (run it in the background).
@@ -83,5 +86,5 @@ references where relevant.
 
 Add a `BoardSpec` row (or a board module for non-SPI panels), a `Device` in
 `tests/integration/spec/support/devices.rb` (and its family in `FAMILIES`), and a board
-group using the BYOD support (`spec/support/byod.rb`); then run `bin/spec <env>` and
+group using the BYOD support (`spec/support/byod.rb`); then run `rake "spec[<env>]"` and
 classify every failure as above. Update the README's supported-device tables.

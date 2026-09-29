@@ -177,8 +177,8 @@ bin/build      # cargo build --release
 bin/dev        # build, then run the OG build from ../trmnl-firmware
 bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
 bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
-bin/test       # fmt, clippy and unit tests
-bin/spec       # integration tests (bin/spec trmnl_x for a subset)
+bin/test       # fmt, clippy, unit tests, and the integration specs' lint and load check
+rake spec      # integration tests (rake "spec[trmnl_x]" for a subset; rake -T lists the tasks)
 ```
 
 Or by hand:
@@ -390,33 +390,40 @@ is refused too; try again when it is idle.
 
 ## Integration testing
 
+The integration tests' Rake tasks live with the suite ([tests/integration/Rakefile](tests/integration/Rakefile));
+the repository's Rakefile imports them, so they run from the root too (`rake -T` lists them).
+A task's argument is one string, split like a shell command line (quote the task in zsh):
+
 ```sh
-scripts/integration-tests.sh                  # build the sim, run the whole suite
-scripts/integration-tests.sh --build-firmware # also `pio run` for the tested envs first
-scripts/integration-tests.sh refresh_cycle -e "wakes and refreshes on a button press"
-scripts/integration-tests.sh trmnl_x          # only the TRMNL X specs (spec/trmnl_x_spec.rb)
+rake spec                          # build the sim (rake sim), run the suite
+rake firmware spec                 # also `pio run` the TRMNL devices' envs first
+rake "spec[refresh_cycle -e 'wakes and refreshes on a button press']"
+rake "spec[trmnl_x]"               # only the TRMNL X specs (spec/trmnl_x_spec.rb)
+rake check                         # rubocop, and every spec loads (no firmware needed)
 ```
 
 How much runs:
 
 | Command | Runs |
 |---|---|
-| `bin/spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (the examples tagged `:smoke`): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
-| `bin/spec --comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES` in [devices.rb](tests/integration/spec/support/devices.rb): devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `bin/spec --list-envs` marks them with `*`) |
-| `bin/spec --exhaustive` | the general tests in full on every device |
-| `bin/spec <env>` | everything for one device: its own tests and all the general tests |
+| `rake spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (the examples tagged `:smoke`): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
+| `rake spec:comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES` in [devices.rb](tests/integration/spec/support/devices.rb): devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `rake spec:envs` marks them with `*`) |
+| `rake spec:exhaustive` | the general tests in full on every device |
+| `rake "spec[<env>]"` | everything for one device: its own tests and all the general tests |
 
-`--dry-run` prints the units (rspec processes) a command would run. Examples marked `slow:`
-(e.g. the screen wiper, 100 full refreshes) are skipped unless `--slow` is given. Anything
-else starting with `-` goes to rspec: `bin/spec portal -e "wrong password"`.
+`rake "spec:plan[...]"` prints the units (rspec processes) `rake "spec[...]"` would run.
+Examples marked `slow:` (e.g. the screen wiper, 100 full refreshes) are skipped unless
+`--slow` is given; `-j N` runs at most N units at once, `--no-cache` redoes the factory flow
+and onboarding (as CI does). Anything else starting with `-` goes to rspec:
+`rake "spec[portal -e 'wrong password']"`.
 
-To test one device, name its PlatformIO environment (`bin/spec` is the same script):
+To test one device, name its PlatformIO environment:
 
 ```sh
-bin/spec xteink_x4                    # every test that runs the xteink_x4 build
-bin/spec TRMNL_X trmnl_gen2           # several environments (names are case-insensitive)
-bin/spec --build-firmware xteink_x4   # pio run -e xteink_x4 first, then its tests
-bin/spec --list-envs                  # the environments with specs, example counts, builds present
+rake "spec[xteink_x4]"                        # every spec that runs the xteink_x4 build
+rake "spec[TRMNL_X trmnl_gen2]"               # several environments (names are case-insensitive)
+rake "firmware[xteink_x4]" "spec[xteink_x4]"  # pio run -e xteink_x4 first, then its specs
+rake spec:envs                                # the environments with specs, example counts, builds present
 ```
 
 Every group declares the environment whose build it runs: `env: "<env>"` metadata on the
@@ -502,7 +509,7 @@ no `TRMNL_X` build):
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
   refreshing over 5 GHz.
 
-`bin/spec TRMNL_X` also runs the general tests on the X (onboarded on 2.4 GHz). Their
+`rake "spec[TRMNL_X]"` also runs the general tests on the X (onboarded on 2.4 GHz). Their
 factory-fresh device is an *unboxed* X (shipped, then docked once: it restarted into the
 setup portal; `TrmnlX.unboxed`), and their button presses are its touch bar gestures
 (`TrmnlX::XSim`): a short press is a tap in the middle, a 5 s press the WiFi reset (both
@@ -528,7 +535,7 @@ unresponsive modem.
 | `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
 | `TRMNL_FIRMWARE_BUILDS` | Where the BYOD and gen-2 boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
-| `TRMNL_SIM_DEVICE=ENV` | The device the general tests run on with plain `bundle exec rspec` (bin/spec sets it per unit) |
+| `TRMNL_SIM_DEVICE=ENV` | The device the general tests run on with plain `bundle exec rspec` (`rake spec` sets it per unit) |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
 | `TRMNL_SIM_MEMCHECK=1` | Run every simulator with [`--memcheck=halt`](#memory-checking); an example fails on any memory error |
@@ -728,7 +735,7 @@ trmnl-sim ../trmnl-firmware/.pio/build/trmnl --headless --seconds 30 --coverage 
 mid-run, e.g. to see what one step of a test covers. After an OTA to another build
 (`--elf`), both builds' lines are reported, merged by file and line.
 
-`TRMNL_SIM_COVERAGE=DIR bin/spec` makes every simulator the tests start write
+`TRMNL_SIM_COVERAGE=DIR rake spec` makes every simulator the tests start write
 `DIR/<test>-*.info`. At the end, the runner merges them into `DIR/merged.info` and an
 HTML report in `DIR/html/`, and prints the coverage of the firmware's `src/` and
 `lib/`. [scripts/coverage.py](scripts/coverage.py) (standard library only) does the
@@ -774,7 +781,7 @@ console and counted after that. `--memcheck=halt` stops the machine at the first
 (Ruby: `sim.memcheck`) returns the full report, and a summary with the stack marks
 is printed when the run ends. `Simulator.open(..., memcheck: "halt") { }` fails when the
 block ends if there were violations (`sim.assert_no_memory_errors` checks explicitly), and
-`TRMNL_SIM_MEMCHECK=1 bin/spec` runs the whole suite that way. Known firmware bugs are
+`TRMNL_SIM_MEMCHECK=1 rake spec` runs the whole suite that way. Known firmware bugs are
 listed in `KNOWN_MEMORY_BUGS` in [firmware_bugs.rb](tests/integration/spec/support/firmware_bugs.rb), passed as
 `--memcheck-suppress` so the rest of each run is still checked, with a pending (expected
 to fail) example for each in [memcheck_spec.rb](tests/integration/spec/memcheck_spec.rb).

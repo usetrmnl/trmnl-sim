@@ -2,7 +2,7 @@
 
 require "json"
 
-# `rspec --dry-run --format PlanFormatter --out plan.json`: the suite's run units, for run.rb.
+# `rspec --dry-run --format PlanFormatter --out plan.json`: the suite's run units, for the runner.
 #
 # A spec file has one top-level group (the old test module); its child groups (the old test
 # classes) are the units a file with `parallel: true` is split into. For each: its id (an rspec

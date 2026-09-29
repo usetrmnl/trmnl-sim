@@ -44,7 +44,7 @@ class FileCov:
 
 Coverage = dict[str, FileCov]
 
-# What the integration test runner (tests/integration/run.rb) names its merge of a coverage directory.
+# What the integration test runner (tests/integration/runner/runner.rb) names its merge of a coverage directory.
 MERGED = "merged.info"
 
 
