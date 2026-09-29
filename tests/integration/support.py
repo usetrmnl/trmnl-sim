@@ -151,6 +151,56 @@ def image_size(mock: MockTrmnl, path: str) -> int:
     return len(mock.images[path[len("/images/"):].removesuffix(".bmp")])
 
 
+def gray_rows(png: bytes) -> list[bytes]:
+    """The rows of an 8-bit grayscale PNG (a Simulator.screenshot), one byte per pixel."""
+    import struct
+    import zlib
+
+    width, height, depth, color = struct.unpack(">IIBB", png[16:26])
+    assert (depth, color) == (8, 0), f"not an 8-bit gray PNG: depth {depth}, color type {color}"
+    idat, pos = b"", 8
+    while pos < len(png):
+        (n,) = struct.unpack(">I", png[pos:pos + 4])
+        if png[pos + 4:pos + 8] == b"IDAT":
+            idat += png[pos + 8:pos + 8 + n]
+        pos += 12 + n
+    raw, rows, prev = zlib.decompress(idat), [], bytes(width)
+    for y in range(height):
+        f, line = raw[y * (width + 1)], bytearray(raw[y * (width + 1) + 1:(y + 1) * (width + 1)])
+        for x in range(width):
+            a = line[x - 1] if x else 0
+            b, c = prev[x], prev[x - 1] if x else 0
+            if f == 1:
+                line[x] = (line[x] + a) & 0xFF
+            elif f == 2:
+                line[x] = (line[x] + b) & 0xFF
+            elif f == 3:
+                line[x] = (line[x] + (a + b) // 2) & 0xFF
+            elif f == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 0xFF
+        rows.append(prev := bytes(line))
+    return rows
+
+
+def text_lines(s: Simulator, top: int) -> list[tuple[int, int, int, int]]:
+    """The lines of text on screen from row `top` down: (first row, last row, leftmost ink
+    column, rightmost ink column) for each run of rows with ink, split at blank rows."""
+    rows = gray_rows(s.screenshot())[top:]
+    lines, cur = [], None
+    for y, row in enumerate(rows, top):
+        ink = [x for x, v in enumerate(row) if v < 128]
+        if ink and cur:
+            cur = (cur[0], y, min(cur[2], ink[0]), max(cur[3], ink[-1]))
+        elif ink:
+            cur = (y, y, ink[0], ink[-1])
+        elif cur:
+            lines.append(cur)
+            cur = None
+    return lines + [cur] if cur else lines
+
+
 def assert_text(s: Simulator, name: str, region: tuple[int, int, int, int], device: Device | None = None, **kw):
     """Assert centred message text (an error, the QA results...) on screen, given the OG's
     golden `name` and its `region`: the device's own golden if GOLDEN_REGIONS has one, else,

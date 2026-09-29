@@ -47,8 +47,9 @@ fn setup_registers_the_device() {
     assert_eq!(v["friendly_id"], "SIMTST");
     assert_eq!(v["image_url"], format!("http://10.0.2.2:{port}/images/default.bmp"));
     m.state().registered = false;
-    let (code, _, _) = http(port, "GET", "/api/setup", &[]);
-    assert_eq!(code, 404);
+    let v = get_json(port, "/api/setup", &[("ID", "7C:DF:A1:00:00:01")]);
+    assert_eq!(v["status"], 404);
+    assert_eq!(v["message"], "MAC 7C:DF:A1:00:00:01 not registered - send to support@trmnl.com to activate your TRMNL");
 }
 
 #[test]

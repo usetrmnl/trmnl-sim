@@ -5,8 +5,8 @@ import json
 import time
 import unittest
 
-from support import (BMP_FLIP_OVERFLOW_BUG, EP397_ROW_SHIFT_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, MockTrmnl, ProvisionedDevice, assert_text, close_fixtures, fixture, needs,
-                     sim, skip_if)
+from support import (BMP_FLIP_OVERFLOW_BUG, DEVICE, EP397_ROW_SHIFT_BUG, ONE_BIT_PNG_PANEL_TYPE_BUG, MockTrmnl, ProvisionedDevice, assert_text,
+                     close_fixtures, fixture, needs, sim, skip_if, text_lines)
 
 from devices import ANY
 
@@ -19,6 +19,9 @@ MESSAGE_BELOW_PANEL = (
     "firmware: display_show_msg() draws the error text at fixed rows from 340 down "
     "(src/display.cpp:2319 for API_UNABLE_TO_CONNECT), below the bottom of a 300-row panel: "
     "the error screen is the bare logo")
+UNREGISTERED_BELOW_PANEL = (
+    "firmware: display_show_msg() draws the 'MAC ... not registered' message from row 340 down "
+    "(src/display.cpp:2737, MAC_NOT_REGISTERED), below the bottom of a 300-row panel")
 QA_RESULTS_BELOW_PANEL = (
     "firmware: display_show_msg_qa() draws the voltages, temperatures and verdict at rows "
     "340/370/400 (src/display.cpp:2651, 2655, 2663), below the bottom of a 300-row panel")
@@ -54,6 +57,8 @@ KNOWN_FAILURES = {
         "Retries.test_timer_wakes_retry_quietly_then_show_the_error": MESSAGE_BELOW_PANEL
         + "; the screen before it is the logo too (" + ONE_BIT_PNG_PANEL_TYPE_BUG + ")",
         **dict.fromkeys(QA_SCREENS, QA_RESULTS_BELOW_PANEL),
+        **dict.fromkeys(["SetupErrors.test_unregistered_message_is_centred",
+                         "SetupErrors.test_long_unregistered_message_is_wrapped"], UNREGISTERED_BELOW_PANEL),
     },
     "trmnl_4clr": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
     "seeed_reTerminal_E1002": dict.fromkeys(QA_SCREENS, QA_1BPP_BUFFER_ON_COLOR_PANEL),
@@ -218,6 +223,27 @@ class SetupErrors(unittest.TestCase):
             with self.onboard(mock) as s:
                 st = settle(s, timeout_s=30)
                 self.assertEqual((st["boot_count"], st["state"]), (1, "deep_sleep"))
+                # wrapped at spaces, the link broken inside, every line centred
+                self.assert_centred_lines(s, 4)
+
+    def test_unregistered_message_is_centred(self):
+        # trmnl.app's "MAC ... not registered - send to support@trmnl.com to activate your TRMNL"
+        # (issue #650: drawn from the left edge)
+        with MockTrmnl() as mock:
+            mock.setup = None
+            with self.onboard(mock) as s:
+                settle(s)
+                self.assert_centred_lines(s, 2)
+
+    def assert_centred_lines(self, s, at_least: int):
+        """The message's lines (on the rows from 340 down, under the logo) are each centred."""
+        width = DEVICE.size[0]
+        lines = text_lines(s, 300)
+        self.assertGreaterEqual(len(lines), at_least, f"message lines: {lines}")
+        for top, bottom, left, right in lines:
+            # a glyph's side bearings can differ by a pixel or two
+            self.assertLessEqual(abs(left - (width - 1 - right)), 3,
+                                 f"rows {top}-{bottom}: ink from x={left} to {right} on a {width}-pixel panel")
 
     def test_setup_server_error(self):
         with MockTrmnl() as mock:

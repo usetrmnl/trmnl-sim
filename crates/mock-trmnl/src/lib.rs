@@ -119,7 +119,7 @@ pub struct State {
     /// One-shot `/api/display` answers, consumed first, one per request. Fields as in
     /// `extra`, plus optional `image` (a name).
     pub queue: VecDeque<Map<String, Value>>,
-    /// `/api/setup` registers the device (otherwise 404 "not registered").
+    /// `/api/setup` registers the device (otherwise `"status": 404`, "not registered").
     pub registered: bool,
     pub api_key: String,
     pub friendly_id: String,
@@ -293,9 +293,12 @@ impl State {
         match path {
             "/api/setup" => {
                 if !self.registered {
+                    // as trmnl.app answers an unknown MAC: HTTP 200, "status": 404 in the body (the
+                    // firmware only reads the message from an HTTP 200, src/api-client/setup.cpp)
+                    let mac = header("ID").unwrap_or_default();
                     let body = json!({"status": 404, "api_key": null, "friendly_id": null, "image_url": null,
-                                      "message": "MAC Address not registered"});
-                    return Reply::json(404, &body, "not registered".into());
+                                      "message": format!("MAC {mac} not registered - send to support@trmnl.com to activate your TRMNL")});
+                    return Reply::json(200, &body, "not registered".into());
                 }
                 let default = self.image(DEFAULT_IMAGE).map(|i| i.path()).unwrap_or_default();
                 let body = json!({

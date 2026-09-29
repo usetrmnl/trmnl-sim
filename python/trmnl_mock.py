@@ -337,7 +337,7 @@ class MockTrmnl:
     """Serves /api/setup, /api/display, /api/log and /images/<name>.bmp.
 
     Attributes you can change between steps:
-        setup: dict merged into the /api/setup response (set to None to answer 404 "not registered").
+        setup: dict merged into the /api/setup response (set to None to answer "status": 404, "not registered").
         display: dict describing the next /api/display answer: image (name), refresh_rate,
                  plus any raw fields (update_firmware, firmware_url, special_function, ...).
         display_queue: list of such dicts consumed first, one per request.
@@ -585,8 +585,11 @@ class MockTrmnl:
         js = lambda obj, code=200: (code, "application/json", json.dumps(obj).encode())
         if rec.path == "/api/setup":
             if self.setup is None:
+                # as trmnl.app answers an unknown MAC: HTTP 200, "status": 404 in the body
+                # (the firmware only reads the message from an HTTP 200, src/api-client/setup.cpp)
+                mac = next((v for k, v in rec.headers.items() if k.lower() == "id"), "")
                 return js({"status": 404, "api_key": None, "friendly_id": None, "image_url": None,
-                           "message": "MAC Address not registered"}, 404)
+                           "message": f"MAC {mac} not registered - send to support@trmnl.com to activate your TRMNL"})
             return js({"status": 200, "api_key": self.api_key, "friendly_id": self.friendly_id,
                        "image_url": f"{self.device_url}/images/default.bmp",
                        "message": "Register at usetrmnl.com/signup with Device ID 'SIMTST'", **self.setup})
