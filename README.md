@@ -37,8 +37,6 @@ BYOD boards (the firmware's other `device_list[]` rows):
 - `trmnl_steam`
 - `TRMNL_X_SENSORIAC5`
 
-![setup screen as rendered by the simulator](docs/setup_screen.png)
-
 ## What is simulated
 
 Common to all devices:
