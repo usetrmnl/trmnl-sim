@@ -3,6 +3,4 @@ __pycache__/
 *.pyc
 sim-flash.bin
 /sim-artifacts/
-tests/integration/golden/*.actual.png
 /rom/
-tests/integration/golden/**/*.actual.png

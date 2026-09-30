@@ -2,7 +2,6 @@
 # Install what building and running the simulator needs:
 #   - Rust (stable, via rustup) with clippy and rustfmt
 #   - a C toolchain (for crates with build scripts)
-#   - Ruby 3.2+ and the integration tests' gems (bundle install in tests/integration)
 #   - the ESP32 ROM ELFs: Espressif's esp-rom-elfs release into rom/ (the ESP32-C5 one),
 #     and PlatformIO's tool-esp-rom-elfs (only if PlatformIO is installed)
 #
@@ -22,14 +21,12 @@ case "$(uname -s)" in
       xcode-select --install || true
       exit 1
     fi
-    have ruby || warn "ruby not found (needed for the integration tests): brew install ruby"
     ;;
   Linux)
     if have apt-get; then
       pkgs=()
       have cc || pkgs+=(build-essential)
       have pkg-config || pkgs+=(pkg-config)
-      have ruby || pkgs+=(ruby-full)
       have curl || pkgs+=(curl)
       if ((${#pkgs[@]})); then
         say "Installing ${pkgs[*]}"
@@ -38,7 +35,6 @@ case "$(uname -s)" in
       fi
     else
       have cc || warn "no C compiler found: install gcc or clang with your package manager"
-      have ruby || warn "ruby not found (needed for the integration tests)"
     fi
     ;;
 esac
@@ -57,14 +53,6 @@ fi
 if have rustup; then
   say "Updating the stable Rust toolchain"
   rustup toolchain install stable --profile minimal --component clippy,rustfmt
-fi
-
-# ---- integration test gems -----------------------------------------------------------------------
-if have bundle; then
-  say "Installing the integration tests' gems (rspec)"
-  (cd tests/integration && bundle install --quiet) || warn "bundle install failed in tests/integration"
-else
-  warn "bundler not found (needed for the integration tests): gem install bundler"
 fi
 
 # ---- ROM ELFs ------------------------------------------------------------------------------------
