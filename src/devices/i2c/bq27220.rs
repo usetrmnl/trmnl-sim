@@ -44,13 +44,10 @@ impl Bq27220 {
         match cmd {
             0x06 => ((self.temp_c + 273.15) * 10.0) as u16, // Temperature, 0.1 K
             0x08 => self.mv,                                // Voltage, mV
-            0x0a => {
-                // BatteryStatus: DSG while discharging
-                if self.current_ma < 0 { 0x0001 } else { 0x0000 }
-            }
-            0x0c | 0x14 => self.current_ma as u16, // Current / AverageCurrent, mA
-            0x10 => remaining,                     // RemainingCapacity, mAh
-            0x12 | 0x3c => DESIGN_MAH,             // FullChargeCapacity / DesignCapacity
+            0x0a => u16::from(self.current_ma < 0),         // BatteryStatus: DSG (bit 0) while discharging
+            0x0c | 0x14 => self.current_ma as u16,          // Current / AverageCurrent, mA
+            0x10 => remaining,                              // RemainingCapacity, mAh
+            0x12 | 0x3c => DESIGN_MAH,                      // FullChargeCapacity / DesignCapacity
             0x16 => {
                 // TimeToEmpty, minutes (65535 = not discharging)
                 if self.current_ma < 0 {
