@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build the simulator, then run it on a firmware build.
 #
-#   bin/dev                 # TRMNL OG   (<firmware>/.pio/build/trmnl)
-#   bin/dev bwry            # TRMNL BWRY (<firmware>/.pio/build/trmnl_4clr)
-#   bin/dev x               # TRMNL X    (<firmware>/.pio/build/TRMNL_X)
-#   bin/dev e1002           # Seeed reTerminal E1002 (<firmware>/.pio/build/seeed_reTerminal_E1002)
-#   bin/dev gen2            # TRMNL OG gen 2, ESP32-C5 (<firmware>/.pio/build/trmnl_gen2)
-#   bin/dev gen2bwry        # TRMNL BWRY gen 2 (<firmware>/.pio/build/trmnl_gen2_4clr)
-#   bin/dev path/to/build   # any PlatformIO build directory
-#   bin/dev x --erase       # arguments after the device go to trmnl-sim (see --help)
+#   bin/sim                 # TRMNL OG   (<firmware>/.pio/build/trmnl)
+#   bin/sim bwry            # TRMNL BWRY (<firmware>/.pio/build/trmnl_4clr)
+#   bin/sim x               # TRMNL X    (<firmware>/.pio/build/TRMNL_X)
+#   bin/sim e1002           # Seeed reTerminal E1002 (<firmware>/.pio/build/seeed_reTerminal_E1002)
+#   bin/sim gen2            # TRMNL OG gen 2, ESP32-C5 (<firmware>/.pio/build/trmnl_gen2)
+#   bin/sim gen2bwry        # TRMNL BWRY gen 2 (<firmware>/.pio/build/trmnl_gen2_4clr)
+#   bin/sim path/to/build   # any PlatformIO build directory
+#   bin/sim x --erase       # arguments after the device go to trmnl-sim (see --help)
 #
 # <firmware> is ../trmnl-firmware unless TRMNL_FIRMWARE says otherwise. The firmware
 # itself is not built here: run `pio run -e <env>` in the firmware checkout first.

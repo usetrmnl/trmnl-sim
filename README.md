@@ -164,9 +164,9 @@ Firmware bugs these boards show (each is an expected-failure test):
 ```sh
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
-bin/dev        # build, then run the OG build from ../trmnl-firmware
-bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
-bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
+bin/sim        # build, then run the OG build from ../trmnl-firmware
+bin/sim bwry   # ... the trmnl_4clr build;  bin/sim x  for TRMNL_X, bin/sim gen2 for trmnl_gen2
+bin/sim x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
 

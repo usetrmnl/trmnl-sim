@@ -24,7 +24,7 @@ suite); read the relevant section before changing a subsystem.
 | `bin/setup` | toolchains and ROM ELFs (`scripts/fetch-rom-elfs.sh` → gitignored `rom/`) |
 | `bin/build` | release build of the simulator |
 | `bin/test` | fmt, clippy (with and without the GUI), unit tests; run before committing |
-| `bin/dev [og\|bwry\|x\|e1002\|gen2\|gen2bwry\|<build dir>]` | run a firmware build in the window |
+| `bin/sim [og\|bwry\|x\|e1002\|gen2\|gen2bwry\|<build dir>]` | run a firmware build in the window |
 
 Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's comment
 density and naming; comments explain hardware behaviour and why, with firmware file:line

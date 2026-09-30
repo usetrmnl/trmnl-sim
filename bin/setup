@@ -75,4 +75,4 @@ fi
 firmware="${TRMNL_FIRMWARE:-../trmnl-firmware}"
 [[ -d "$firmware" ]] || warn "no firmware checkout at $firmware (set TRMNL_FIRMWARE to point elsewhere)"
 
-say "Done. Next: bin/build, or bin/dev to build and run."
+say "Done. Next: bin/build, or bin/sim to build and run."
