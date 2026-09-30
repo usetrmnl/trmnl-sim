@@ -14,7 +14,6 @@ Supported devices, picked from the build directory's name (the PlatformIO env) o
 | `trmnl` | TRMNL OG | ESP32-C3 (RISC-V) | 7.5" 800×480, UC8179 over SPI | button |
 | `trmnl_4clr` | TRMNL BWRY | ESP32-C3 (RISC-V) | 7.5" 800×480 black/white/yellow/red (GDEM075F52) | button |
 | `TRMNL_X` | TRMNL X | ESP32-S3 (dual-core Xtensa LX7) + ESP32-C5 modem | 10.3" 1872×1404 parallel panel, 16 grays | touch bar (left/center/right), magnetic dock |
-| `seeed_reTerminal_E1002` | Seeed reTerminal E1002 | ESP32-S3 (XIAO, 8 MB octal PSRAM) | 7.3" 800×480 Spectra 6: black/white/yellow/red/blue/green (GDEP073E01) over SPI | button |
 | `trmnl_gen2` | TRMNL OG gen 2 | ESP32-C5 (RISC-V, 2.4 + 5 GHz WiFi) | 7.5" 800×480, UC8179 over SPI | button, USB power (dock switch) |
 | `trmnl_gen2_4clr` | TRMNL BWRY gen 2 | ESP32-C5 | 7.5" 800×480 black/white/yellow/red | button, USB power (dock switch) |
 
@@ -23,31 +22,23 @@ BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEV
 | PlatformIO env | `--board` | Device | Chip | Display | Battery |
 |---|---|---|---|---|---|
 | `seeed_xiao_esp32c3` | `seeed_esp32c3` | XIAO ESP32-C3 + 7.5" panel | ESP32-C3 | 7.5" 800×480 UC8179 | none wired |
-| `seeed_xiao_esp32s3` ¹ | `seeed_esp32s3` | XIAO ESP32-S3 + 7.5" panel | ESP32-S3 | 7.5" 800×480 UC8179 | none wired |
 | `TRMNL_7inch5_OG_DIY_Kit` | `xiao_epaper_display` | TRMNL 7.5" DIY Kit | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
 | `TRMNL_7inch5_OG_DIY_Kit_3CLR` | `xiao_epaper_3clr` | TRMNL 7.5" BWR DIY Kit | ESP32-S3 | 7.5" 800×480 black/white/red UC8179 (two planes) | ADC, switched divider |
 | `TRMNL_7inch5_OG_DIY_Kit_6CLR` | `xiao_epaper_6clr` | TRMNL 7.3" Spectra 6 DIY Kit | ESP32-S3 | 7.3" 800×480 Spectra 6 | ADC, switched divider |
 | `TRMNL_4inch26_DIY_Kit` | `xiao_epaper_mini` | TRMNL 4.26" DIY Kit | ESP32-S3 | 4.26" 800×480 SSD1677 | ADC, switched divider |
 | `seeed_reTerminal_E1001` | `reterminal_e1001` | Seeed reTerminal E1001 | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
+| `seeed_reTerminal_E1002` | `reterminal_e1002` | Seeed reTerminal E1002 | ESP32-S3 (8 MB octal PSRAM) | 7.3" 800×480 Spectra 6 (GDEP073E01) | ADC, switched divider |
 | `seeed_reTerminal_E1004` | `reterminal_e1004` | Seeed reTerminal E1004 | ESP32-S3 | 13.3" 1200×1600 Spectra 6, two controllers (CS/CS2) | ADC, switched divider |
 | `seeed_sticky` | `seeed_sticky` | Seeed Sticky | ESP32-S3 | 3.97" 800×480 SSD1677, switched supply | BQ27220 |
 | `xteink_x4` | `xteink_x4` | Xteink X4 | ESP32-C3 | 4.26" 800×480 SSD1677 | (not read) |
 | `xteink_x3` | `xteink_x3` | Xteink X3 | ESP32-C3 | 3.68" 792×528 UC81xx | BQ27220 |
 | `WAVESHARE_397` | `waveshare_397` | Waveshare ESP32-S3 3.97" | ESP32-S3 | 3.97" 800×480 SSD1677 | AXP2101 |
-| `CrowPanel42` ¹ | `crowpanel42` | Elecrow CrowPanel 4.2" | ESP32-S3 | 4.2" 400×300 SSD1683, switched supply | none (4.2 V) |
 | `m5_paper_mono` | `m5_paper_mono` | M5Paper Mono | ESP32-S3 | 800×480 SSD1677; supply and RST on an M5IOE1 expander | none (4.2 V) |
 | `m5_paper_color` | `m5_paper_color` | M5Paper Color | ESP32-S3 | 4" 400×600 Spectra 6; supply from the PY32 PMIC | none (4.2 V) |
 | `TRMNL_X_PAPERS3` | `m5_papers3` | M5Stack PaperS3 | ESP32-S3 | 4.7" 960×540 parallel (ED047TC1), 16 grays | ADC |
 | `TRMNL_X_LILYGO_T5PRO` | `lilygo_t5pro` | LilyGo T5 4.7" S3 Pro | ESP32-S3 | 4.7" 960×540 parallel, EPDiy V7 (TCA9535 + TPS65185) | BQ27220 |
 | `trmnl_steam` | `trmnl_steam` | TRMNL Steam | ESP32-C3 | 5.83" 648×480 UC81xx | ADC |
 | `TRMNL_X_SENSORIAC5` | `sensoria_c5` | Sensoria C5 | ESP32-C5 (8 MB quad PSRAM) | 1280×720 parallel over PARLIO, 16 grays (PCA9535 + TPS65185) | (not read) |
-
-¹ main's `platformio.ini` can't build these envs: `seeed_xiao_esp32s3` lacks `framework = arduino`
-and `CrowPanel42` lacks `lib_deps` (build them from a copy of the ini with those added, and a
-separate `[platformio] build_dir`: a different project config makes pio wipe `.pio/build`).
-Boards with an ESP32 (classic) chip (`waveshare`, `esp32dev`) need a CPU/SoC model the
-simulator doesn't have. The `esp32-c5-devkitc-1` env doesn't build (no platform override, so
-PlatformIO's espressif32 6.x doesn't know the board) and has no `DEVICE_MODEL`.
 
 ![setup screen as rendered by the simulator](docs/setup_screen.png)
 
@@ -90,8 +81,8 @@ MOSI 1, CS 4, RST 2, DC 5, BUSY 0, button GPIO 3).
 | USB power | BQ25616 charger: PG (GPIO 25) and STAT (GPIO 24), open drain, follow the dock switch (USB plugged in; charging below 4.15 V), reported as `USB-Connected` / `Battery-Charging` |
 | Firmware | IDF 5.5 built from source with Arduino 3.3 (`framework = arduino, espidf`), `DEV_FIRMWARE` logging |
 
-**Seeed reTerminal E1002** (`seeed_reTerminal_E1002`; an ESP32-S3 build that drives an SPI
-panel through bb_epaper): the ESP32-S3 below with the SPI e-paper board above, wired as the
+**Seeed reTerminal E1002** (`seeed_reTerminal_E1002`, a BYOD board; an ESP32-S3 build that
+drives an SPI panel through bb_epaper): the ESP32-S3 below with the SPI e-paper board above, wired as the
 firmware's `reterminal_e1002` row (SCK 7, MOSI 9, CS 10, RST 12, DC 11, BUSY 13).
 
 | Part | How |
@@ -121,8 +112,8 @@ Firmware bugs these boards show (each is an expected-failure test):
 - A panel-sized flip of an uncompressed BMP overruns the download buffer on panels that
   aren't 800×480 (the X3 and E1004 crash; the M5Paper Color shows garbage).
 - `dpList[]` holds bb_epaper *product* ids for the boards brought up with `begin()`, which
-  `setPanelType()` reads as panel types: 1-bit images never show on the CrowPanel and the
-  M5Paper Mono (their 4-gray images do).
+  `setPanelType()` reads as panel types: 1-bit images never show on the M5Paper Mono (its
+  4-gray images do).
 - SSD16xx boards: BMP/Group5 images update only the new-image RAM and then refresh
   differentially against a stale old-image RAM, so the old picture stays up.
 - The Waveshare 3.97" picture is one row too high (bb_epaper 2.1.9 starts RAM Y at 0 while
@@ -134,8 +125,7 @@ Firmware bugs these boards show (each is an expected-failure test):
 - The gen-2 BWRY (`trmnl_gen2_4clr`) defines `BOARD_TRMNL_GEN2` but not `BOARD_TRMNL_4CLR`,
   which the 4-color image path is compiled under: images are sent as two 1-bit planes that
   the panel reads as 2 bits per pixel, so only the top half changes, in the wrong inks.
-- On 960 px parallel panels the setup screen's instructions overflow the width; the
-  CrowPanel's 800×480 layouts don't fit 400×300.
+- On 960 px parallel panels the setup screen's instructions overflow the width.
 - The Sensoria C5 never sleeps: FastEPD (8dc8c74) enables its PARLIO TX unit and on the way
   to deep sleep deletes it without disabling it; IDF 5.5 refuses (`ESP_ERR_INVALID_STATE`) and
   `ESP_ERROR_CHECK` aborts, so it reboots after every refresh.
@@ -155,7 +145,7 @@ Firmware bugs these boards show (each is an expected-failure test):
 
 - Rust (stable, 1.85+).
 - A PlatformIO build of the firmware: `pio run -e trmnl`, `-e trmnl_4clr`, `-e TRMNL_X`,
-  `-e seeed_reTerminal_E1002`, `-e trmnl_gen2` and/or `-e trmnl_gen2_4clr` in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
+  `-e trmnl_gen2`, `-e trmnl_gen2_4clr` and/or a BYOD board's env in `trmnl-firmware`. The TRMNL X build also needs its `littlefs.bin` (factory images
   and the modem firmware); its post-build script downloads it into the build dir.
 - The chips' mask ROM ELFs. The ESP32-C3 and ESP32-S3 ones come with PlatformIO's
   `tool-esp-rom-elfs` package (usually already installed; else
