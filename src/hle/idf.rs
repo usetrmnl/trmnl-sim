@@ -25,6 +25,7 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
     // call Log.begin(), so mirror the (already formatted) messages to the console.
     hooks.install(syms, "_ZN7Logging10printLevelIPcEEvibT_z", arduino_log_line);
     super::wifi::install(hooks, syms);
+    super::bluetooth::install(hooks, syms);
 }
 
 /// void Logging::printLevel<char*>(int level, bool cr, char* msg, ...)

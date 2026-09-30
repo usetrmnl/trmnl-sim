@@ -139,8 +139,8 @@ impl Sha {
     /// Process one block of `block_len()` bytes.
     pub fn compress_bytes(&mut self, block: &[u8]) {
         let mut m = [0u32; 32];
-        for (w, b) in m.iter_mut().zip(block.chunks_exact(4)) {
-            *w = u32::from_be_bytes(b.try_into().unwrap());
+        for (w, b) in m.iter_mut().zip(block.as_chunks::<4>().0.iter()) {
+            *w = u32::from_be_bytes(*b);
         }
         self.compress(&m);
     }

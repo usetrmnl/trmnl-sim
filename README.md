@@ -185,6 +185,96 @@ The default networks are **TRMNL-Sim** (any password) and **Neighbors WiFi** (`h
 **TRMNL-Sim-5G** (channel 36) is seen only by 5 GHz radios (the C5 and the X's modem, which
 then does all HTTP). Networks taking any password reject `fail`, to test a failed join.
 
+### Bluetooth
+
+The mock backend runs the firmware's **real NimBLE host, GATT endpoints and
+Espressif Security 1** over a portable simulated HCI controller. It has been
+verified with the OG ESP32-C3 `trmnl` build using ESP-IDF 4.4.7. Other firmware
+controller interfaces are not yet verified. Mock Bluetooth has no host radio or
+platform framework dependencies.
+
+```sh
+bin/sim ../firmware/.pio/build/trmnl --headless --control 127.0.0.1:7878
+```
+
+Bluetooth is always mocked, on every host platform. It needs no host Bluetooth
+adapter, permissions, or backend configuration and does not connect to physical
+phones. `/status.bluetooth` reports `active` (`"mock"` while the guest controller
+is initialized, otherwise `null`), `initialized` (controller enabled),
+`advertising`, `connection`, `advertisement`, and `scan_response`.
+
+The control API provides one mock central and raw ATT exchanges; discover GATT
+handles by UUID from guest responses rather than assuming firmware handle numbers:
+
+| POST path | JSON body | Response |
+|---|---|---|
+| `/bluetooth/connect` | `{}` | `connection` token |
+| `/bluetooth/att` | `{"connection": TOKEN, "data": [10, HANDLE_LOW, HANDLE_HIGH]}` | ATT reply in `data` |
+| `/bluetooth/receive` | `{"connection": TOKEN}` | Next notification/indication in `data`, or `[]` |
+| `/bluetooth/disconnect` | `{"connection": TOKEN}` | Disconnect completion accepted |
+
+For example, after `/status.bluetooth.advertising` becomes `true`, this script
+connects, discovers primary GATT services, and disconnects (Python standard library only):
+
+```python
+import json
+from urllib.request import Request, urlopen
+
+
+def post(path, body):
+    request = Request("http://127.0.0.1:7878" + path,
+                      data=json.dumps(body).encode(),
+                      headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+
+connection = post("/bluetooth/connect", {})["connection"]
+try:
+    reply = post("/bluetooth/att", {
+        "connection": connection,
+        "data": list(bytes.fromhex("100100ffff0028")),
+    })
+    print(bytes(reply["data"]).hex())
+finally:
+    post("/bluetooth/disconnect", {"connection": connection})
+```
+
+ATT errors are returned as ATT bytes, not turned into backend failures. A single
+request may be pending; its limit is five seconds of virtual time, with an eight
+second wall-clock bound when paused. Timeout discards the connection. Reset and
+reconnect invalidate tokens, and pending requests are failed without replay.
+Notifications are bounded to 64 queued packets; overflow disconnects the central.
+Indications are acknowledged when queued. Write commands complete on enqueue.
+The implemented radio is peripheral-only, one link, without SMP/link encryption;
+application-layer Security 1 still executes in full. Central-role scanning and
+whitelists are not implemented.
+
+Run the firmware integration check (it creates isolated temporary flash):
+
+```sh
+python3 tests/bluetooth/test_firmware.py ../firmware/.pio/build/trmnl
+```
+
+For QR-based authentication checks, install Python `cryptography` in your test
+environment and supply an executable that accepts a screenshot PNG path and
+prints its decoded BLE QR payload (and exits nonzero when no QR is found):
+
+```sh
+python3 tests/bluetooth/test_firmware.py ../firmware/.pio/build/trmnl \
+  --qr-decoder /path/to/qr-decoder --provision
+```
+
+The extended check verifies the displayed QR, real Security 1, encrypted status,
+long writes, NimBLE's 512-byte attribute limit, reconnect, wrong proof, and reset
+invalidation. `--provision` additionally verifies rejected
+invalid credentials, encrypted Wi-Fi configuration, HTTPS setup, the setup code,
+and its acknowledgment in a second isolated run. It uses the built-in mock server
+behind a temporary loopback TLS proxy and redirects only the simulator's DNS and
+port mapping. Both runs use offline networking; they do not contact the configured
+real server. No host trust-store changes are needed. These tests never read
+internal firmware pairing state.
+
 ### Time
 
 Virtual time comes from executed cycles, paced to wall-clock time by default. `--turbo`
@@ -327,6 +417,7 @@ crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
 ├─ sim-ui/             egui desktop window
 ├─ sim-control/        HTTP control API
+├─ sim-bluetooth/      portable H4 controller; guest NimBLE/GATT stays in firmware
 ├─ mock-trmnl/         built-in mock TRMNL server and image conversion (/mock API)
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```

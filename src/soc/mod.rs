@@ -34,6 +34,7 @@ pub enum ResetKind {
 }
 
 pub trait Machine: Send {
+    fn bluetooth(&mut self) -> &mut crate::hle::bluetooth::BluetoothState;
     /// Run until virtual time reaches `until_ns` (or something noteworthy happens).
     fn run_slice(&mut self, until_ns: u64) -> SliceExit;
     fn reset(&mut self, kind: ResetKind);

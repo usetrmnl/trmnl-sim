@@ -1,6 +1,9 @@
 //! The contract between the emulator thread and front-ends (GUI, headless CLI).
 //! Front-ends only see this module; they never touch the machine directly.
 
+mod bluetooth;
+pub use bluetooth::*;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -476,6 +479,10 @@ pub type SavePointReply = Sender<Result<SavePointInfo, String>>;
 /// Requests from the front-end to the emulator thread.
 #[derive(Debug, Clone)]
 pub enum Command {
+    Bluetooth {
+        operation: BluetoothOperation,
+        reply: BluetoothReplySender,
+    },
     /// The physical button is held down (true) or released (false).
     Button(bool),
     /// Press the button and release it after exactly this many milliseconds of
@@ -575,6 +582,7 @@ pub enum RunState {
 
 #[derive(Debug, Clone)]
 pub struct Status {
+    pub bluetooth: BluetoothStatus,
     pub state: RunState,
     /// Virtual time since power-on, in nanoseconds.
     pub sim_time_ns: u64,
@@ -623,6 +631,7 @@ pub struct Status {
 impl Default for Status {
     fn default() -> Self {
         Status {
+            bluetooth: BluetoothStatus::default(),
             state: RunState::Running,
             sim_time_ns: 0,
             mips: 0.0,

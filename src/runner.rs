@@ -220,10 +220,16 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
     }
 
     'main: loop {
+        let bluetooth_now = m.now_ns();
+        m.bluetooth().pump(bluetooth_now);
         // ---- commands ----
         while let Ok(cmd) = ports.commands.try_recv() {
             let mut rebase = false;
             match cmd {
+                Command::Bluetooth { operation, reply } => {
+                    let now = m.now_ns();
+                    m.bluetooth().operate(operation, reply, now);
+                }
                 Command::Quit => break 'main,
                 Command::Button(down) => {
                     button = down;
@@ -640,6 +646,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             let (busy, refreshes) = m.board().display_status(now);
             let charging = m.board().charging();
             let net = m.net_status();
+            let bluetooth = m.bluetooth().snapshot();
             let (programs, erases) = m.flash_stats();
             if net.portal_url != last_portal {
                 if let Some(u) = &net.portal_url {
@@ -651,6 +658,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 last_portal = net.portal_url.clone();
             }
             let mut st = ports.status.lock();
+            st.bluetooth = bluetooth;
             st.wifi_connected = net.connected;
             st.ip = net.ip;
             st.portal_url = net.portal_url.clone();

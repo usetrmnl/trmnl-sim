@@ -338,17 +338,17 @@ impl<'a> StateReader<'a> {
 
     pub fn u16s(&mut self) -> Result<Vec<u16>> {
         let n = self.u32()? as usize;
-        Ok(self.take(n * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
+        Ok(self.take(n * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect())
     }
 
     pub fn u32s(&mut self) -> Result<Vec<u32>> {
         let n = self.u32()? as usize;
-        Ok(self.take(n * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+        Ok(self.take(n * 4)?.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
     }
 
     pub fn f32s(&mut self) -> Result<Vec<f32>> {
         let n = self.u32()? as usize;
-        Ok(self.take(n * 4)?.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect())
+        Ok(self.take(n * 4)?.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
     }
 
     /// Read a fixed-size slice into `out`, checking the saved length matches.
