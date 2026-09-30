@@ -4,3 +4,4 @@ __pycache__/
 sim-flash.bin
 /sim-artifacts/
 /rom/
+.DS_Store
