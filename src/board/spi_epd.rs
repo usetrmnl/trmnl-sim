@@ -186,8 +186,6 @@ impl Panel {
 /// One supported board.
 #[derive(Debug)]
 pub struct BoardSpec {
-    /// The firmware's `DEVICE_MODEL` (its `device_list[]` row).
-    pub model: &'static str,
     /// The PlatformIO environments that build it (the build directory's name).
     pub envs: &'static [&'static str],
     /// Shown in front-ends; also identifies the board in save points.
@@ -208,7 +206,6 @@ const XIAO_EPAPER_PINS: Pins = Pins { sck: 7, mosi: 9, cs: 44, rst: 38, dc: 10, 
 /// Every supported SPI e-paper board.
 pub static SPECS: &[BoardSpec] = &[
     BoardSpec {
-        model: "og",
         envs: &["trmnl", "trmnl_test", "local"],
         name: "TRMNL OG",
         chip: Chip::Esp32c3,
@@ -218,7 +215,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "og_4clr",
         envs: &["trmnl_4clr"],
         name: "TRMNL BWRY",
         chip: Chip::Esp32c3,
@@ -228,7 +224,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Bwry,
     },
     BoardSpec {
-        model: "og_gen2",
         envs: &["trmnl_gen2"],
         name: "TRMNL OG gen 2",
         chip: Chip::Esp32c5,
@@ -238,7 +233,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "og_gen2_4clr",
         envs: &["trmnl_gen2_4clr"],
         name: "TRMNL BWRY gen 2",
         chip: Chip::Esp32c5,
@@ -248,7 +242,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Bwry,
     },
     BoardSpec {
-        model: "seeed_esp32c3",
         envs: &["seeed_xiao_esp32c3"],
         name: "XIAO ESP32-C3 + 7.5\" panel",
         chip: Chip::Esp32c3,
@@ -258,7 +251,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "seeed_esp32s3",
         envs: &["seeed_xiao_esp32s3"],
         name: "XIAO ESP32-S3 + 7.5\" panel",
         chip: Chip::Esp32s3,
@@ -268,7 +260,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "xiao_epaper_display",
         envs: &["TRMNL_7inch5_OG_DIY_Kit"],
         name: "TRMNL 7.5\" DIY Kit",
         chip: Chip::Esp32s3,
@@ -278,7 +269,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "xiao_epaper_3clr",
         envs: &["TRMNL_7inch5_OG_DIY_Kit_3CLR"],
         name: "TRMNL 7.5\" BWR DIY Kit",
         chip: Chip::Esp32s3,
@@ -288,7 +278,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Bwr,
     },
     BoardSpec {
-        model: "xiao_epaper_6clr",
         envs: &["TRMNL_7inch5_OG_DIY_Kit_6CLR"],
         name: "TRMNL 7.3\" Spectra 6 DIY Kit",
         chip: Chip::Esp32s3,
@@ -298,7 +287,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Spectra6,
     },
     BoardSpec {
-        model: "reterminal_e1001",
         envs: &["seeed_reTerminal_E1001"],
         name: "reTerminal E1001",
         chip: Chip::Esp32s3,
@@ -308,7 +296,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179,
     },
     BoardSpec {
-        model: "reterminal_e1002",
         envs: &["seeed_reTerminal_E1002"],
         name: "reTerminal E1002",
         chip: Chip::Esp32s3,
@@ -318,7 +305,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc8179Spectra6,
     },
     BoardSpec {
-        model: "xteink_x4",
         envs: &["xteink_x4", "xteink_x4_pwr_btn"],
         name: "Xteink X4",
         chip: Chip::Esp32c3,
@@ -330,7 +316,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Ssd1677Ep426,
     },
     BoardSpec {
-        model: "xiao_epaper_mini",
         envs: &["TRMNL_4inch26_DIY_Kit"],
         name: "TRMNL 4.26\" DIY Kit",
         chip: Chip::Esp32s3,
@@ -340,7 +325,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Ssd1677Ep426,
     },
     BoardSpec {
-        model: "waveshare_397",
         envs: &["WAVESHARE_397"],
         name: "Waveshare ESP32-S3 3.97\"",
         chip: Chip::Esp32s3,
@@ -350,7 +334,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Ssd1677Ep397,
     },
     BoardSpec {
-        model: "seeed_sticky",
         envs: &["seeed_sticky"],
         name: "Seeed Sticky",
         chip: Chip::Esp32s3,
@@ -360,7 +343,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Ssd1677Ep397Flipped,
     },
     BoardSpec {
-        model: "crowpanel42",
         envs: &["CrowPanel42"],
         name: "CrowPanel 4.2\"",
         chip: Chip::Esp32s3,
@@ -371,7 +353,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Ssd1683Ep42b,
     },
     BoardSpec {
-        model: "trmnl_steam",
         envs: &["trmnl_steam"],
         name: "TRMNL Steam",
         chip: Chip::Esp32c3,
@@ -381,7 +362,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc81xx583,
     },
     BoardSpec {
-        model: "xteink_x3",
         envs: &["xteink_x3"],
         name: "Xteink X3",
         chip: Chip::Esp32c3,
@@ -391,7 +371,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::Uc81xx368,
     },
     BoardSpec {
-        model: "m5_paper_mono",
         envs: &["m5_paper_mono"],
         name: "M5Paper Mono",
         chip: Chip::Esp32s3,
@@ -402,7 +381,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::M5PaperMono,
     },
     BoardSpec {
-        model: "m5_paper_color",
         envs: &["m5_paper_color"],
         name: "M5Paper Color",
         chip: Chip::Esp32s3,
@@ -413,7 +391,6 @@ pub static SPECS: &[BoardSpec] = &[
         panel: Panel::M5PaperColor,
     },
     BoardSpec {
-        model: "reterminal_e1004",
         envs: &["seeed_reTerminal_E1004"],
         name: "reTerminal E1004",
         chip: Chip::Esp32s3,
@@ -425,9 +402,9 @@ pub static SPECS: &[BoardSpec] = &[
     },
 ];
 
-/// The board for a PlatformIO environment or `DEVICE_MODEL` name.
-pub fn find(name: &str) -> Option<&'static BoardSpec> {
-    SPECS.iter().find(|s| s.model == name || s.envs.contains(&name))
+/// The board a PlatformIO environment builds for.
+pub fn find(env: &str) -> Option<&'static BoardSpec> {
+    SPECS.iter().find(|s| s.envs.contains(&env))
 }
 
 /// An environment sensor on the I2C header.
@@ -727,16 +704,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_model_and_env_is_listed_once() {
-        // A model may share its name with the environment that builds it (xteink_x3).
-        let mut names: Vec<&str> = SPECS
-            .iter()
-            .flat_map(|s| std::iter::once(s.model).chain(s.envs.iter().copied().filter(|e| *e != s.model)))
-            .collect();
+    fn every_env_is_listed_once() {
+        let mut names: Vec<&str> = SPECS.iter().flat_map(|s| s.envs.iter().copied()).collect();
         let n = names.len();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), n, "a model or environment appears twice");
+        assert_eq!(names.len(), n, "an environment appears twice");
         let mut boards: Vec<&str> = SPECS.iter().map(|s| s.name).collect();
         boards.sort();
         boards.dedup();
@@ -807,7 +780,7 @@ mod tests {
 
     #[test]
     fn e1004_panel_is_powered_by_gpio12() {
-        let mut b = SpiEpdBoard::new(find("reterminal_e1004").unwrap(), 0, &[]);
+        let mut b = SpiEpdBoard::new(find("seeed_reTerminal_E1004").unwrap(), 0, &[]);
         let cs2 = 1u64 << 2;
         b.gpio_out(0, cs2, cs2);
         power_on_cmd(&mut b, 0);

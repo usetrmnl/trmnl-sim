@@ -62,8 +62,6 @@ pub enum Battery {
 /// One supported board.
 #[derive(Debug)]
 pub struct ParallelSpec {
-    /// The firmware's `DEVICE_MODEL` (its `device_list[]` row).
-    pub model: &'static str,
     /// The PlatformIO environments that build it (the build directory's name).
     pub envs: &'static [&'static str],
     /// Shown in front-ends; also identifies the board in save points.
@@ -84,7 +82,6 @@ pub struct ParallelSpec {
 
 pub static SPECS: &[ParallelSpec] = &[
     ParallelSpec {
-        model: "m5_papers3",
         envs: &["TRMNL_X_PAPERS3"],
         name: "M5Stack PaperS3",
         chip: Chip::Esp32s3,
@@ -98,7 +95,6 @@ pub static SPECS: &[ParallelSpec] = &[
         i2c: None,
     },
     ParallelSpec {
-        model: "lilygo_t5pro",
         envs: &["TRMNL_X_LILYGO_T5PRO"],
         name: "LilyGo T5 4.7\" S3 Pro",
         chip: Chip::Esp32s3,
@@ -112,7 +108,6 @@ pub static SPECS: &[ParallelSpec] = &[
         i2c: Some((39, 40)),
     },
     ParallelSpec {
-        model: "sensoria_c5",
         envs: &["TRMNL_X_SENSORIAC5"],
         name: "Sensoria C5",
         chip: Chip::Esp32c5,
@@ -127,9 +122,9 @@ pub static SPECS: &[ParallelSpec] = &[
     },
 ];
 
-/// The board for a PlatformIO environment or `DEVICE_MODEL` name.
-pub fn find(name: &str) -> Option<&'static ParallelSpec> {
-    SPECS.iter().find(|s| s.model == name || s.envs.contains(&name))
+/// The board a PlatformIO environment builds for.
+pub fn find(env: &str) -> Option<&'static ParallelSpec> {
+    SPECS.iter().find(|s| s.envs.contains(&env))
 }
 
 pub struct ParallelByodBoard {
@@ -394,7 +389,7 @@ mod tests {
     /// the PCA9535's port 0, then spins on PWR_GOOD (pin 6), which follows the TPS65185.
     #[test]
     fn sensoria_power_comes_through_port_0_and_pwr_good_follows_the_pmic() {
-        let mut b = ParallelByodBoard::new(find("sensoria_c5").unwrap());
+        let mut b = ParallelByodBoard::new(find("TRMNL_X_SENSORIAC5").unwrap());
         let wr = |b: &mut ParallelByodBoard, t: u64, bytes: &[u8]| {
             assert!(b.i2c_start(t, 0, 0x20, false));
             for &x in bytes {
@@ -421,12 +416,12 @@ mod tests {
     }
 
     #[test]
-    fn models_and_envs_resolve() {
-        assert_eq!(find("m5_papers3").unwrap().name, "M5Stack PaperS3");
-        assert_eq!(find("TRMNL_X_LILYGO_T5PRO").unwrap().model, "lilygo_t5pro");
-        assert!(find("x").is_none() && find("TRMNL_X").is_none());
-        for s in SPECS {
-            assert!(super::super::spi_epd::find(s.model).is_none(), "{} is also an SPI board", s.model);
+    fn envs_resolve() {
+        assert_eq!(find("TRMNL_X_PAPERS3").unwrap().name, "M5Stack PaperS3");
+        assert_eq!(find("TRMNL_X_LILYGO_T5PRO").unwrap().name, "LilyGo T5 4.7\" S3 Pro");
+        assert!(find("m5_papers3").is_none() && find(super::super::trmnl_x::ENV).is_none());
+        for e in SPECS.iter().flat_map(|s| s.envs) {
+            assert!(super::super::spi_epd::find(e).is_none(), "{e} is also an SPI board");
         }
     }
 
@@ -434,7 +429,7 @@ mod tests {
     /// GPIO46 (PWR) and GPIO45 (OE) are both driven high.
     #[test]
     fn papers3_gpio_power_gates_the_panel() {
-        let spec = find("m5_papers3").unwrap();
+        let spec = find("TRMNL_X_PAPERS3").unwrap();
         let mut b = ParallelByodBoard::new(spec);
         let bit = |p: u8| 1u64 << p;
         let outs = bit(spec.spv) | bit(spec.ckv) | bit(spec.le) | bit(45) | bit(46);
@@ -458,7 +453,7 @@ mod tests {
 
     #[test]
     fn papers3_battery_on_the_adc_divider() {
-        let mut b = ParallelByodBoard::new(find("m5_papers3").unwrap());
+        let mut b = ParallelByodBoard::new(find("TRMNL_X_PAPERS3").unwrap());
         b.set_battery_mv(3900);
         assert_eq!(b.adc_millivolts(3), 1950);
         assert_eq!(b.adc_millivolts(1), 0);
@@ -469,7 +464,7 @@ mod tests {
     /// the TPS65185's power-good delay passes; the BQ27220 answers Voltage().
     #[test]
     fn lilygo_epdiy_power_and_gauge() {
-        let mut b = ParallelByodBoard::new(find("lilygo_t5pro").unwrap());
+        let mut b = ParallelByodBoard::new(find("TRMNL_X_LILYGO_T5PRO").unwrap());
         let wr = |b: &mut ParallelByodBoard, t: u64, bytes: &[u8]| {
             assert!(b.i2c_start(t, 0, 0x20, false));
             for &x in bytes {

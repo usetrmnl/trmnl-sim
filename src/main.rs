@@ -121,10 +121,10 @@ struct Cli {
     /// Environment sensor on the I2C header of an SPI-panel board (repeatable): scd41, aht20.
     #[arg(long, value_enum)]
     sensor: Vec<board::spi_epd::Sensor>,
-    /// The board, as the firmware's DEVICE_MODEL (e.g. og, xteink_x4, reterminal_e1001, m5_papers3; x for
-    /// the TRMNL X) or PlatformIO environment. Default: from the build directory's name.
+    /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
+    /// seeed_reTerminal_E1001); it picks the board. Default: the build directory's name.
     #[arg(long)]
-    board: Option<String>,
+    env: Option<String>,
     /// Access points in range of the device's own radio, replacing the defaults: a JSON
     /// array, e.g. '[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'
     /// (keys: ssid, password, rssi, channel, open, internet).
@@ -202,44 +202,22 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // Which board: --board, else the PlatformIO environment the build directory is named
-    // after, else what the firmware links (OG / BWRY / reTerminal E1002 / X).
-    let env = std::fs::canonicalize(&cli.build_dir)
-        .ok()
-        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_default();
-    let parallel_spec = board::parallel_byod::find(cli.board.as_deref().unwrap_or(&env));
-    let spi_spec = match &cli.board {
-        _ if parallel_spec.is_some() => None,
-        Some(b) if b == "x" => None,
-        Some(b) => Some(board::spi_epd::find(b).with_context(|| {
-            let names: Vec<&str> = board::spi_epd::SPECS
-                .iter()
-                .map(|s| s.model)
-                .chain(board::parallel_byod::SPECS.iter().map(|s| s.model))
-                .collect();
-            format!("unknown board {b:?} (known: x, {})", names.join(", "))
-        })?),
-        None => board::spi_epd::find(&env).or_else(|| match fw.chip_id {
-            firmware::CHIP_ESP32C3 if fw.symbols.has_prefix("_Z13png_draw_4clr") => board::spi_epd::find("og_4clr"),
-            firmware::CHIP_ESP32C3 => board::spi_epd::find("og"),
-            // ESP32-C5 builds with bb_epaper are the gen-2 OG (the others drive a parallel panel).
-            firmware::CHIP_ESP32C5 if fw.symbols.has_prefix("_Z16bbepSetPanelType") => {
-                if fw.symbols.has_prefix("_Z13png_draw_4clr") {
-                    board::spi_epd::find("og_gen2_4clr")
-                } else {
-                    board::spi_epd::find("og_gen2")
-                }
-            }
-            // ESP32-S3 builds with bb_epaper drive an SPI panel, the others FastEPD (the X).
-            _ if fw.symbols.has_prefix("_Z16bbepSetPanelType") => {
-                fw.symbols.has_prefix("_Z13png_draw_6clr").then(|| board::spi_epd::find("reterminal_e1002")).flatten()
-            }
-            _ => None,
-        }),
+    // Which board: the PlatformIO environment, from --env or the build directory's name.
+    let env = match &cli.env {
+        Some(e) => e.clone(),
+        None => std::fs::canonicalize(&cli.build_dir)
+            .ok()
+            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default(),
     };
-    if spi_spec.is_none() && fw.chip_id == firmware::CHIP_ESP32S3 && fw.symbols.has_prefix("_Z16bbepSetPanelType") {
-        anyhow::bail!("unknown ESP32-S3 board with an SPI panel (build directory {env:?}): pass --board");
+    let parallel_spec = board::parallel_byod::find(&env);
+    let spi_spec = board::spi_epd::find(&env);
+    if parallel_spec.is_none() && spi_spec.is_none() && env != board::trmnl_x::ENV {
+        let envs: Vec<&str> = std::iter::once(board::trmnl_x::ENV)
+            .chain(board::spi_epd::SPECS.iter().flat_map(|s| s.envs.iter().copied()))
+            .chain(board::parallel_byod::SPECS.iter().flat_map(|s| s.envs.iter().copied()))
+            .collect();
+        anyhow::bail!("unknown PlatformIO environment {env:?}: pass --env (known: {})", envs.join(", "));
     }
     let (board, frame, panel): (Box<dyn board::Board>, sim_api::SharedFrame, mock_trmnl::Panel) = match spi_spec {
         Some(spec) => {

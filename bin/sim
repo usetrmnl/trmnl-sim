@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # Build the simulator, then run it on a firmware build.
 #
-#   bin/sim                 # TRMNL OG   (<firmware>/.pio/build/trmnl)
-#   bin/sim bwry            # TRMNL BWRY (<firmware>/.pio/build/trmnl_4clr)
-#   bin/sim x               # TRMNL X    (<firmware>/.pio/build/TRMNL_X)
-#   bin/sim e1002           # Seeed reTerminal E1002 (<firmware>/.pio/build/seeed_reTerminal_E1002)
-#   bin/sim gen2            # TRMNL OG gen 2, ESP32-C5 (<firmware>/.pio/build/trmnl_gen2)
-#   bin/sim gen2bwry        # TRMNL BWRY gen 2 (<firmware>/.pio/build/trmnl_gen2_4clr)
+#   bin/sim                 # TRMNL OG (<firmware>/.pio/build/trmnl)
+#   bin/sim TRMNL_X         # any PlatformIO env (<firmware>/.pio/build/<env>)
 #   bin/sim path/to/build   # any PlatformIO build directory
-#   bin/sim x --erase       # arguments after the device go to trmnl-sim (see --help)
+#   bin/sim TRMNL_X --erase # arguments after the device go to trmnl-sim (see --help)
 #
 # <firmware> is ../trmnl-firmware unless TRMNL_FIRMWARE says otherwise. The firmware
 # itself is not built here: run `pio run -e <env>` in the firmware checkout first.
@@ -16,16 +12,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 firmware="${TRMNL_FIRMWARE:-../trmnl-firmware}"
-target="${1:-og}"
+target="${1:-trmnl}"
 [[ $# -gt 0 ]] && shift
 
 case "$target" in
-  og | trmnl) env=trmnl ;;
-  bwry | 4clr | trmnl_4clr) env=trmnl_4clr ;;
-  x | trmnl_x | TRMNL_X) env=TRMNL_X ;;
-  e1002 | seeed_reTerminal_E1002) env=seeed_reTerminal_E1002 ;;
-  gen2 | trmnl_gen2) env=trmnl_gen2 ;;
-  gen2bwry | gen2_4clr | trmnl_gen2_4clr) env=trmnl_gen2_4clr ;;
   -h | --help)
     awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
     exit 0
@@ -33,15 +23,17 @@ case "$target" in
   -*)
     # No device given: default to the OG and pass everything on.
     set -- "$target" "$@"
-    env=trmnl
+    target=trmnl
     ;;
-  *) env="" ;;
 esac
 
-if [[ -n "$env" ]]; then
-  build_dir="$firmware/.pio/build/$env"
-else
+# A path is a build directory; anything else is an env in the firmware checkout.
+if [[ "$target" == */* ]]; then
+  env=""
   build_dir="$target"
+else
+  env="$target"
+  build_dir="$firmware/.pio/build/$env"
 fi
 
 if [[ ! -f "$build_dir/firmware.elf" ]]; then

@@ -15,6 +15,9 @@ use crate::devices::i2c::{BitBangI2cSlave, I2cBus};
 use crate::devices::parallel_epd::{PanelGeometry, ParallelEpd};
 use crate::savepoint::{StateReader, StateWriter};
 
+/// The PlatformIO environment that builds the TRMNL X firmware.
+pub const ENV: &str = "TRMNL_X";
+
 // S3 GPIOs
 const GPIO_IQS_RDY: u8 = 3;
 const GPIO_TCA_INT: u8 = 38;

@@ -2,42 +2,40 @@
 
 A simulator for TRMNL devices that runs **unmodified compiled firmware**: the
 `bootloader.bin`, `partitions.bin` and `firmware.bin` you would flash, plus the build's
-`firmware.elf`. It gives you a window with the e-paper display and the device's controls,
-and an HTTP control API for automated tests
-([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in GitHub Actions.
+`firmware.elf`. It gives you a window with the e-paper display and an HTTP control API for
+automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in
+GitHub Actions.
 
-The device is picked from the build directory's name (the PlatformIO env) or `--board`:
+The device is picked by the PlatformIO env, from `--env` or the build directory's name.
 
-| PlatformIO env | Device | Chip | Display | Controls |
-|---|---|---|---|---|
-| `trmnl` | TRMNL OG | ESP32-C3 (RISC-V) | 7.5" 800×480, UC8179 over SPI | button |
-| `trmnl_4clr` | TRMNL BWRY | ESP32-C3 (RISC-V) | 7.5" 800×480 black/white/yellow/red (GDEM075F52) | button |
-| `TRMNL_X` | TRMNL X | ESP32-S3 (dual-core Xtensa LX7) + ESP32-C5 modem | 10.3" 1872×1404 parallel panel, 16 grays | touch bar (left/center/right), magnetic dock |
-| `trmnl_gen2` | TRMNL OG gen 2 | ESP32-C5 (RISC-V, 2.4 + 5 GHz WiFi) | 7.5" 800×480, UC8179 over SPI | button, USB power (dock switch) |
-| `trmnl_gen2_4clr` | TRMNL BWRY gen 2 | ESP32-C5 | 7.5" 800×480 black/white/yellow/red | button, USB power (dock switch) |
+TRMNL devices:
 
-BYOD boards (the firmware's other `device_list[]` rows; `--board` takes the `DEVICE_MODEL`):
+- `trmnl`
+- `trmnl_4clr`
+- `TRMNL_X`
+- `trmnl_gen2`
+- `trmnl_gen2_4clr`
 
-| PlatformIO env | `--board` | Device | Chip | Display | Battery |
-|---|---|---|---|---|---|
-| `seeed_xiao_esp32c3` | `seeed_esp32c3` | XIAO ESP32-C3 + 7.5" panel | ESP32-C3 | 7.5" 800×480 UC8179 | none wired |
-| `TRMNL_7inch5_OG_DIY_Kit` | `xiao_epaper_display` | TRMNL 7.5" DIY Kit | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
-| `TRMNL_7inch5_OG_DIY_Kit_3CLR` | `xiao_epaper_3clr` | TRMNL 7.5" BWR DIY Kit | ESP32-S3 | 7.5" 800×480 black/white/red UC8179 (two planes) | ADC, switched divider |
-| `TRMNL_7inch5_OG_DIY_Kit_6CLR` | `xiao_epaper_6clr` | TRMNL 7.3" Spectra 6 DIY Kit | ESP32-S3 | 7.3" 800×480 Spectra 6 | ADC, switched divider |
-| `TRMNL_4inch26_DIY_Kit` | `xiao_epaper_mini` | TRMNL 4.26" DIY Kit | ESP32-S3 | 4.26" 800×480 SSD1677 | ADC, switched divider |
-| `seeed_reTerminal_E1001` | `reterminal_e1001` | Seeed reTerminal E1001 | ESP32-S3 | 7.5" 800×480 UC8179 | ADC, switched divider |
-| `seeed_reTerminal_E1002` | `reterminal_e1002` | Seeed reTerminal E1002 | ESP32-S3 (8 MB octal PSRAM) | 7.3" 800×480 Spectra 6 (GDEP073E01) | ADC, switched divider |
-| `seeed_reTerminal_E1004` | `reterminal_e1004` | Seeed reTerminal E1004 | ESP32-S3 | 13.3" 1200×1600 Spectra 6, two controllers (CS/CS2) | ADC, switched divider |
-| `seeed_sticky` | `seeed_sticky` | Seeed Sticky | ESP32-S3 | 3.97" 800×480 SSD1677, switched supply | BQ27220 |
-| `xteink_x4` | `xteink_x4` | Xteink X4 | ESP32-C3 | 4.26" 800×480 SSD1677 | (not read) |
-| `xteink_x3` | `xteink_x3` | Xteink X3 | ESP32-C3 | 3.68" 792×528 UC81xx | BQ27220 |
-| `WAVESHARE_397` | `waveshare_397` | Waveshare ESP32-S3 3.97" | ESP32-S3 | 3.97" 800×480 SSD1677 | AXP2101 |
-| `m5_paper_mono` | `m5_paper_mono` | M5Paper Mono | ESP32-S3 | 800×480 SSD1677; supply and RST on an M5IOE1 expander | none (4.2 V) |
-| `m5_paper_color` | `m5_paper_color` | M5Paper Color | ESP32-S3 | 4" 400×600 Spectra 6; supply from the PY32 PMIC | none (4.2 V) |
-| `TRMNL_X_PAPERS3` | `m5_papers3` | M5Stack PaperS3 | ESP32-S3 | 4.7" 960×540 parallel (ED047TC1), 16 grays | ADC |
-| `TRMNL_X_LILYGO_T5PRO` | `lilygo_t5pro` | LilyGo T5 4.7" S3 Pro | ESP32-S3 | 4.7" 960×540 parallel, EPDiy V7 (TCA9535 + TPS65185) | BQ27220 |
-| `trmnl_steam` | `trmnl_steam` | TRMNL Steam | ESP32-C3 | 5.83" 648×480 UC81xx | ADC |
-| `TRMNL_X_SENSORIAC5` | `sensoria_c5` | Sensoria C5 | ESP32-C5 (8 MB quad PSRAM) | 1280×720 parallel over PARLIO, 16 grays (PCA9535 + TPS65185) | (not read) |
+BYOD boards (the firmware's other `device_list[]` rows):
+
+- `seeed_xiao_esp32c3`
+- `TRMNL_7inch5_OG_DIY_Kit`
+- `TRMNL_7inch5_OG_DIY_Kit_3CLR`
+- `TRMNL_7inch5_OG_DIY_Kit_6CLR`
+- `TRMNL_4inch26_DIY_Kit`
+- `seeed_reTerminal_E1001`
+- `seeed_reTerminal_E1002`
+- `seeed_reTerminal_E1004`
+- `seeed_sticky`
+- `xteink_x4`
+- `xteink_x3`
+- `WAVESHARE_397`
+- `m5_paper_mono`
+- `m5_paper_color`
+- `TRMNL_X_PAPERS3`
+- `TRMNL_X_LILYGO_T5PRO`
+- `trmnl_steam`
+- `TRMNL_X_SENSORIAC5`
 
 ![setup screen as rendered by the simulator](docs/setup_screen.png)
 
@@ -52,83 +50,6 @@ Common to all devices:
 | Network | A user-mode router/NAT (`vnet`) to the internet, or `--offline`. The host is `10.0.2.2`; an NTP server at `10.0.2.123` gives the host's clock (offline, NTP names resolve to it) |
 | Sleep | Deep sleep (timer and GPIO wake, RTC memory, correct wake cause) and light sleep |
 | Persistence | Flash is a file, so credentials, API key and SPIFFS/LittleFS survive restarts; `--erase` gives a factory-fresh device |
-
-**TRMNL OG** (`trmnl`) and **TRMNL BWRY** (`trmnl_4clr`, the same board with a 4-color
-panel, detected from the firmware):
-
-| Part | How |
-|---|---|
-| CPU | RV32IMC(A) interpreter, 160 MHz, cycle-counted virtual time |
-| Peripherals | UART0, GPIO/IO_MUX, interrupt matrix, SYSTIMER, TIMG, RTC_CNTL, eFuse, SPI flash + 4 MB NOR, GPSPI2, I2C, SAR ADC, cache/MMU, RNG, SHA, AES + GDMA, RSA |
-| Display | UC8179 over SPI, refreshed from the LUT waveforms: full, fast, partial and 4-gray refreshes and BUSY timing behave like the panel. The `REV` read returns `--panel-rev` |
-| 4-color panel (BWRY) | One 2 bit/pixel image (`DTM1`) and the built-in ~16 s refresh: 9 s of black/white flashing, then exact black/white/yellow/red. **Refresh flashing** in the window turns the flashes off |
-| Button | GPIO2 with pull-up: presses, holds, double-clicks, deep-sleep wake |
-| Battery | ADC on GPIO3 behind a ½ divider; settable voltage |
-
-**TRMNL OG gen 2** (`trmnl_gen2`) and **TRMNL BWRY gen 2** (`trmnl_gen2_4clr`): the OG's
-panels on an ESP32-C5 board (SCK 6, MOSI 1, CS 4, RST 2, DC 5, BUSY 0, button GPIO 3).
-
-| Part | How |
-|---|---|
-| CPU | RV32IMAC with the C5's CLIC (vectored, levelled, nested interrupts) at 240 MHz |
-| Boot | The production-silicon (v1.x) ROM, `esp32c5_rev100_rom.elf`; bootloader at 0x2000 |
-| Peripherals | 384 KB HP + 16 KB LP SRAM, 8/16 MB flash and 8 MB quad PSRAM behind the cache MMU, PARLIO TX, CLIC, PCR, the LP domain (wake and reset causes, LP_TIMER), SYSTIMER, TIMG, GPIO, UART0 and the USB serial/JTAG console, I2C, GPSPI2, eFuse, RNG |
-| Crypto | SHA, AES/AES-GCM, RSA, ECC and ECDSA verification accelerators, so TLS runs on them as on the chip |
-| WiFi | Dual band: also **TRMNL-Sim-5G** (channel 36, any password), joined on the C5's own radio (`WiFi-Band: 5`) |
-| Battery | BQ27427 fuel gauge on I2C (SDA 23 / SCL 10; BWRY: 11 / 12) |
-| USB power | BQ25616 PG (GPIO 25) and STAT (GPIO 24) follow the dock switch; reported as `USB-Connected` / `Battery-Charging` |
-| Firmware | IDF 5.5 built from source with Arduino 3.3, `DEV_FIRMWARE` logging |
-
-**Seeed reTerminal E1002** (`seeed_reTerminal_E1002`, a BYOD board): the ESP32-S3 below with
-an SPI panel driven through bb_epaper (SCK 7, MOSI 9, CS 10, RST 12, DC 11, BUSY 13).
-
-| Part | How |
-|---|---|
-| Display | One 4 bit/pixel image (`DTM1`) and a ~19 s refresh: 12 s of flashing through the six colors, then exact black/white/yellow/red/blue/green |
-| Button | GPIO3 with pull-up |
-| Battery | ADC on GPIO1 behind a ½ divider, connected while GPIO21 is high |
-| Firmware | Arduino 2.0.17 on IDF 4.4 libraries: PSRAM, zero-copy WiFi transmit and the portal work |
-
-**BYOD boards.** SPI-panel boards are one data-driven board (`board/spi_epd.rs`) with a row
-per `device_list[]` entry: pins, battery (ADC divider, BQ27220, AXP2101 or none), panel
-supply switching (an unpowered panel ignores its inputs and loses its RAM) and the panel:
-
-| Controller | How |
-|---|---|
-| UC81xx | The UC8179 model at any size, with per-panel 4-gray response fitted to bb_epaper; black/white/red panels keep two 1-bit planes and a ~16 s refresh |
-| SSD16xx (SSD1677, SSD1683) | RAM windows and counters, data entry modes, new/old image planes, the built-in and custom (`0x32`) waveforms, differential partial refreshes, deep sleep |
-| Two controllers (E1004) | Each half gets the commands sent while its chip select is low; BUSY while either is busy |
-| Parallel (PaperS3, T5 Pro, Sensoria C5) | The X's panel model at 960×540 over LCD_CAM (power from GPIOs, or a TCA9535 + TPS65185); the Sensoria C5's 1280×720 panel over PARLIO with a PCA9535 |
-
-Firmware bugs these boards show (trmnl-spec's tests fail on each):
-- `trmnl_steam` reboots forever: its `device_list[]` row is behind `#ifdef CMD_CS1_CS2`, so
-  `pDevice` stays NULL.
-- Flipping an uncompressed BMP overruns the download buffer on panels that aren't 800×480
-  (the X3 and E1004 crash; the M5Paper Color shows garbage).
-- `dpList[]` holds bb_epaper product ids where `setPanelType()` expects panel types: 1-bit
-  images never show on the M5Paper Mono.
-- SSD16xx boards: BMP/Group5 images update only the new-image RAM, so the old picture stays up.
-- The Waveshare 3.97" picture is one row too high; the Sticky's 4-gray LUT is overwritten, so
-  it shows black and white only.
-- The BWR DIY kit sends 2-bit color PNGs through the 4-gray planes: wrong inks.
-- The Xteink X4 reports 0 V (`batt_pin` 0xff although `PIN_BATTERY` is 0).
-- The gen-2 BWRY lacks `BOARD_TRMNL_4CLR`: images go out as two 1-bit planes, so only the top
-  half changes, in the wrong inks.
-- On 960 px parallel panels the setup screen's instructions overflow the width.
-- The Sensoria C5 reboots instead of sleeping: FastEPD deletes its PARLIO TX unit without
-  disabling it, and IDF 5.5's `ESP_ERROR_CHECK` aborts.
-
-**TRMNL X** (`TRMNL_X`):
-
-| Part | How |
-|---|---|
-| CPU | Two Xtensa LX7 cores (windowed ABI, FPU, MAC16, loops, atomics) at the firmware's clock; idle cores sleep |
-| Peripherals | 16 MB flash and 8 MB octal PSRAM behind the cache MMU, interrupt matrix, SYSTIMER, GPIO, UART0 with flow control, USB serial/JTAG, I2C, GPSPI2, LCD_CAM + GDMA, SHA/AES/RSA, eFuse, RTC |
-| Display | 1872×1404 EPDiy-style panel fed over LCD_CAM with a TPS65185 PMIC; the per-frame drive is applied to each pixel, so 1-bit and 16-gray images come out as drawn |
-| Touch bar | IQS323 on I2C: left/center/right taps and holds (several at once); RDY wakes from deep sleep |
-| Dock | Powers USB and the charger (TCA9535 inputs, the gauge's charging flag, the request headers); docking wakes shipment mode |
-| Battery | BQ27427 fuel gauge |
-| 5 GHz modem | ESP32-C5 running ESP-AT over UART at 5 Mbit/s: factory flashing through its ROM loader, then WiFi, SNTP and HTTP, made from the host so they reach the same mock servers |
 
 ## Requirements
 
@@ -149,9 +70,9 @@ Firmware bugs these boards show (trmnl-spec's tests fail on each):
 ```sh
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
-bin/sim        # build, then run the OG build from ../trmnl-firmware
-bin/sim bwry   # ... the trmnl_4clr build;  bin/sim x  for TRMNL_X, bin/sim gen2 for trmnl_gen2
-bin/sim x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
+bin/sim        # build, then run the OG build (trmnl) from ../trmnl-firmware
+bin/sim TRMNL_X     # ... another env's build, or bin/sim path/to/build
+bin/sim TRMNL_X --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
 
@@ -166,21 +87,14 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
-In the window, press the OG's button with the mouse or **Space**; tap the X's touch bar or
-use **←/↓/→** (or **1/2/3**), holding them for holds. The side panel has reset, power-cycle,
-wake, [save points](#save-points), WiFi range, battery, turbo, pause and the X's dock; the
-serial console is below.
-
 **A fresh device** (`--erase`) boots into WiFi setup. Its portal is at
 **http://127.0.0.1:8080/**: pick **TRMNL-Sim** (any password but `fail`) and a server. Use
 `--mac D8:3B:DA:12:34:56` to run as your own device.
 
 ### Fault injection
 
-The side panel's **Faults** section has the common faults (internet down, no internet, a
-slow or lossy link, failing DNS, a power cut in the next NVS write, a missing fuel gauge, a
-stuck panel, a dead modem). The [control API](#control-api) (`POST /faults`), `--faults JSON`
-and the Ruby client have the full set:
+The [control API](#control-api) (`POST /faults`), `--faults JSON` and the Ruby client inject
+faults:
 
 | Fault | JSON (`POST /faults`, `--faults`) | |
 |---|---|---|
@@ -211,27 +125,16 @@ A power cut shows on the console as `[sim] power lost: program #3 at 0xa060 ...`
 
 ### Built-in mock server
 
-`--mock-server` (port 8090; `=0` for any) or the side panel's **🖧 Mock server panel**
-starts a TRMNL server in the simulator, so you can drive the device's content without a
-trmnl.app account. The device URL is `http://10.0.2.2:8090`.
+`--mock-server` (port 8090; `=0` for any) starts a TRMNL server in the simulator, so you can
+drive the device's content without a trmnl.app account. The device URL is
+`http://10.0.2.2:8090`; keep the port fixed, since the device remembers the URL.
 
-- **Onboarding.** **Connect it to this server** fills in the setup page of a fresh device;
-  **Onboard the device here…** makes an onboarded OG forget its WiFi first. Keep the port
-  fixed: the device remembers the URL.
-- **Images.** Drop images on the window or use **Add images…**; they are resized and
-  dithered to what the panel takes (1-bit BMP on the OG, 4-color PNG on the BWRY, 4-bit PNG
-  on the X) with server-style filenames. Click one to serve it.
-- **Playlist.** Mark images with ☰; **Next image on every request** steps through them.
-- **Display response.** Refresh rate, special function, full refresh, the X's touch bar
-  mode, and under Advanced registration, status and friendly ID.
-- **Next request only.** **Firmware update** (`update_firmware`, this build or a chosen
-  file; another build needs `--elf`) and **Reset device**.
-- **HTTP faults.** The firmware's `scripts/mock_server.py` failures, queued per route
-  (`/api/display` or images): HTTP statuses, `timeout`, `reset`, `close`, `redirect`,
-  `bad-json`, `status`, `empty-state`, `truncate`, `slow`, `empty`, `too-big`, `garbage`,
-  `no-length`, `wrong-type`. Hover a kind for the error it should cause.
-- **Wake the device on changes** ends deep sleep when you change something.
-- **Requests** lists every request (hover for headers and body).
+Images added to it are resized and dithered to what the panel takes (1-bit BMP on the OG,
+4-color PNG on the BWRY, 4-bit PNG on the X) with server-style filenames. The control API's
+[`/mock` endpoints](#control-api) set the images and playlist, the display response (refresh
+rate, special function, registration, friendly ID), fields for the next request only (a
+firmware update, a reset), HTTP failures per route in the firmware's `scripts/mock_server.py`
+syntax, and list the recorded requests.
 
 Headless, e.g. for serial output or a screenshot:
 
@@ -243,7 +146,7 @@ Production builds don't log, so the simulator mirrors the firmware's `Log_*` mes
 console (`[sim] log I: src/bl.cpp [701]: …`) for tests to wait on.
 
 **A factory-fresh TRMNL X** (`--erase`) flashes its modem (about 13 s of virtual time), then
-waits in shipment mode until docked (side panel or `POST /dock`) and restarts into setup.
+waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
 ## Command line
 
@@ -275,7 +178,7 @@ waits in shipment mode until docked (side panel or `POST /dock`) and restarts in
 | `--memcheck-suppress F,..` | Ignore violations with these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
-| `--board NAME` | The board, as `DEVICE_MODEL` (`og`, `xteink_x4`, `x`, ...) or env. Default: the build directory's name, else what the firmware links |
+| `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the build directory's name |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
 | `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start (repeatable, merged) |
@@ -290,13 +193,12 @@ Virtual time comes from executed cycles, paced to wall-clock time by default. `-
 fast-forwards idle periods, but runs in real time while the host network is waited on and
 while the setup portal is up (`POST /wifi {"portal_client": false}` lifts that), so no
 firmware timeout fires early. Deep sleep lasts its real duration unless `--fast-sleep`; end
-it early with **Wake** or the button.
+it early with `POST /wake` or the button.
 
 ### Save points
 
 A save point captures the device, e.g. "onboarded, asleep, showing image X", so you can
-return to it without redoing setup: **Save** / **Save as…** / **Open…** in the side panel,
-`POST /savepoint` / `POST /restore`, or `--restore FILE`.
+return to it without redoing setup: `POST /savepoint` / `POST /restore`, or `--restore FILE`.
 
 - **Taken in deep sleep**, it keeps everything that survives deep sleep (flash, RTC memory
   and registers, the pending wake, the screen and panel RAM, the I2C chips, the modem image,
@@ -307,18 +209,9 @@ return to it without redoing setup: **Save** / **Save as…** / **Open…** in t
 Files are compressed (about 1 MB for an OG, 2.5 MB for an X) and tied to their firmware
 build; restoring onto another build, or saving mid-refresh, is refused.
 
-## Integration testing
-
-The integration tests live in [trmnl-spec](https://github.com/usetrmnl/trmnl-spec), checked
-out next to this repository and `../trmnl-firmware`. They run firmware builds in this
-simulator against mock TRMNL servers, through the control API and the Ruby client there
-(`TrmnlSim::Simulator`, `MockTrmnl`). Its README covers running and writing them; its CI,
-which this repository's CI calls, builds the firmware and the simulator and runs the suite.
-
 ### Control API
 
-`--control 127.0.0.1:7878` serves JSON over HTTP; trmnl-spec's `TrmnlSim::Simulator` is a
-thin wrapper.
+`--control 127.0.0.1:7878` serves JSON over HTTP.
 
 | | |
 |---|---|
@@ -436,12 +329,12 @@ crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
 ├─ sim-ui/             egui desktop window
 ├─ sim-control/        HTTP control API
-├─ mock-trmnl/         built-in mock TRMNL server and image conversion (GUI panel, /mock API)
+├─ mock-trmnl/         built-in mock TRMNL server and image conversion (/mock API)
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```
 
 **Chips and boards.** The image header names the chip (C3, S3 or C5); the board comes from
-`--board`, the build directory's name, or the firmware's symbols. The C3 and C5 share the
+the PlatformIO env (`--env` or the build directory's name). The C3 and C5 share the
 RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so the HLE
 (WiFi for IDF 4.4 and 5.5, sleep, ADC) is the same code on every chip. A new board is a
 `Board` plus its devices; a new chip is a `soc/` module.
@@ -458,7 +351,7 @@ matches the slot's app descriptor to a known ELF, so an OTA to another build nee
   only verifies; no WiFi 6 details or BLE.
 - WiFi is modelled at the IDF driver API, not 802.11: signal, roaming and power save are canned.
 - TRMNL OG: nothing on the I2C bus. No USB data or serial input on any device.
-- TRMNL X: swipes and flicks aren't in the UI yet; no accelerometer; the modem does station
+- TRMNL X: no accelerometer; the modem does station
   mode and HTTP GET only.
 - Timing counts instructions (1 per cycle), not cycles; flash operations are instant.
 - The e-paper model is exact in pixels but approximate in grays and ghosting; the 4-color

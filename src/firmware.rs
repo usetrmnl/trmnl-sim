@@ -50,12 +50,6 @@ impl Symbols {
         self.by_name.get(name).copied()
     }
 
-    /// Any symbol whose name starts with `prefix` (e.g. a C++ function whatever its
-    /// parameter types mangle to).
-    pub fn has_prefix(&self, prefix: &str) -> bool {
-        self.by_name.keys().any(|k| k.starts_with(prefix))
-    }
-
     /// "func+0x12" for an address.
     pub fn describe(&self, addr: u32) -> String {
         let i = self.sorted.partition_point(|(a, _, _)| *a <= addr);
