@@ -3,7 +3,7 @@
 # BYOD boards with the UC8179 panels the TRMNL OG family uses: 7.5" black and white and 7.3"
 # Spectra 6, on XIAO ESP32-C3/S3 boards, the TRMNL DIY kits and the reTerminal E1001.
 
-RSpec.describe "BYOD UC8179 boards", :parallel do
+RSpec.describe "BYOD UC8179 boards" do
   describe "XiaoEsp32c3", env: "seeed_xiao_esp32c3" do
     byod_board name: "XIAO ESP32-C3 + 7.5\" panel", model: "seeed_esp32c3",
                battery_v: 0.0 # batt_pin 0xff: nothing to read

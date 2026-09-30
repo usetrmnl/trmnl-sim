@@ -6,7 +6,7 @@ require "tmpdir"
 # TRMNL X: factory flow, shipment mode and the dock, onboarding over 2.4 GHz (S3 WiFi) and
 # 5 GHz (ESP32-C5 modem), the 1872x1404 parallel panel, the touch bar, and charging headers.
 
-RSpec.describe "TRMNL X", :parallel, env: "TRMNL_X" do
+RSpec.describe "TRMNL X", env: "TRMNL_X" do
   fixture(:shipped) { TrmnlX::ShippedX.new }
   fixture(:dev) { TrmnlX::ProvisionedX.new(shipped) } # onboarded on the 5 GHz network, through the modem
 

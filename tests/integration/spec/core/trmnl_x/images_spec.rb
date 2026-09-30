@@ -7,7 +7,7 @@ data_dir = File.join(Builds::HERE, "data")
 w = 1872
 h = 1404
 
-RSpec.describe "TRMNL X images", :parallel, env: "TRMNL_X" do
+RSpec.describe "TRMNL X images", env: "TRMNL_X" do
   fixture(:shipped) { TrmnlX::ShippedX.new }
   fixture(:dev) { TrmnlX::ProvisionedX.new(shipped) }
 

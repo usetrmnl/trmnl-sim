@@ -4,7 +4,7 @@ require "tmpdir"
 
 # TRMNL BWRY (`trmnl_4clr`): the OG board with a 4-color black/white/yellow/red panel.
 
-RSpec.describe "TRMNL BWRY", :parallel, env: "trmnl_4clr" do
+RSpec.describe "TRMNL BWRY", env: "trmnl_4clr" do
   fixture(:dev) { ProvisionedDevice.new(Builds.for_env("trmnl_4clr")) }
 
   let(:red) { ->(_x, _y) { TrmnlSim::Images::BWRY_RGB[:red] } }

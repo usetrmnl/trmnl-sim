@@ -12,7 +12,7 @@ images = TrmnlSim::Images
 # up the portal.
 steam_bug = "firmware bug: no trmnl_steam row in device_list[] with this env's bb_epaper (boot loop)"
 
-RSpec.describe "BYOD UC81xx boards", :parallel do
+RSpec.describe "BYOD UC81xx boards" do
   # Does a factory-fresh device come up with its captive portal?
   def boots_to_the_portal(env, timeout: 30)
     sim(Builds.for_env(env), erase: true, extra_args: ["--offline"]) do |s|

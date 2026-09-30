@@ -30,9 +30,9 @@ no_internet = shows_the_image.merge(
   "trmnl_gen2_4clr" => "#{FirmwareBugs::GEN2_NTP_HANG}; and #{FirmwareBugs::GEN2_4CLR_IMAGE}"
 )
 
-RSpec.describe "Faults", :parallel, env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
-  fixture(:named) { FaultsSpec::NamedServerDevice.new }
+General.describe "Faults" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
+  fixture(:named) { FaultsSpec::NamedServerDevice.new(build) }
 
   # The test image: a big "1" over a strip of noise along the bottom, so that even as a PNG
   # (which compresses the rest to nothing) the file is a few KB: download faults cut it part

@@ -10,7 +10,7 @@ x4_battery = "device_list[] (display.cpp:51) gives the X4 batt_pin 0xff though i
 sticky_4gray = "bb_epaper 2.1.11's EP397_800x480_4GRAY writes a custom 4-gray LUT, which bbepRefresh()'s " \
                "0x22 0xD7 reloads the built-in LUT over: the gray planes show as black and white"
 
-RSpec.describe "BYOD SSD16xx boards", :parallel do
+RSpec.describe "BYOD SSD16xx boards" do
   # What the SSD16xx boards have beyond the shared examples. `row_shift`: the picture shows up
   # this many rows higher (wrapping around), see Waveshare397. `button_source`: Update-Source
   # after a button wake: ESP32-S3 boards wake by EXT0, C3 ones by GPIO.

@@ -15,11 +15,11 @@ module SavepointsSpec
   end
 end
 
-# Another device's firmware, which must refuse this device's save points.
-other_env = Integration.device.env == "trmnl" ? "trmnl_4clr" : "trmnl"
+General.describe "Save points" do
+  # Another device's firmware, which must refuse this device's save points.
+  other_env = device.env == "trmnl" ? "trmnl_4clr" : "trmnl"
 
-RSpec.describe "Save points", env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   fixture(:saved) do
     dir = Dir.mktmpdir("trmnl-savepoints-")

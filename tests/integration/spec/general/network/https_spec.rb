@@ -4,7 +4,7 @@
 # P-384): plain WiFiClientSecure for other servers, and for trmnl.app the resumable client that
 # keeps its TLS session in RTC memory across deep sleep.
 
-RSpec.describe "HTTPS", :parallel, env: :any do
+General.describe "HTTPS" do
   # A fresh device joined to `mock` through the portal; yields it asleep after its first refresh.
   def onboard(mock, *extra_args)
     sim(erase: true, extra_args: ["--offline", *extra_args]) do |s|

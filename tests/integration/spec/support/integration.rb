@@ -1,25 +1,24 @@
 # frozen_string_literal: true
 
-# The device under test, and helpers every example group gets (see spec_helper.rb).
+# What example groups know about their device, and helpers every example group gets (see
+# spec_helper.rb).
 module Integration
-  module_function
+  # A group's device: the one its `env:` (or its parent's) names. `device` and `build` in group
+  # bodies (every group is extended with this).
+  module DeviceContext
+    def device = Devices.fetch(metadata.fetch(:env) { raise ArgumentError, "#{metadata[:location]}: no env:" })
+    def build = Builds.for_env(device.env)
+  end
 
-  # The device the general tests (env: :any) run on: TRMNL_SIM_DEVICE, else the TRMNL OG.
-  def device = @device ||= Devices.under_test
-
-  # Its build.
-  def build = Builds.for_env(device.env)
-
-  # Helpers for examples (and `before(:context)` hooks). `device` and `build` default to the
-  # device under test's everywhere.
+  # Helpers for examples (and `before(:context)` hooks). `device` and `build` are the group's.
   module Helpers
     I = TrmnlSim::Images
 
-    def device = Integration.device
-    def build = Integration.build
+    def device = self.class.device
+    def build = self.class.build
 
     # A simulator (see Sims.start); with a block, closed after it.
-    def sim(build = Integration.build, **, &) = Sims.start(build, **, &)
+    def sim(build = self.build, **, &) = Sims.start(build, **, &)
 
     # A factory-fresh device, offline, with its setup portal up (and then `settled`, e.g. the
     # screen drawn: display_idle:, min_refreshes:). `sim_kw` go to `sim` (networks:...). With a
@@ -53,7 +52,7 @@ module Integration
       end
     end
 
-    # ---- images for the device under test ------------------------------------------------------------
+    # ---- images for the group's device ---------------------------------------------------------------
 
     # Serve a black-and-white image the way the TRMNL server would for `device`: an 800x480
     # 1-bit BMP for the OG-size panels, else a PNG of the panel's size (a palette PNG for color

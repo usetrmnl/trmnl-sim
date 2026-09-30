@@ -16,7 +16,7 @@ require "tmpdir"
 # and message screens, drawn through bb_epaper's 4-color buffer, are fine.
 gen2_bwry_images = FirmwareBugs::GEN2_4CLR_IMAGE
 
-RSpec.describe "OG gen 2", :parallel do
+RSpec.describe "OG gen 2" do
   # What both gen-2 boards get: the BYOD board tests (identity, the served image; see
   # spec/support/byod.rb) and more. `images_work`: served images show as they should (see
   # OgGen2Bwry for the board where they don't).

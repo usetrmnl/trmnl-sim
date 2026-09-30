@@ -4,8 +4,8 @@
 # Content-Length, and the error log (/api/log) when submitting fails. Images are served the way
 # the TRMNL server serves the device (device_image).
 
-RSpec.describe "HTTP", :parallel, env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "HTTP" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   # The provisioned device, asleep after onboarding (showing the default image).
   def asleep

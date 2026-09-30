@@ -25,7 +25,7 @@ suite); read the relevant section before changing a subsystem.
 | `bin/build` | release build of the simulator |
 | `bin/test` | fmt, clippy (with and without the GUI), unit tests, `rake check`; run before committing |
 | `bin/dev [og\|bwry\|x\|e1002\|gen2\|gen2bwry\|<build dir>]` | run a firmware build in the window |
-| `rake spec ...` | integration tests (below; `rake -T` lists the tasks) |
+| `rake spec` | integration tests in parallel (below; `rake -T` lists the tasks) |
 
 Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's comment
 density and naming; comments explain hardware behaviour and why, with firmware file:line
@@ -33,33 +33,31 @@ references where relevant.
 
 ## Integration tests (tests/integration, RSpec)
 
-- Rake tasks (tests/integration/Rakefile, imported by the root Rakefile); a task's argument is
-  one shell-style string. `rake "spec[<file>]"`: a spec file by short name (`portal` =
-  spec/general/setup/portal_spec.rb; also a directory, e.g. `devices/byod`), a path, `path:line`
-  or `path[id]`; rspec options pass through
-  (`rake "spec[portal -e 'wrong password']"`). `rake "spec[<env>]"`: everything for one
-  PlatformIO environment. `rake spec` (default tier): every device's own specs, the general
-  ones in full on the OG and the `:smoke` examples on the rest (~9 min).
-  `rake spec:comprehensive` (~24 min), `spec:exhaustive`, `spec:plan[...]` (dry run),
-  `spec:envs`; `--slow`, `-j N`, `--no-cache` go in the argument. The runner is
-  tests/integration/runner/runner.rb. `rake firmware[...]` runs pio: only when asked.
+- Plain RSpec, run in tests/integration: `bundle exec rspec [path[:line]] [-e ...]`, or
+  `bundle exec parallel_rspec` (`rake spec` builds the simulator first, then runs it).
+  `ENVS` (spec/support/selection.rb) lists the devices a run covers: PlatformIO environments
+  or `core` / `byod` / `all`, each optionally `:full`. A listed device runs its own specs and
+  the general `:smoke` examples; `:full` runs every general example on it. Default
+  `trmnl:full TRMNL_X trmnl_4clr trmnl_gen2 trmnl_gen2_4clr`; unlisted devices and missing
+  builds are left out. `TRMNL_SIM_SLOW=1`, `TRMNL_SPEC_NO_CACHE=1` as needed. `rake
+  firmware[...]` runs pio: only when asked.
 - While iterating, run ONE group or example at a time under a hard limit and clean up:
-  `perl -e 'alarm 90; exec @ARGV' rake "spec[portal -e FailedJoin]"; pkill -f target/release/trmnl-sim`
-  (or `cd tests/integration && bundle exec rspec spec/general/setup/portal_spec.rb:42`, with
-  `TRMNL_SIM_DEVICE=<env>` for another device under test). No full-suite runs for debugging;
-  a full run is for a final regression check (run it in the background).
+  `cd tests/integration && perl -e 'alarm 90; exec @ARGV' bundle exec rspec spec/general/setup/portal_spec.rb:42; pkill -f target/release/trmnl-sim`
+  (`ENVS=<env>` or `ENVS=<env>:full` for one device). No full-suite runs for debugging; a
+  full run is for a final regression check (run it in the background).
 - `spec/support/devices.rb` has a `Device` profile per environment (size, inks, chip, battery,
-  button, ...) plus FAMILIES / REPRESENTATIVES. Every group declares the environment it runs:
-  `env: "<env>"`, or `env: :any` for general specs, which run on the device under test
-  (`TRMNL_SIM_DEVICE`, default `trmnl`) and must adapt to its `Device` (use `device_image`,
-  `needs:` / `only_on:` metadata, `match_golden`). Metadata is documented in
-  `spec/support/metadata.rb`; the client library (`TrmnlSim::Simulator`, `MockTrmnl`) is in
-  `tests/integration/lib`. Everything the suite needs lives under tests/integration (it is
-  meant to move to a repository of its own): keep it self-contained, reaching this checkout
-  only through `TrmnlSim::REPO` / `Builds::ROOT` (`TRMNL_SIM_REPO`).
+  button, core or BYOD, ...). Every group declares the environment it runs: `env: "<env>"`
+  (device specs: spec/core/, spec/byod/), or `General.describe` for general specs
+  (spec/general/), which is defined once per listed device and must adapt to its `Device`
+  (`device` / `build` in the group; use `device_image`, `needs:` / `only_on:` metadata,
+  `match_golden`). Metadata is documented in `spec/support/metadata.rb`; the client library
+  (`TrmnlSim::Simulator`, `MockTrmnl`) is in `tests/integration/lib`. Everything the suite
+  needs lives under tests/integration (it is meant to move to a repository of its own): keep
+  it self-contained, reaching this checkout only through `TrmnlSim::REPO` / `Builds::ROOT`
+  (`TRMNL_SIM_REPO`).
 - A test that fails because the firmware is wrong stays in and is marked:
   `known_failure: { "<env>" => "what the firmware does wrong, file:line" }` on the example
-  (or group), or `pending: "..."` with a comment for device-specific specs. Verify the root
+  (or group), or `pending: "..."` with a comment. Verify the root
   cause in the firmware source first. Never weaken an assertion or work around a firmware
   bug in the simulator.
 - A test that fails because the simulator is wrong gets the simulator fixed: general,
@@ -86,6 +84,6 @@ references where relevant.
 ## Adding a board
 
 Add a `BoardSpec` row (or a board module for non-SPI panels), a `Device` in
-`tests/integration/spec/support/devices.rb` (and its family in `FAMILIES`), and a board
-group using the BYOD support (`spec/support/byod.rb`); then run `rake "spec[<env>]"` and
+`tests/integration/spec/support/devices.rb`, and a board group in spec/byod/ using the BYOD
+support (`spec/support/byod.rb`); then run `ENVS=<env>:full bundle exec parallel_rspec` and
 classify every failure as above. Update the README's supported-device tables.

@@ -4,8 +4,8 @@
 # spec group for one onboards it through the captive portal (cached, see SetupCache), then checks
 # what the device reports and what it shows.
 #
-#   RSpec.describe "BYOD SSD16xx boards", parallel: true do
-#     describe "Waveshare397", env: "WAVESHARE_397" do        # skipped if that build is missing
+#   RSpec.describe "BYOD SSD16xx boards" do
+#     describe "Waveshare397", env: "WAVESHARE_397" do        # left out unless ENVS lists it
 #       byod_board name: "Waveshare ESP32-S3 3.97\"", model: "waveshare_397",
 #                  pending: { "shows the served image" => row_bug }
 #       it_behaves_like "an SSD16xx board", row_shift: 1

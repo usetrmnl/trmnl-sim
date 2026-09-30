@@ -24,7 +24,7 @@ panel_layout = { %w[CrowPanel42 m5_paper_color] => small_panel,
 setup_screen_failures = panel_layout.merge(%w[trmnl_gen2 trmnl_gen2_4clr] => c5_ap_name)
 timed_out_failures = panel_layout.merge("seeed_xiao_esp32c3" => FirmwareBugs::XIAO_C3_BUTTON)
 
-RSpec.describe "Setup mode", env: :any do
+General.describe "Setup mode" do
   # Where the screens' texts are (display_show_msg in the firmware's display.cpp): the version
   # line at (40, 48) left of the top-right QR code, the portal's texts at fixed heights; centred.
   # On the OG's 800x480 panel: body [0, 56, 800, 424], top_right [320, 0, 480, 56], ssid_line
@@ -68,7 +68,7 @@ RSpec.describe "Setup mode", env: :any do
 
   describe "PortalTimeout",
            skip_if: :shipment,
-           why: "the portal times out back into shipment mode (devices/trmnl_x/trmnl_x_spec PortalTimeout)" do
+           why: "the portal times out back into shipment mode (core/trmnl_x/trmnl_x_spec PortalTimeout)" do
     it "unattended portal times out and sleeps", known_failure: timed_out_failures do
       fresh_device do |s|
         s.set_portal_client(false) # nobody joins, so turbo can run to the timeout

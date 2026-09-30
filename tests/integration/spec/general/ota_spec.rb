@@ -2,10 +2,10 @@
 
 # Firmware updates that go wrong on the device under test: no URL, the download failing or cut
 # short, a file that isn't firmware (the TRMNL X's updates through its modem:
-# devices/trmnl_x/ota_spec.rb).
+# core/trmnl_x/ota_spec.rb).
 
-RSpec.describe "OTA updates", env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "OTA updates" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
   include_context "OTA updates"
 
   describe "OgUpdates" do

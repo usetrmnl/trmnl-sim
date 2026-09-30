@@ -39,17 +39,17 @@ module FirmwareBugs
     "(src/display.cpp:1947 writePlane()) and asks for a partial refresh (display.cpp:1949); a " \
     "partial refresh is differential against the old-image RAM, which after the full or fast " \
     "refresh at boot doesn't hold what's on screen, so the BMP never appears " \
-    "(devices/byod/ssd16xx_spec SsdBoard \"bmp after a fast refresh\")"
+    "(byod/ssd16xx_spec SsdBoard \"bmp after a fast refresh\")"
   ONE_BIT_PNG_PANEL_TYPE =
     "firmware: png_to_epd() calls bbep.setPanelType(dpList[...].OneBit) for 1-bit PNGs " \
     "(src/display.cpp:1764) on boards brought up with bbep.begin(<product>), passing a product " \
     "number as a panel type: the image is drawn for another panel and never shows " \
-    "(devices/byod/ssd16xx_spec CrowPanel42 \"shows the served image\")"
+    "(byod/ssd16xx_spec CrowPanel42 \"shows the served image\")"
   GEN2_4CLR_IMAGE =
     "firmware: the trmnl_gen2_4clr env (platformio.ini:910) defines BOARD_TRMNL_GEN2 but not " \
     "BOARD_TRMNL_4CLR, which the 4-color image path is compiled under (src/display.cpp:1752): " \
     "images go out as two 1-bit planes the BWRY panel reads as 2 bits per pixel, so they never " \
-    "show right (devices/og_gen2_spec OgGen2Bwry)"
+    "show right (core/og_gen2_spec OgGen2Bwry)"
   BMP_FLIP_OVERFLOW =
     "firmware: display_show_image() flips an uncompressed BMP with the panel's dimensions " \
     "(src/display.cpp:1940 flip_image(image_buffer+62, bbep.width(), bbep.height())): on a " \
@@ -58,7 +58,7 @@ module FirmwareBugs
   EP397_ROW_SHIFT =
     "firmware (bb_epaper 2.1.9, the Waveshare 3.97\"'s): EP397_800x480's init sequences make the " \
     "RAM Y address count down from 479 but start its counter at 0, so everything shows one row " \
-    "too high, its top row at the bottom (devices/byod/ssd16xx_spec Waveshare397)"
+    "too high, its top row at the bottom (byod/ssd16xx_spec Waveshare397)"
   XIAO_C3_BUTTON_WAKE =
     "firmware: the XIAO ESP32-C3's device_list[] row puts the button on GPIO 9 (src/display.cpp:56), " \
     "and goto sleep enables it as a deep-sleep wakeup (src/bl.cpp:2303), which the C3 only has on " \

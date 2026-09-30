@@ -20,10 +20,10 @@ class ProvisionedDevice
 
   attr_reader :build, :panel_size, :mock, :cache, :host_ports
 
-  # `build`: default, the device under test's. `panel_size`: serve the default image as a 1-bit
+  # `build`: the firmware (a group's `build`). `panel_size`: serve the default image as a 1-bit
   # PNG of that size (as the TRMNL server does for other panels) instead of the OG's 800x480
   # BMP; default, what the build's device takes (see Device#default_bmp?).
-  def initialize(build = Integration.build, panel_size: :auto)
+  def initialize(build, panel_size: :auto)
     @build = build
     if panel_size == :auto
       device = Builds.device_of(build)

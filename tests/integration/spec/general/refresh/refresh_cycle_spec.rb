@@ -5,8 +5,8 @@
 x4_battery = "device_list[] (display.cpp:51) gives the X4 batt_pin 0xff though its divider is on GPIO0 " \
              "(config.h:117), so it always reports 0 V"
 
-RSpec.describe "Refresh cycle", env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "Refresh cycle" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   describe "RefreshCycle" do
     before { dev.reset }

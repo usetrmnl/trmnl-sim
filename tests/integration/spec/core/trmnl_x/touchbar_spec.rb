@@ -3,7 +3,7 @@
 # The TRMNL X touch bar: browsing cached images, holds, the WiFi-reset and power-off
 # confirmations, and slide mode (swipes; flicks aren't enabled).
 
-RSpec.describe "TRMNL X touch bar", :parallel, env: "TRMNL_X" do
+RSpec.describe "TRMNL X touch bar", env: "TRMNL_X" do
   fixture(:shipped) { TrmnlX::ShippedX.new }
   fixture(:dev) { TrmnlX::ProvisionedX.new(shipped) }
 

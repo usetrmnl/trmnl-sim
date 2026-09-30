@@ -178,7 +178,7 @@ bin/dev        # build, then run the OG build from ../trmnl-firmware
 bin/dev bwry   # ... the trmnl_4clr build;  bin/dev x  for TRMNL_X, bin/dev gen2 for trmnl_gen2
 bin/dev x --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy, unit tests, and the integration specs' lint and load check
-rake spec      # integration tests (rake "spec[portal]" for a subset; rake -T lists the tasks)
+rake spec      # integration tests in parallel (see Integration testing; rake -T lists the tasks)
 ```
 
 Or by hand:
@@ -390,50 +390,50 @@ is refused too; try again when it is idle.
 
 ## Integration testing
 
-The integration tests' Rake tasks live with the suite ([tests/integration/Rakefile](tests/integration/Rakefile));
-the repository's Rakefile imports them, so they run from the root too (`rake -T` lists them).
-A task's argument is one string, split like a shell command line (quote the task in zsh).
-Specs are in [spec/general](tests/integration/spec/general) (on the device under test, by
-area) and [spec/devices](tests/integration/spec/devices) (per device family); name a file or
-directory by its path under spec/, or by its last part when that is unique (`portal`,
-`byod`, `trmnl_x/images`):
+The integration tests ([tests/integration](tests/integration)) are plain RSpec, run from that
+directory; `ENVS` says which devices a run covers:
 
 ```sh
-rake spec                          # build the sim (rake sim), run the suite
-rake firmware spec                 # also `pio run` the TRMNL devices' envs first
-rake "spec[refresh_cycle -e 'wakes and refreshes on a button press']"
-rake "spec[devices/trmnl_x]"       # only the TRMNL X specs (spec/devices/trmnl_x/)
-rake check                         # rubocop, and every spec loads (no firmware needed)
+cd tests/integration
+bundle exec rspec                                     # the default ENVS, one process
+bundle exec parallel_rspec                            # the same, a process per CPU
+bundle exec rspec spec/general/setup/portal_spec.rb:42
+bundle exec rspec spec/general/refresh -e 'wakes and refreshes on a button press'
+ENVS="xteink_x4:full" bundle exec parallel_rspec      # everything for the Xteink X4
 ```
 
-How much runs:
-
-| Command | Runs |
-|---|---|
-| `rake spec` | every device's own tests; the general tests (setup, portal, WiFi, HTTP, images, errors, faults, OTA, save points, special functions...) in full on the TRMNL OG; and on every other device a smoke test per area (the examples tagged `:smoke`): portal, onboarding, identity, battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save point, a special function |
-| `rake spec:comprehensive` | the same, but the general tests in full on one device per family (`FAMILIES` in [devices.rb](tests/integration/spec/support/devices.rb): devices sharing chip, panel controller and inks, e.g. ESP32-S3 + SSD16xx; `rake spec:envs` marks them with `*`) |
-| `rake spec:exhaustive` | the general tests in full on every device |
-| `rake "spec[<env>]"` | everything for one device: its own tests and all the general tests |
-
-`rake "spec:plan[...]"` prints the units (rspec processes) `rake "spec[...]"` would run.
-Examples marked `slow:` (e.g. the screen wiper, 100 full refreshes) are skipped unless
-`--slow` is given; `-j N` runs at most N units at once, `--no-cache` redoes the factory flow
-and onboarding (as CI does). Anything else starting with `-` goes to rspec:
-`rake "spec[portal -e 'wrong password']"`.
-
-To test one device, name its PlatformIO environment:
+`ENVS` is a list (spaces or commas) of PlatformIO environments (case-insensitive) or families,
+`core` (the TRMNL-branded devices: OG, BWRY, X, and the gen-2 OG and BWRY), `byod` (every
+other board) and `all`, each optionally suffixed `:full`. A listed device runs its own specs
+and the general specs' `:smoke` examples (one per area: portal, onboarding, identity,
+battery, image, timer and button wake, OTA, HTTPS, a server error, an error screen, a save
+point, a special function); with `:full`, all the general specs (setup, portal, WiFi, HTTP,
+images, errors, faults, OTA, save points, special functions...). The default is
 
 ```sh
-rake "spec[xteink_x4]"                        # every spec that runs the xteink_x4 build
-rake "spec[TRMNL_X trmnl_gen2]"               # several environments (names are case-insensitive)
-rake "firmware[xteink_x4]" "spec[xteink_x4]"  # pio run -e xteink_x4 first, then its specs
-rake spec:envs                                # the environments with specs, example counts, builds present
+ENVS="trmnl:full TRMNL_X trmnl_4clr trmnl_gen2 trmnl_gen2_4clr"
 ```
 
-Every group declares the environment whose build it runs: `env: "<env>"` metadata on the
-group, or on its file's top-level group (`env: :any` for the general tests). The runner
-refuses to load a spec whose examples lack one, and fails up front if the requested
-environment hasn't been built.
+and `ENVS=all:full` runs everything everywhere. Examples of devices not listed are left out,
+as are those of a listed device whose build is missing (with a warning; under CI the run
+fails instead). Examples marked `slow:` (e.g. the screen wiper, 100 full refreshes) run with
+`TRMNL_SIM_SLOW=1`.
+
+The suite's Rake tasks ([tests/integration/Rakefile](tests/integration/Rakefile)) are
+imported by the repository's Rakefile, so they run from the root too (`rake -T`); a task's
+argument is one string, split like a shell command line (quote the task in zsh):
+
+```sh
+rake spec                          # build the sim (rake sim), then parallel_rspec
+rake "spec[-n 4 spec/core]"        # parallel_rspec's arguments pass through
+rake "firmware[xteink_x4]"         # pio run -e xteink_x4 (default: the core devices)
+rake check                         # rubocop, and every spec loads for every device (no firmware needed)
+```
+
+Specs are in [spec/general](tests/integration/spec/general) (every device, by area; each
+`General.describe` group is defined once per listed device), [spec/core](tests/integration/spec/core)
+(the core devices' own) and [spec/byod](tests/integration/spec/byod) (the BYOD boards').
+parallel_rspec balances files by the runtimes it records in `tmp/parallel_runtime_rspec.log`.
 
 The suite ([tests/integration/spec](tests/integration/spec), RSpec) runs in about two minutes and needs
 no internet. For the TRMNL OG it covers:
@@ -459,19 +459,19 @@ no internet. For the TRMNL OG it covers:
   button wake, no re-onboarding), in-memory slots, power-off save points, and refusing
   other builds and bad files.
 
-For the TRMNL BWRY ([trmnl_bwry_spec.rb](tests/integration/spec/devices/trmnl_bwry_spec.rb); skipped if
+For the TRMNL BWRY ([trmnl_bwry_spec.rb](tests/integration/spec/core/trmnl_bwry_spec.rb); skipped if
 there is no `trmnl_4clr` build): the device identity (`Model: og_4clr`), a 4-color image
 rendered exactly (compared as RGB), the panel's long refresh, and a save point keeping the
 color image.
 
-For the Seeed reTerminal E1002 ([reterminal_e1002_spec.rb](tests/integration/spec/devices/reterminal_e1002_spec.rb);
+For the Seeed reTerminal E1002 ([reterminal_e1002_spec.rb](tests/integration/spec/byod/reterminal_e1002_spec.rb);
 skipped if there is no `seeed_reTerminal_E1002` build): the setup screen (the OG's
 goldens), onboarding, the device identity (`Model: reterminal_e1002`) and switched battery
 divider, every PNG pixel format (1/2/4/8-bit gray and palette, truecolor with and without
 alpha) reduced to the six inks exactly as the firmware does, the long refresh, button wake,
 and a save point keeping the color image.
 
-For the gen-2 OG and BWRY ([og_gen2_spec.rb](tests/integration/spec/devices/og_gen2_spec.rb), a class
+For the gen-2 OG and BWRY ([og_gen2_spec.rb](tests/integration/spec/core/og_gen2_spec.rb), a class
 each; skipped without a `trmnl_gen2` / `trmnl_gen2_4clr` build in `TRMNL_FIRMWARE_BUILDS`):
 the BYOD checks (onboarding through the portal, identity headers, a served image), the
 fuel gauge's voltage, `USB-Connected`/`Battery-Charging` from the charger lines, timer and
@@ -479,22 +479,22 @@ button wake, deep-sleep and power-off save points, onboarding on 5 GHz with the 
 radio (`WiFi-Band`), HTTPS on the crypto accelerators, and memcheck and coverage runs; the
 BWRY's colors and the long refresh (its image bug is an expected failure).
 
-For the Sensoria C5 ([parallel_spec.rb](tests/integration/spec/devices/byod/parallel_spec.rb)): the
+For the Sensoria C5 ([parallel_spec.rb](tests/integration/spec/byod/parallel_spec.rb)): the
 setup screen, onboarding and a 16-gray ramp on its 1280×720 panel, and its reboot on the
 way to sleep (an expected failure, see above).
 
-For the BYOD boards ([uc8179_spec.rb](tests/integration/spec/devices/byod/uc8179_spec.rb),
-[uc81xx_spec.rb](tests/integration/spec/devices/byod/uc81xx_spec.rb),
-[ssd16xx_spec.rb](tests/integration/spec/devices/byod/ssd16xx_spec.rb),
-[m5_spec.rb](tests/integration/spec/devices/byod/m5_spec.rb),
-[parallel_spec.rb](tests/integration/spec/devices/byod/parallel_spec.rb); a class per board, skipped
+For the BYOD boards ([uc8179_spec.rb](tests/integration/spec/byod/uc8179_spec.rb),
+[uc81xx_spec.rb](tests/integration/spec/byod/uc81xx_spec.rb),
+[ssd16xx_spec.rb](tests/integration/spec/byod/ssd16xx_spec.rb),
+[m5_spec.rb](tests/integration/spec/byod/m5_spec.rb),
+[parallel_spec.rb](tests/integration/spec/byod/parallel_spec.rb); a class per board, skipped
 if its env isn't built): every board onboards through the portal and is checked for its
 `Model`/`Width`/`Height`/`Battery-Voltage` headers and a served image shown exactly
 ([byod.rb](tests/integration/spec/support/byod.rb)); plus per board 4-gray and 16-gray
 images, partial refreshes, button wake, battery from the gauge or PMIC, colors, each E1004
 controller's half, and the firmware bugs listed [above](#what-is-simulated).
 
-For the TRMNL X ([trmnl_x_spec.rb](tests/integration/spec/devices/trmnl_x/trmnl_x_spec.rb); skipped if there is
+For the TRMNL X ([trmnl_x_spec.rb](tests/integration/spec/core/trmnl_x/trmnl_x_spec.rb); skipped if there is
 no `TRMNL_X` build):
 
 - the factory flow: modem flashing, then shipment mode until docked;
@@ -507,13 +507,13 @@ no `TRMNL_X` build):
 - sleep duration;
 - a center tap waking the device (`Update-Source: EXT0`);
 - a left tap showing the previous cached image without touching the network;
-- the touch bar ([touchbar_spec.rb](tests/integration/spec/devices/trmnl_x/touchbar_spec.rb)): browsing with
+- the touch bar ([touchbar_spec.rb](tests/integration/spec/core/trmnl_x/touchbar_spec.rb)): browsing with
   taps, holds and (slide mode) swipes, the WiFi-reset and power-off confirmations, and
   switching between tap and slide mode;
 - a save point restored in a new simulator: identical screen, dock state, and a touch wake
   refreshing over 5 GHz.
 
-`rake "spec[TRMNL_X]"` also runs the general tests on the X (onboarded on 2.4 GHz). Their
+The general tests run on the X too (onboarded on 2.4 GHz; all of them with `ENVS=TRMNL_X:full`). Their
 factory-fresh device is an *unboxed* X (shipped, then docked once: it restarted into the
 setup portal; `TrmnlX.unboxed`), and their button presses are its touch bar gestures
 (`TrmnlX::XSim`): a short press is a tap in the middle, a 5 s press the WiFi reset (both
@@ -523,7 +523,7 @@ what the X doesn't have (factory QA, sensors, Panel-Rev). Its goldens are in
 [golden/TRMNL_X](tests/integration/golden/TRMNL_X) (`Golden::REGIONS`).
 
 Fault injection ([faults_spec.rb](tests/integration/spec/general/faults_spec.rb) on the device under test,
-[faults_spec.rb](tests/integration/spec/devices/trmnl_x/faults_spec.rb) on the X): HTTP 500 and malformed
+[faults_spec.rb](tests/integration/spec/core/trmnl_x/faults_spec.rb) on the X): HTTP 500 and malformed
 JSON from `/api/display`; truncated, reset and stalled image downloads (also on the X's
 modem path); slow, high-latency and lossy links; DNS failure; an access point without
 internet; power loss mid-write in NVS (torn pages), in otadata and during an OTA (the old
@@ -539,7 +539,9 @@ unresponsive modem.
 | `TRMNL_E1002_BUILD` | reTerminal E1002 build dir (default `../trmnl-firmware/.pio/build/seeed_reTerminal_E1002`) |
 | `TRMNL_FIRMWARE_BUILDS` | Where the BYOD and gen-2 boards' builds are, one directory per env (default `../trmnl-firmware/.pio/build`) |
 | `TRMNL_SIM_REALTIME=1` | Run the tests without turbo |
-| `TRMNL_SIM_DEVICE=ENV` | The device the general tests run on with plain `bundle exec rspec` (`rake spec` sets it per unit) |
+| `ENVS` | The devices a run covers (see above; default `trmnl:full TRMNL_X trmnl_4clr trmnl_gen2 trmnl_gen2_4clr`) |
+| `TRMNL_SIM_SLOW=1` | Also run the examples marked `slow:` |
+| `TRMNL_SPEC_NO_CACHE=1` | Build the devices the specs start from (factory flow, onboarding) afresh, as CI does |
 | `TRMNL_SIM_UPDATE_GOLDEN=1` | Rewrite golden screenshots from this run |
 | `TRMNL_SIM_ARTIFACTS=DIR` | Save every simulator's log and final screen here |
 | `TRMNL_SIM_MEMCHECK=1` | Run every simulator with [`--memcheck=halt`](#memory-checking); an example fails on any memory error |
@@ -550,12 +552,12 @@ unresponsive modem.
 
 ### Writing tests
 
-A spec file (`tests/integration/spec/<area>_spec.rb`) has one top-level group, with the
-environment it runs as metadata, and a nested group per scenario:
+A spec file has one top-level group, with the environment it runs as metadata (a general
+one: `General.describe`, a group per listed device), and a nested group per scenario:
 
 ```ruby
-RSpec.describe "Refresh cycle", env: :any do               # general: the device under test
-  fixture(:dev) { ProvisionedDevice.new }                  # onboarded once (cached), shared
+General.describe "Refresh cycle" do                        # general: a group per listed device
+  fixture(:dev) { ProvisionedDevice.new(build) }           # onboarded once (cached), shared
   before { dev.reset }                                     # forget requests, faults, queued answers
 
   describe "RefreshCycle" do
@@ -580,14 +582,13 @@ end
 ```
 
 Metadata ([metadata.rb](tests/integration/spec/support/metadata.rb)) says where examples
-apply: `env: "<env>"` (skipped when that build is missing) or `env: :any`; `needs: :button`
-(a `Device` feature of the device under test), `skip_if: :shipment, why:`,
-`only_on: %w[trmnl], why:`, `needs_build: "trmnl_4clr"`, `slow: "why"`, `:smoke` (one per
-area, run on every device by default), and for firmware bugs `known_failure: { env =>
+apply: `env: "<env>"` (left out unless `ENVS` lists it; `General.describe` sets it per
+device); `needs: :button` (a `Device` feature of the group's device), `skip_if: :shipment,
+why:`, `only_on: %w[trmnl], why:`, `needs_build: "trmnl_4clr"`, `slow: "why"`, `:smoke`
+(one per area, run on every listed device), and for firmware bugs `known_failure: { env =>
 reason }` (expected to fail on those devices) or `pending: reason` (everywhere). A pending
-example that passes fails the run, so a firmware fix shows up. `parallel: true` on a file's
-top-level group lets the runner give each nested group its own process (its fixtures are
-built lazily). Helpers and matchers: `device`, `build`, `sim(...)`, `device_image`,
+example that passes fails the run, so a firmware fix shows up. Fixtures are built lazily, so
+running one nested group only builds what it uses. Helpers and matchers: `device`, `build`, `sim(...)`, `device_image`,
 `device_number`, `panel_number`, `device_mock`, `text_lines`, `show_image`, `match_golden`,
 `match_screenshot`, `show_message`, `have_header`; see
 [spec/support](tests/integration/spec/support).
@@ -730,7 +731,7 @@ mid-run, e.g. to see what one step of a test covers. After an OTA to another bui
 (`--elf`), both builds' lines are reported, merged by file and line.
 
 `TRMNL_SIM_COVERAGE=DIR rake spec` makes every simulator the tests start write
-`DIR/<test>-*.info`. At the end, the runner merges them into `DIR/merged.info` and an
+`DIR/<test>-*.info`. At the end (of all of parallel_rspec's processes), they are merged into `DIR/merged.info` and an
 HTML report in `DIR/html/`, and prints the coverage of the firmware's `src/` and
 `lib/`. `TrmnlSim::Lcov` ([lcov.rb](tests/integration/lib/trmnl_sim/lcov.rb), standard
 library only) does the merging and reporting, also on its own:

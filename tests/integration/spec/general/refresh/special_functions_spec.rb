@@ -28,8 +28,8 @@ lost_double_click = {
 # Every device whose server default image is a BMP.
 bmp_screens = { Devices::ALL.select(&:default_bmp?).map(&:env) => bmp_not_cached }
 
-RSpec.describe "Special functions", :parallel, env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "Special functions" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   before { dev.reset }
 

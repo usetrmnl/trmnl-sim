@@ -122,6 +122,12 @@ jobs:
       - name: Build firmware (TRMNL_X)
         run: pio run -d trmnl-firmware -e TRMNL_X -j 4
 
+      - name: Build firmware (trmnl_gen2)
+        run: pio run -d trmnl-firmware -e trmnl_gen2 -j 4
+
+      - name: Build firmware (trmnl_gen2_4clr)
+        run: pio run -d trmnl-firmware -e trmnl_gen2_4clr -j 4
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -139,10 +145,11 @@ jobs:
           TRMNL_BWRY_BUILD: ${{ github.workspace }}/trmnl-firmware/.pio/build/trmnl_4clr
           TRMNL_SIM_ARTIFACTS: ${{ github.workspace }}/sim-artifacts
           TRMNL_SIM_COVERAGE: ${{ github.workspace }}/sim-coverage
-          FORCE_COLOR: "1"
+          # every setup flow in full; the default ENVS (the core devices, built above)
+          TRMNL_SPEC_NO_CACHE: "1"
           # the headless build above (rake spec would otherwise build the default one)
           TRMNL_SIM_BIN: ${{ github.workspace }}/trmnl-sim/target/release/trmnl-sim
-        run: bundle exec rake "spec[--no-cache]"
+        run: bundle exec rake spec
 
       - name: Collect screen diffs
         if: failure()

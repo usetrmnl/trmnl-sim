@@ -11,7 +11,7 @@ hues = lambda do |x, y|
   y < 240 ? [t, 128, 255 - t] : [t, 200, 40]
 end
 
-RSpec.describe "reTerminal E1002", :parallel, env: "seeed_reTerminal_E1002" do
+RSpec.describe "reTerminal E1002", env: "seeed_reTerminal_E1002" do
   fixture(:dev) { ProvisionedDevice.new(Builds.for_env("seeed_reTerminal_E1002")) }
 
   let(:images) { TrmnlSim::Images }

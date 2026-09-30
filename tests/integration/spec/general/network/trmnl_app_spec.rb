@@ -2,7 +2,7 @@
 
 # The device under test against the real trmnl.app API (opt-in: TRMNL_SIM_NETWORK=1).
 
-RSpec.describe "TRMNL app", env: :any do
+General.describe "TRMNL app" do
   describe "TrmnlApp", :network do
     it "shows the unregistered device message" do
       sim(erase: true) do |s|

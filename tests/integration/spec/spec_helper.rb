@@ -1,21 +1,45 @@
 # frozen_string_literal: true
 
-# Integration tests: real firmware builds in the simulator against mock servers. Run them with
-# `rake spec` (see the Rakefile); `bundle exec rspec <file>` works too, for the device under test
-# (TRMNL_SIM_DEVICE, default the OG).
+# Integration tests: real firmware builds in the simulator against mock servers.
+#
+#   bundle exec rspec                      # the devices ENVS lists (see spec/support/selection.rb)
+#   bundle exec parallel_rspec             # the same, a process per CPU (rake spec)
+#   ENVS=trmnl:full bundle exec rspec spec/general/setup/portal_spec.rb:42
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+require "parallel_tests"
 require "trmnl_sim"
 
-%w[devices builds firmware_bugs setup_cache sims provisioned_device trmnl_x integration screen flash golden
-   matchers metadata fixtures].each { |f| require_relative "support/#{f}" }
+%w[devices builds selection firmware_bugs setup_cache sims provisioned_device trmnl_x integration general screen
+   flash golden matchers metadata fixtures].each { |f| require_relative "support/#{f}" }
 Dir[File.join(__dir__, "support/*.rb")].each { |f| require f }
 
 RSpec.configure do |config|
+  config.extend Integration::DeviceContext
   config.include Integration::Helpers
   config.include Matchers
   config.extend Fixtures
   Metadata.install(config)
+
+  config.before(:suite) do
+    unless File.executable?(TrmnlSim.binary)
+      abort "no simulator at #{TrmnlSim.binary}: build it (rake sim, or cargo build --release) or set TRMNL_SIM_BIN"
+    end
+    missing = Selection.missing
+    if missing.any?
+      message = "ENVS lists devices whose build is missing; their examples are left out: " \
+                "#{missing.map { Builds.missing(_1.env) }.join('; ')}"
+      abort message if ENV["CI"]
+      warn message if ParallelTests.first_process?
+    end
+  end
+
+  config.after(:suite) do
+    if (dir = CoverageReport.dir) && ParallelTests.first_process?
+      ParallelTests.wait_for_other_processes_to_finish
+      CoverageReport.print(dir)
+    end
+  end
 
   config.expect_with :rspec do |c|
     c.include_chain_clauses_in_custom_matcher_descriptions = true

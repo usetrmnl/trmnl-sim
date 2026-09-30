@@ -4,8 +4,8 @@
 # --sensor): the readings go to the server in the SENSORS header of /api/display. Only boards
 # with sensor pins in the firmware's device_list[] (Device#sensors) look for them.
 
-RSpec.describe "Sensors", env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "Sensors" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   describe "Sensors" do
     before { dev.reset }

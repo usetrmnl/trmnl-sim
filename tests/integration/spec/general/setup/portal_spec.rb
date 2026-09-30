@@ -16,8 +16,8 @@ c5_ntp_forever = { %w[trmnl_gen2 trmnl_gen2_4clr] =>
 # The XIAO C3's button never wakes it (add_network() wakes it with a press).
 xiao_c3_button = { "seeed_xiao_esp32c3" => FirmwareBugs::XIAO_C3_BUTTON }
 
-RSpec.describe "Portal", :parallel, env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "Portal" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   # GET from the portal without following redirects: [status, headers (lowercase names), body].
   # Like Python's http.client, it asks for no content coding (so a gzip body stays gzipped).
@@ -170,7 +170,7 @@ RSpec.describe "Portal", :parallel, env: :any do
 
   # A join that fails leaves the portal up, so the details can be corrected.
   describe "FailedJoin", skip_if: :shipment, why: "its portal comes from shipment mode, and 5 GHz joins go through " \
-                                                  "the modem (devices/trmnl_x/trmnl_x_spec FailedJoin)" do
+                                                  "the modem (core/trmnl_x/trmnl_x_spec FailedJoin)" do
     # Submit the setup page (to a server that doesn't matter) with `fields` changed; returns
     # the console cursor from before it.
     def join(s, **fields)

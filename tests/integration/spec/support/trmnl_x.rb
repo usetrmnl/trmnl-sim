@@ -5,7 +5,7 @@ require "tempfile"
 require "tmpdir"
 
 # Shared fixtures for the TRMNL X tests (ESP32-S3, 1872x1404 panel, C5 modem), and what makes
-# the general tests (env: :any) run on it (see XSim and TrmnlX.unboxed).
+# the general tests (General.describe) run on it (see XSim and TrmnlX.unboxed).
 module TrmnlX
   MAC = "D8:3B:DA:00:00:01"
   SSID_24 = "TRMNL-Sim"

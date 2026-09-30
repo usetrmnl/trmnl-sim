@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-# The devices the integration tests know, by PlatformIO environment, and the device under test.
+# The devices the integration tests know, by PlatformIO environment: the TRMNL-branded core
+# devices and the BYOD boards.
 #
-# General tests (groups with `env: :any`: setup, portal, WiFi, HTTP, errors, faults...) run
-# against whichever device is under test: TRMNL_SIM_DEVICE=<env> (the runner sets it for
-# `rake "spec[<env>]"`), else the TRMNL OG. They read what they need to know about it from its
+# General tests (General.describe: setup, portal, WiFi, HTTP, errors, faults...) run on every
+# device the run covers (ENVS, see Selection). They read what they need to know about it from its
 # `Device` (panel size, inks, button, battery...), skip what doesn't apply (`needs:`, `only_on:`
 # metadata), and `known_failure:` metadata marks what a device's firmware gets wrong.
 module Devices
@@ -44,11 +44,13 @@ module Devices
       battery_tracks: true,
       # Why the general tests can't run on it (nil: they can).
       general: nil,
+      # A TRMNL-branded device (else a BYOD board): the default run covers the core devices.
+      core: false,
       # A BOARD_HAS_PSRAM build: takes images up to 750000 bytes instead of 90000 (config.h).
       psram: true
     }.freeze
     FEATURES = %i[button double_click soft_reset_press shipment psram_frame_buffers panel_rev sensors
-                  battery_tracks psram].freeze
+                  battery_tracks psram core].freeze
 
     attr_reader(*ATTRIBUTES.keys)
 
@@ -95,11 +97,13 @@ module Devices
   end
 
   ALL = [
-    Device.new("trmnl", "og", "TRMNL OG", chip: "esp32c3", panel_rev: true, sensors: true, psram: false),
-    Device.new("trmnl_4clr", "og_4clr", "TRMNL BWRY", inks: "bwry", chip: "esp32c3", sensors: true, psram: false),
+    Device.new("trmnl", "og", "TRMNL OG", core: true, chip: "esp32c3", panel_rev: true, sensors: true, psram: false),
+    Device.new("trmnl_4clr", "og_4clr", "TRMNL BWRY",
+               core: true, inks: "bwry", chip: "esp32c3", sensors: true, psram: false),
     Device.new("TRMNL_X", "x", "TRMNL X",
-               size: [1872, 1404], inks: "gray16", battery_v: nil, double_click: false, soft_reset_press: false,
-               shipment: true, app_slot: 0x20000, ota_slot: 0x320000, psram_frame_buffers: true),
+               core: true, size: [1872, 1404], inks: "gray16", battery_v: nil, double_click: false,
+               soft_reset_press: false, shipment: true, app_slot: 0x20000, ota_slot: 0x320000,
+               psram_frame_buffers: true),
     Device.new("seeed_reTerminal_E1002", "reterminal_e1002", "reTerminal E1002", inks: "spectra6"),
     Device.new("seeed_xiao_esp32c3", "seeed_esp32c3", "XIAO ESP32-C3 + 7.5\" panel",
                chip: "esp32c3", battery_v: 0.0, panel_rev: true, battery_tracks: false, psram: false),
@@ -126,38 +130,19 @@ module Devices
                size: [960, 540], inks: "gray16", sensors: true),
     Device.new("TRMNL_X_SENSORIAC5", "sensoria_c5", "Sensoria C5",
                size: [1280, 720], inks: "gray16", chip: "esp32c5", battery_v: 0.0, battery_tracks: false, sensors: true,
-               general: "the firmware reboots instead of sleeping (see devices/byod/parallel_spec SensoriaC5)"),
+               general: "the firmware reboots instead of sleeping (see byod/parallel_spec SensoriaC5)"),
     Device.new("trmnl_steam", "trmnl_steam", "TRMNL Steam",
                size: [648, 480], chip: "esp32c3", sensors: true, psram: false,
-               general: "the firmware never boots (see devices/byod/uc81xx_spec TrmnlSteamBoots)"),
-    Device.new("trmnl_gen2", "og_gen2", "TRMNL OG gen 2", chip: "esp32c5", panel_rev: true, sensors: true),
-    Device.new("trmnl_gen2_4clr", "og_gen2_4clr", "TRMNL BWRY gen 2", inks: "bwry", chip: "esp32c5", sensors: true)
+               general: "the firmware never boots (see byod/uc81xx_spec TrmnlSteamBoots)"),
+    Device.new("trmnl_gen2", "og_gen2", "TRMNL OG gen 2", core: true, chip: "esp32c5", panel_rev: true, sensors: true),
+    Device.new("trmnl_gen2_4clr", "og_gen2_4clr", "TRMNL BWRY gen 2",
+               core: true, inks: "bwry", chip: "esp32c5", sensors: true)
   ].freeze
 
   BY_ENV = ALL.to_h { |d| [d.env, d] }.freeze
 
-  # ---- how much of the general suite runs where (the runner's tiers) ---------------------------------
-  #
-  # Devices share firmware code paths by chip, panel controller and inks. `rake spec` runs every
-  # device's own tests, the full general suite on the OG, and the examples tagged :smoke (one
-  # per area) on every other device; `--comprehensive` runs the full general suite on one
-  # representative per family as well; `--exhaustive`, on every device.
-  FAMILIES = {
-    # family: its devices, the representative first
-    "ESP32-C3, UC81xx, black and white" => %w[trmnl seeed_xiao_esp32c3 xteink_x3 trmnl_steam],
-    "ESP32-C3, UC81xx, 4-color" => %w[trmnl_4clr],
-    "ESP32-C3, SSD16xx" => %w[xteink_x4],
-    "ESP32-S3, UC81xx, black and white" => %w[seeed_reTerminal_E1001 seeed_xiao_esp32s3 TRMNL_7inch5_OG_DIY_Kit
-                                              TRMNL_7inch5_OG_DIY_Kit_3CLR],
-    "ESP32-S3, UC81xx, Spectra 6" => %w[seeed_reTerminal_E1002 TRMNL_7inch5_OG_DIY_Kit_6CLR seeed_reTerminal_E1004
-                                        m5_paper_color],
-    "ESP32-S3, SSD16xx" => %w[CrowPanel42 TRMNL_4inch26_DIY_Kit WAVESHARE_397 seeed_sticky m5_paper_mono],
-    "ESP32-S3, parallel, TRMNL X" => %w[TRMNL_X],
-    "ESP32-S3, parallel, BYOD" => %w[TRMNL_X_PAPERS3 TRMNL_X_LILYGO_T5PRO],
-    "ESP32-C5" => %w[trmnl_gen2 trmnl_gen2_4clr TRMNL_X_SENSORIAC5]
-  }.freeze
-
-  REPRESENTATIVES = FAMILIES.values.map(&:first).freeze
+  CORE = ALL.select(&:core).freeze
+  BYOD = (ALL - CORE).freeze
 
   module_function
 
@@ -169,7 +154,4 @@ module Devices
   end
 
   def known?(env) = BY_ENV.key?(env.to_s)
-
-  # The device the general tests run on: TRMNL_SIM_DEVICE, else the TRMNL OG.
-  def under_test = fetch(ENV.fetch("TRMNL_SIM_DEVICE", "").then { |e| e.empty? ? "trmnl" : e })
 end

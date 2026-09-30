@@ -6,7 +6,7 @@ require "tmpdir"
 # Firmware code coverage (`--coverage`): lcov mid-run over the control API and at exit, and
 # merging tracefiles (TrmnlSim::Lcov, `rake coverage`).
 
-RSpec.describe "Coverage", env: :any do
+General.describe "Coverage" do
   describe "Coverage" do
     around do |example|
       Dir.mktmpdir("trmnl-cov-") do |dir|

@@ -53,9 +53,6 @@ RSpec/IncludeExamples:
 # Groups share expensive simulated devices (see spec/support/fixtures.rb).
 RSpec/BeforeAfterAll:
   Enabled: false
-# The runner's commands return whether they succeeded; they aren't predicates.
-Naming/PredicateMethod:
-  Exclude: [runner/runner.rb]
 RSpec:
   Language:
     Includes:

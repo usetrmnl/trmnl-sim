@@ -22,7 +22,7 @@ module TrmnlSim
   # source colored by coverage; sources are read from `root`). `genhtml` from lcov also reads
   # the merged tracefile, if it is installed.
   module Lcov
-    # What the integration test runner names its merge of a coverage directory.
+    # What the integration tests name their merge of a coverage directory.
     MERGED = "merged.info"
 
     # A source file's coverage: {line => hits} and {function name => [line, hits]}.

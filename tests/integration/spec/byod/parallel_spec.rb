@@ -29,7 +29,7 @@ setup_text = "display_show_msg2(WIFI_CONNECT) centres the X's big-font instructi
 sensoria_sleep = "FastEPD 8dc8c74's bbepIODeInit deletes the enabled PARLIO TX unit without disabling it: " \
                  "ESP_ERROR_CHECK aborts and the device reboots instead of sleeping"
 
-RSpec.describe "BYOD parallel boards", :parallel do
+RSpec.describe "BYOD parallel boards" do
   shared_examples "a parallel board" do
     it "shows 16 grays" do
       w, h = board.size

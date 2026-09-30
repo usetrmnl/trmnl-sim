@@ -19,7 +19,7 @@ inks = rgb.keys # black, white, yellow, red, blue, green
 m5_mono_png = "display_show_image() passes dpList's bb_epaper product 30 (EPD_M5_PAPER_MONO) to " \
               "bbep.setPanelType() for 1-bit PNGs: panel 30 is a UC81xx panel, the SSD1677 ignores its commands"
 
-RSpec.describe "BYOD bb_epaper boards", :parallel do
+RSpec.describe "BYOD bb_epaper boards" do
   describe "M5PaperMono", env: "m5_paper_mono" do
     byod_board name: "M5Paper Mono", model: "m5_paper_mono",
                battery_v: 4.2, # BATT_NONE

@@ -32,7 +32,7 @@ module TrmnlXMemcheckSpec
   end
 end
 
-RSpec.describe "TRMNL X memcheck", :parallel, env: "TRMNL_X" do
+RSpec.describe "TRMNL X memcheck", env: "TRMNL_X" do
   fixture(:shipped_x) { TrmnlXMemcheckSpec::ShippedMemcheckX.new }
 
   # A factory-fresh X (see TrmnlXMemcheckSpec::ShippedMemcheckX), then onboarding on 2.4 GHz: WiFi

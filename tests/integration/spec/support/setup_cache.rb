@@ -14,7 +14,7 @@ require "tmpdir"
 # be invalidated by hand. Entries live in target/spec-cache/ (`cargo clean` removes them), and
 # only the newest few per fixture are kept.
 #
-# `rake "spec[--no-cache]"` (TRMNL_SPEC_NO_CACHE=1) builds everything from scratch, as CI does, and
+# TRMNL_SPEC_NO_CACHE=1 builds everything from scratch, as CI does, and
 # so does a coverage run (TRMNL_SIM_COVERAGE), whose report should include the setup flows.
 # Parallel workers that need the same missing entry build it once: the others wait for it.
 module SetupCache

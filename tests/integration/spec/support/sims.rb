@@ -9,12 +9,12 @@ module Sims
     RSpec.current_example&.full_description || RSpec.current_scope.to_s
   end
 
-  # A simulator of `build` (default: the device under test's). A device that doesn't get from an
+  # A simulator of `build`. A device that doesn't get from an
   # erased flash to its setup portal on its own (the X: factory flow, shipment mode, dock) boots
   # its "unboxed" state for `erase: true` instead, and a device without a button maps presses to
   # its equivalent (see TrmnlX::XSim). With a block: yields it and closes it afterwards (see
   # TrmnlSim::Simulator#session), returning the block's value.
-  def start(build = Integration.build, **kw, &block)
+  def start(build, **kw, &block)
     kw = { name: current_name, mac: Builds::TEST_MAC, turbo: Builds::TURBO, memcheck: Builds::MEMCHECK,
            memcheck_suppress: FirmwareBugs::KNOWN_MEMORY_BUGS }.merge(kw)
     s = if Builds.device_of(build)&.env == "TRMNL_X"

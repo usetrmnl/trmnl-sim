@@ -9,7 +9,7 @@ require "tmpdir"
 # Firmware bugs it found are in FirmwareBugs::KNOWN_MEMORY_BUGS: the clean-cycle tests tolerate
 # them (so everything else is still checked), and each has an example here that fails where the
 # bug shows (known_failure:). The TRMNL X's and BWRY's own memcheck specs are with their devices'
-# (devices/trmnl_x/memcheck_spec.rb, devices/trmnl_bwry_spec.rb).
+# (core/trmnl_x/memcheck_spec.rb, core/trmnl_bwry_spec.rb).
 
 sntp_bug = FirmwareBugs::SNTP_USE_AFTER_FREE
 body_bug = "_ZNK16HttpRetryRequest12bodyAsStringEv"
@@ -53,7 +53,7 @@ qa_overreads = Devices::ALL.select do |d|
   d.og_font? && d.width / 8 * d.height > 48_000 - 62 && d.env != "seeed_reTerminal_E1004"
 end.map(&:env)
 
-RSpec.describe "Memcheck", env: :any do
+General.describe "Memcheck" do
   describe "MemcheckOG" do
     def onboard(s, mock)
       s.wait(portal: true, timeout: 90)

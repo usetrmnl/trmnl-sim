@@ -57,8 +57,8 @@ setup_logo = { %w[xteink_x3 seeed_reTerminal_E1004] =>
 # WIFI_CONNECTION_RSSI is -100: at or below it the device blames the WiFi signal.
 weak = [{ ssid: "TRMNL-Sim", rssi: -100 }]
 
-RSpec.describe "Errors", :parallel, env: :any do
-  fixture(:dev) { ProvisionedDevice.new }
+General.describe "Errors" do
+  fixture(:dev) { ProvisionedDevice.new(build) }
 
   # Wait until the device sleeps or restarts (a crash); returns its status.
   def settle(s, timeout: 120)
@@ -256,7 +256,7 @@ RSpec.describe "Errors", :parallel, env: :any do
   # A fresh device near a "TRMNL_QA" network runs the factory test: 7 s of CPU and radio
   # load, comparing the chip temperature (and battery voltage) before and after. Every build
   # but the TRMNL X's has it (setup() in src/main.cpp calls startQA() until it passed once;
-  # the X has its own factory flow, see devices/trmnl_x/trmnl_x_spec).
+  # the X has its own factory flow, see core/trmnl_x/trmnl_x_spec).
   describe "FactoryQa", skip_if: :shipment,
                         why: "its factory flow flashes the modem and ships; it runs no QA test (main.cpp)" do
     # Start a fresh device next to the QA network; yields it once the stress test runs.
