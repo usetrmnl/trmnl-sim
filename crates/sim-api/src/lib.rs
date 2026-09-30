@@ -1,6 +1,9 @@
 //! The contract between the emulator thread and front-ends (GUI, headless CLI).
 //! Front-ends only see this module; they never touch the machine directly.
 
+mod preferences;
+pub use preferences::*;
+
 mod bluetooth;
 pub use bluetooth::*;
 
@@ -561,6 +564,8 @@ pub enum Command {
     },
     /// Reply with the `--memcheck` report (JSON; `{"enabled": false}` when it's off).
     Memcheck(Sender<String>),
+    /// Read committed NVS values from live flash without calling into the guest.
+    ReadPreferences(Sender<PreferencesSnapshot>),
     Quit,
 }
 

@@ -85,6 +85,12 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
+In the GUI, **Storage → Preferences** opens a read-only view of the firmware's saved
+NVS values, grouped by partition and namespace. Search by key, type, or value, copy
+values, and refresh manually or automatically. Values are shown without masking;
+blobs are hexadecimal with their byte length. The view reads live simulated flash,
+including while paused or asleep, without changing firmware state.
+
 **A fresh device** (`--erase`) boots into WiFi setup. Its portal is at
 **http://127.0.0.1:8080/**: pick **TRMNL-Sim** (any password but `fail`) and a server. Use
 `--mac D8:3B:DA:12:34:56` to run as your own device.

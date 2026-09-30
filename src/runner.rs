@@ -359,6 +359,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         c.push_sim(line);
                     }
                 }
+                Command::ReadPreferences(reply) => {
+                    let _ = reply.send(m.preferences());
+                }
                 Command::Memcheck(reply) => {
                     let _ = reply.send(m.memcheck_json().unwrap_or_else(|| r#"{"enabled": false}"#.into()));
                 }
