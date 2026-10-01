@@ -85,11 +85,12 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
-In the GUI, **Storage → Preferences** opens a read-only view of the firmware's saved
-NVS values, grouped by partition and namespace. Search by key, type, or value, copy
-values, and refresh manually or automatically. Values are shown without masking;
-blobs are hexadecimal with their byte length. The view reads live simulated flash,
-including while paused or asleep, without changing firmware state.
+In the GUI, **Storage → Preferences** shows the firmware's saved NVS values, grouped
+by partition and namespace. Search by key, type, or value, copy values, and refresh
+manually or automatically. Values are unmasked; blobs appear as hexadecimal bytes.
+While the firmware is in deep sleep, you can add, edit, or delete preferences. Changes
+are saved immediately without waking the device and take effect on its next wake.
+See [Preferences](#preferences) for the HTTP API and editing constraints.
 
 **A fresh device** (`--erase`) boots into WiFi setup. Its portal is at
 **http://127.0.0.1:8080/**: pick **TRMNL-Sim** (any password but `fail`) and a server. Use
@@ -271,6 +272,53 @@ See that repository's setup instructions for the QR decoder and `PAIRING_HOST` o
 when testing firmware built for another setup server. The specs use offline networking
 and a local TLS server; they do not contact the configured real server.
 
+### Preferences
+
+`GET /preferences` returns `{ "ok": true, "editable": bool, "entries": [...], "warnings": [...] }`.
+Each entry contains `partition`, `namespace`, `key`, `type`, and `value`. Values are
+strings: decimal integers, literal text, or space-separated hexadecimal blob bytes.
+This preserves the full precision of 64-bit integers. Values are never masked.
+
+`PUT /preferences` creates or replaces one key; `DELETE /preferences` deletes one.
+Both accept JSON and return the updated snapshot. Partition, namespace and key are
+required. PUT also requires `type` and a string `value`:
+
+```sh
+curl http://127.0.0.1:7878/preferences
+curl -X PUT http://127.0.0.1:7878/preferences -H 'Content-Type: application/json' \
+  -d '{"partition":"nvs","namespace":"data","key":"friendly_id","type":"string","value":"TEST123"}'
+curl -X DELETE http://127.0.0.1:7878/preferences -H 'Content-Type: application/json' \
+  -d '{"partition":"nvs","namespace":"data","key":"friendly_id"}'
+```
+
+Supported types: `string`, `blob`, `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`.
+Arduino booleans are stored as `u8` (`"0"` or `"1"`). Names contain 1–15 UTF-8 bytes;
+strings allow up to 3999 bytes. Blobs accept hexadecimal pairs with optional spaces.
+An empty string or blob is allowed. Integer values must fit their declared type.
+
+Reads work in any state. Mutations are checked on the emulator thread and require
+**deep sleep**: paused active firmware, light sleep, and halted firmware are rejected.
+Pausing an already sleeping device freezes its wake timer and still allows edits.
+The device remains asleep with its existing wake schedule; use `POST /wake` to wake
+it early. If the simulator process is closed, its HTTP API is unavailable.
+
+Edits repack only the selected NVS partition, preserving namespace IDs and other
+committed values, and reserve an erased page for firmware garbage collection. The
+new flash image is atomically saved before live flash is replaced. Unreadable or
+encrypted partitions, insufficient space, missing delete targets, invalid values,
+and disallowed power states return HTTP 409 without applying the change. Malformed
+requests return 400; a missing emulator response returns 504. Host edits bypass
+simulated flash faults and do not count as guest program/erase operations.
+
+Run the firmware check with an existing onboarded flash that boots into deep sleep:
+
+```sh
+python3 tests/nvs/test_firmware.py ../firmware/.pio/build/trmnl sim-artifacts/gui-flash.bin
+```
+
+It uses a temporary **copy** of the flash with offline networking, checks the edited
+friendly ID in the real firmware's wake log, and verifies persistence across restart.
+
 ### Time
 
 Virtual time comes from executed cycles, paced to wall-clock time by default. `--turbo`
@@ -327,6 +375,9 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 | `POST /restore {"path": str}` or `{"id": N}` | restore one; 409 on failure |
 | `GET /savepoints` | the in-memory save points |
 | `POST /coverage {"path": "x.info", "reset": bool}` | with `--coverage`: write the tracefile now, optionally start over |
+| `GET /preferences` | NVS values, warnings, and whether editing is currently allowed |
+| `PUT /preferences` | create/replace a typed NVS value during deep sleep |
+| `DELETE /preferences` | delete an NVS key during deep sleep |
 | `GET /memcheck` | with `--memcheck`: violations, suppressed ones, heap statistics, stack marks |
 | `GET /faults` | injected faults, power losses, flash counts, the partition table |
 | `POST /faults {...}`, `DELETE /faults` | merge [faults](#fault-injection); clear them all |

@@ -566,6 +566,11 @@ pub enum Command {
     Memcheck(Sender<String>),
     /// Read committed NVS values from live flash without calling into the guest.
     ReadPreferences(Sender<PreferencesSnapshot>),
+    /// Host-side NVS change; the runner accepts it only in deep sleep.
+    ChangePreference {
+        change: PreferenceChange,
+        reply: Sender<Result<PreferencesSnapshot, String>>,
+    },
     Quit,
 }
 

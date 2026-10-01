@@ -1,7 +1,10 @@
-//! Read-only ESP-IDF NVS inspection. Layout follows nvs_types.hpp and nvs_page.hpp;
+//! ESP-IDF NVS inspection and host-side editing. Layout follows nvs_types.hpp and nvs_page.hpp;
 //! values come from live flash, never from guest API calls or the backing file.
 use sim_api::{Preference, PreferencesSnapshot};
+
+mod write;
 use std::collections::BTreeMap;
+pub use write::prepare;
 
 const PAGE: usize = 4096;
 const ENTRY: usize = 32;
@@ -54,7 +57,12 @@ pub fn inspect(flash: &[u8]) -> PreferencesSnapshot {
     result
 }
 
-fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) {
+struct Decoded {
+    namespaces: BTreeMap<u8, String>,
+    values: BTreeMap<(u8, String), Item>,
+}
+
+fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) -> Decoded {
     let mut pages = Vec::new();
     let mut invalid = 0;
     for page in data.as_chunks::<PAGE>().0 {
@@ -135,6 +143,8 @@ fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) 
             if e[0] == 0 {
                 if ty == 1 && value[0] != 0 && value[0] != 255 {
                     namespaces.insert(value[0], key.to_owned());
+                } else {
+                    invalid += 1;
                 }
             } else if ty == 0x42 {
                 chunks.insert((e[0], key.to_owned(), e[3]), value);
@@ -143,7 +153,8 @@ fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) 
             }
         }
     }
-    for ((ns, key), item) in values {
+    let mut committed = BTreeMap::new();
+    for ((ns, key), mut item) in values {
         let Some(namespace) = namespaces.get(&ns) else {
             invalid += 1;
             continue;
@@ -165,11 +176,17 @@ fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) 
                     }
                 }
             }
-            if complete && bytes.len() == size { Some(("blob", blob(&bytes))) } else { None }
+            if complete && bytes.len() == size {
+                item = Item { ty: 0x41, data: bytes };
+                Some(("blob", blob(&item.data)))
+            } else {
+                None
+            }
         } else {
             format_value(item.ty, &item.data)
         };
         if let Some((kind, value)) = decoded {
+            committed.insert((ns, key.clone()), item);
             result.entries.push(Preference { partition: label.into(), namespace: namespace.clone(), key, kind, value });
         } else {
             invalid += 1;
@@ -178,6 +195,7 @@ fn decode_partition(label: &str, data: &[u8], result: &mut PreferencesSnapshot) 
     if invalid != 0 {
         result.warnings.push(format!("{label}: skipped {invalid} unreadable pages or entries (incomplete, corrupt, encrypted, or unsupported data)."));
     }
+    Decoded { namespaces, values: committed }
 }
 
 fn blob(bytes: &[u8]) -> String {
@@ -252,12 +270,12 @@ mod tests {
         }
     }
 
-    fn flash(pages: &[Vec<u8>]) -> Vec<u8> {
+    pub(super) fn flash(pages: &[Vec<u8>]) -> Vec<u8> {
         let mut f = vec![255; 0x9000];
         f[0x8000..0x8004].copy_from_slice(&[0xaa, 0x50, 1, 2]);
         f[0x8004..0x8008].copy_from_slice(&0x9000u32.to_le_bytes());
         f[0x8008..0x800c].copy_from_slice(&((pages.len() * 4096) as u32).to_le_bytes());
-        f[0x800c..0x801c].fill(0);
+        f[0x800c..0x8020].fill(0);
         f[0x800c..0x800f].copy_from_slice(b"nvs");
         for p in pages {
             f.extend(p);

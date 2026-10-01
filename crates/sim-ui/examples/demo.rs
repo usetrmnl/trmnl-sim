@@ -290,6 +290,9 @@ impl Fake {
             Command::Pause(p) => self.paused = p,
             Command::SetFaults(f) => self.p.status.lock().faults = f,
             Command::DumpDebug => self.log("[demo] no CPU to dump"),
+            Command::ChangePreference { reply, .. } => {
+                let _ = reply.send(Err("the demo has no firmware preferences".into()));
+            }
             Command::ReadPreferences(reply) => {
                 let _ = reply.send(sim_api::PreferencesSnapshot::default());
             }

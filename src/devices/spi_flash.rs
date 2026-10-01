@@ -106,6 +106,29 @@ impl SpiFlash {
         Ok(())
     }
 
+    /// Commit a host-side edit before publishing it to the guest. On failure the live
+    /// image and previous backing file remain intact. This bypasses guest flash faults.
+    pub fn replace_image(&mut self, data: Vec<u8>) -> std::io::Result<()> {
+        use std::io::Write;
+        if data.len() != self.data.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "flash size changed"));
+        }
+        if let Some(path) = &self.backing {
+            let path = if path.exists() { path.canonicalize()? } else { path.clone() };
+            let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+            if let Ok(meta) = std::fs::metadata(&path) {
+                temp.as_file().set_permissions(meta.permissions())?;
+            }
+            temp.write_all(&data)?;
+            temp.as_file().sync_all()?;
+            temp.persist(&path).map_err(|e| e.error)?;
+        }
+        self.data = data;
+        self.dirty = false;
+        Ok(())
+    }
+
     fn mask(&self, addr: u32) -> usize {
         addr as usize & (self.data.len() - 1)
     }
@@ -225,6 +248,21 @@ impl SpiFlash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_edits_persist_and_io_failure_keeps_memory_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flash.bin");
+        let mut flash = SpiFlash::new(vec![255; 4096], Some(path.clone()));
+        flash.replace_image(vec![7; 4096]).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), flash.data);
+        assert!(!flash.dirty);
+        let mut failed = SpiFlash::new(vec![255; 4096], Some(dir.path().join("missing/flash.bin")));
+        assert!(failed.replace_image(vec![7; 4096]).is_err());
+        assert_eq!(failed.data, vec![255; 4096]);
+        assert!(flash.replace_image(vec![0; 4]).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), vec![7; 4096]);
+    }
 
     fn flash() -> SpiFlash {
         SpiFlash::new(vec![0xff; 1 << 16], None)

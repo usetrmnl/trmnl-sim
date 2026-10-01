@@ -1224,10 +1224,29 @@ mod render_tests {
                     value: "visible-secret".into(),
                 }],
                 warnings: vec![],
+                editable: true,
             })
             .unwrap();
         h.run_steps(3);
         h.get_by_label("visible-secret");
+        h.get_by_label("Edit").click();
+        h.run_steps(3);
+        h.get_by_label("Save preference").click();
+        h.run_steps(3);
+        let (change, reply) = ports
+            .commands
+            .try_iter()
+            .find_map(|c| match c {
+                Command::ChangePreference { change, reply } => Some((change, reply)),
+                _ => None,
+            })
+            .expect("save sends a preference change");
+        assert_eq!(change.value, Some(("string".into(), "visible-secret".into())));
+        reply.send(Err("deep sleep required".into())).unwrap();
+        h.run_steps(3);
+        h.get_all_by_label("deep sleep required").next().expect("write rejection shown");
+        h.get_by_label("Cancel edit").click();
+        h.run_steps(3);
         h.get_by_label("Refresh").click();
         h.run_steps(3);
         assert!(ports.commands.try_iter().any(|c| matches!(c, Command::ReadPreferences(_))));

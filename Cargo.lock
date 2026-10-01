@@ -4030,6 +4030,7 @@ dependencies = [
  "sim-bluetooth",
  "sim-control",
  "sim-ui",
+ "tempfile",
  "ureq",
  "vnet",
 ]
