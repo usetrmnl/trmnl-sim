@@ -359,6 +359,23 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         c.push_sim(line);
                     }
                 }
+                Command::ReadPreferences(reply) => {
+                    let mut snapshot = m.preferences();
+                    snapshot.editable = matches!(power, Power::DeepSleep { .. });
+                    let _ = reply.send(snapshot);
+                }
+                Command::ChangePreference { change, reply } => {
+                    let result = if matches!(power, Power::DeepSleep { .. }) {
+                        m.change_preference(&change).map(|()| {
+                            let mut snapshot = m.preferences();
+                            snapshot.editable = true;
+                            snapshot
+                        })
+                    } else {
+                        Err("preferences can only be edited during deep sleep; running, paused, and light-sleep firmware may cache NVS".into())
+                    };
+                    let _ = reply.send(result);
+                }
                 Command::Memcheck(reply) => {
                     let _ = reply.send(m.memcheck_json().unwrap_or_else(|| r#"{"enabled": false}"#.into()));
                 }

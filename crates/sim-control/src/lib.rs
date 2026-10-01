@@ -28,6 +28,9 @@
 //! | POST   | `/restore`             | `{"path": "..."}` or `{"id": 3}` (in-memory slot) | `{"ok", "savepoint"}`; 409 on failure |
 //! | GET    | `/savepoints`          |                                                | `{"savepoints": [...]}` (in-memory slots) |
 //! | POST   | `/coverage`            | `{"path": "out.info", "reset": false}` (both optional) write lcov now | `{"ok", "path", "lines_found", "lines_hit", ...}` |
+//! | GET    | `/preferences`         |                                                | NVS snapshot and editability |
+//! | PUT    | `/preferences`         | `{"partition","namespace","key","type","value"}` (all strings) | updated snapshot; deep sleep only |
+//! | DELETE | `/preferences`         | `{"partition","namespace","key"}`             | updated snapshot; deep sleep only |
 //! | GET    | `/memcheck`            |                                                | `--memcheck` report: violations, heap stats, stack marks |
 //! | *      | `/mock/...`            | the built-in mock TRMNL server, see [`mock`]   | |
 //! | GET    | `/faults`              |                                                | faults, partitions, flash counters |
@@ -38,6 +41,7 @@
 
 pub mod faults;
 mod mock;
+mod preferences;
 pub mod wifi;
 
 use std::net::SocketAddr;
@@ -130,6 +134,7 @@ fn body_json(body: &[u8]) -> Result<Value, String> {
 fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], body: &[u8]) -> Result<Reply, String> {
     let ok = || Ok(json_reply(200, json!({ "ok": true })));
     match (method, path) {
+        (Method::Get | Method::Put | Method::Delete, "/preferences") => preferences::route(h, method, body),
         (Method::Get, "/status") => Ok(json_reply(200, status_json(h))),
         (Method::Post, "/bluetooth/connect" | "/bluetooth/disconnect" | "/bluetooth/att" | "/bluetooth/receive") => {
             let b = body_json(body)?;

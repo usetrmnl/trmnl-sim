@@ -1,0 +1,6 @@
+key,type,encoding,value
+settings,namespace,,
+password,data,string,visible-secret
+count,data,u32,4294967295
+signed,data,i64,-9223372036854775808
+blob,data,hex2bin,00aaff

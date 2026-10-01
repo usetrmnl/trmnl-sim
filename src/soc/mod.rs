@@ -76,6 +76,9 @@ pub trait Machine: Send {
     fn flash_stats(&self) -> (u64, u64);
     /// The partition table in flash.
     fn partitions(&self) -> Vec<sim_api::PartitionInfo>;
+    /// Read-only NVS snapshot, including when the guest is paused or asleep.
+    fn preferences(&self) -> sim_api::PreferencesSnapshot;
+    fn change_preference(&mut self, change: &sim_api::PreferenceChange) -> Result<(), String>;
     /// In light sleep: `Some(wake time)` (`Some(None)` = no timer armed).
     fn light_sleep(&self) -> Option<Option<u64>> {
         None

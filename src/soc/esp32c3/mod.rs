@@ -739,6 +739,15 @@ impl Machine for Esp32c3 {
         (self.bus.flash.programs, self.bus.flash.erases)
     }
 
+    fn change_preference(&mut self, change: &sim_api::PreferenceChange) -> Result<(), String> {
+        let data = crate::nvs::prepare(&self.bus.flash.data, change)?;
+        self.bus.flash.replace_image(data).map_err(|e| format!("saving flash: {e}"))
+    }
+
+    fn preferences(&self) -> sim_api::PreferencesSnapshot {
+        crate::nvs::inspect(&self.bus.flash.data)
+    }
+
     fn partitions(&self) -> Vec<sim_api::PartitionInfo> {
         firmware::partitions(&self.bus.flash.data)
     }

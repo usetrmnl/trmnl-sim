@@ -6,6 +6,7 @@
 mod console;
 mod device;
 mod faults;
+mod preferences;
 mod server;
 mod touch;
 
@@ -130,6 +131,8 @@ struct SimApp {
     screen: Screen,
     console: ConsoleView,
     show_console: bool,
+    preferences: preferences::PreferencesPanel,
+    show_preferences: bool,
     zoom: Zoom,
     /// The user picked a zoom preset (disables the initial auto-fit fallback).
     zoom_user_set: bool,
@@ -169,6 +172,8 @@ impl SimApp {
             status,
             h,
             show_console: true,
+            preferences: preferences::PreferencesPanel::default(),
+            show_preferences: false,
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
             zoom_user_set: false,
             white_bezel: false,
@@ -589,6 +594,10 @@ impl SimApp {
                     .on_hover_text("The built-in TRMNL server: serve your own images to the device");
             }
 
+            section(ui, "Storage");
+            ui.toggle_value(&mut self.show_preferences, "Preferences")
+                .on_hover_text("Inspect saved firmware preferences in live NVS flash");
+
             self.faults_section(ui);
 
             section(ui, "Battery");
@@ -958,6 +967,7 @@ impl eframe::App for SimApp {
             }
             self.device_view(ui);
         });
+        self.preferences.show(&ctx, &self.h, &mut self.show_preferences);
         self.paint_drop_hint(&ctx);
 
         self.apply_button();
@@ -1187,6 +1197,60 @@ mod render_tests {
         let Ok(dir) = std::env::var("SIM_UI_RENDER_DIR") else { return };
         let img = h.render().expect("render");
         img.save(format!("{dir}/{name}.png")).expect("save");
+    }
+
+    #[test]
+    fn preferences_displays_unmasked_values_and_refreshes() {
+        use egui_kittest::kittest::Queryable;
+        let (mut h, ports) = harness(800, 480, BoardInfo::default(), false);
+        h.run_steps(3);
+        h.get_by_label("Preferences").click();
+        h.run_steps(3);
+        let reply = ports
+            .commands
+            .try_iter()
+            .find_map(|c| match c {
+                Command::ReadPreferences(tx) => Some(tx),
+                _ => None,
+            })
+            .expect("opening preferences requests live flash");
+        reply
+            .send(sim_api::PreferencesSnapshot {
+                entries: vec![sim_api::Preference {
+                    partition: "nvs".into(),
+                    namespace: "settings".into(),
+                    key: "password".into(),
+                    kind: "string",
+                    value: "visible-secret".into(),
+                }],
+                warnings: vec![],
+                editable: true,
+            })
+            .unwrap();
+        h.run_steps(3);
+        h.get_by_label("visible-secret");
+        h.get_by_label("Edit").click();
+        h.run_steps(3);
+        h.get_by_label("Save preference").click();
+        h.run_steps(3);
+        let (change, reply) = ports
+            .commands
+            .try_iter()
+            .find_map(|c| match c {
+                Command::ChangePreference { change, reply } => Some((change, reply)),
+                _ => None,
+            })
+            .expect("save sends a preference change");
+        assert_eq!(change.value, Some(("string".into(), "visible-secret".into())));
+        reply.send(Err("deep sleep required".into())).unwrap();
+        h.run_steps(3);
+        h.get_all_by_label("deep sleep required").next().expect("write rejection shown");
+        h.get_by_label("Cancel edit").click();
+        h.run_steps(3);
+        h.get_by_label("Refresh").click();
+        h.run_steps(3);
+        assert!(ports.commands.try_iter().any(|c| matches!(c, Command::ReadPreferences(_))));
+        save(&mut h, "preferences");
     }
 
     #[test]

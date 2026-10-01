@@ -9,6 +9,7 @@ mod faults;
 mod firmware;
 mod hle;
 mod memcheck;
+mod nvs;
 mod periph;
 mod runner;
 mod savepoint;
