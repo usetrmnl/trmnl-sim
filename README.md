@@ -310,14 +310,17 @@ and disallowed power states return HTTP 409 without applying the change. Malform
 requests return 400; a missing emulator response returns 504. Host edits bypass
 simulated flash faults and do not count as guest program/erase operations.
 
-Run the firmware check with an existing onboarded flash that boots into deep sleep:
+Firmware integration coverage lives in `trmnl-spec`, using its onboarded-device fixtures
+and temporary flash copies:
 
 ```sh
-python3 tests/nvs/test_firmware.py ../firmware/.pio/build/trmnl sim-artifacts/gui-flash.bin
+cd ../trmnl-spec
+ENVS=trmnl:full FIRMWARE_REPO=../firmware SIM_REPO=../trmnl-sim \
+  bundle exec rspec spec/general/tooling/preferences_spec.rb
 ```
 
-It uses a temporary **copy** of the flash with offline networking, checks the edited
-friendly ID in the real firmware's wake log, and verifies persistence across restart.
+The specs cover typed edits, validation, multi-page blobs, unchanged unrelated values,
+active-CPU rejection, firmware reads after wake, and persistence across process restart.
 
 ### Time
 
