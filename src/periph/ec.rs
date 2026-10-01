@@ -79,10 +79,8 @@ impl Curve {
 
     /// Jacobian point doubling (a = -3). `None` = the point at infinity.
     fn double(&self, pt: &Option<Jac>) -> Option<Jac> {
-        let (x, y, z) = match pt {
-            Some(j) => (&j.x, &j.y, &j.z),
-            None => return None,
-        };
+        let j = pt.as_ref()?;
+        let (x, y, z) = (&j.x, &j.y, &j.z);
         let p = &self.p;
         if y.is_zero() {
             return None;

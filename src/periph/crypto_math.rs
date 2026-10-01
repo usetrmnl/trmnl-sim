@@ -90,13 +90,13 @@ fn inc_counter(iv: &mut [u8; 16], inc32: bool) {
 
 /// Block cipher modes as the C3 AES DMA engine implements them.
 pub fn aes_blocks(key: &[u8], decrypt: bool, mode: u32, inc32: bool, iv: &mut [u8; 16], data: &mut [u8]) {
-    for blk in data.chunks_exact_mut(16) {
+    for blk in data.as_chunks_mut::<16>().0 {
         match mode {
             0 => aes_block(key, decrypt, blk),
             1 => {
                 // CBC
                 if decrypt {
-                    let c: [u8; 16] = blk.try_into().unwrap();
+                    let c = *blk;
                     aes_block(key, true, blk);
                     blk.iter_mut().zip(iv.iter()).for_each(|(b, v)| *b ^= v);
                     *iv = c;
@@ -122,9 +122,9 @@ pub fn aes_blocks(key: &[u8], decrypt: bool, mode: u32, inc32: bool, iv: &mut [u
                 // CFB128
                 let mut ks = *iv;
                 aes_block(key, false, &mut ks);
-                let c: [u8; 16] = if decrypt { blk.try_into().unwrap() } else { [0; 16] };
+                let c: [u8; 16] = if decrypt { *blk } else { [0; 16] };
                 blk.iter_mut().zip(ks.iter()).for_each(|(b, v)| *b ^= v);
-                *iv = if decrypt { c } else { blk.try_into().unwrap() };
+                *iv = if decrypt { c } else { *blk };
             }
             4 => {
                 // CFB8

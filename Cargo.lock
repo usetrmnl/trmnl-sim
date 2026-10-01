@@ -3536,6 +3536,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-bluetooth"
+version = "0.1.0"
+
+[[package]]
 name = "sim-control"
 version = "0.1.0"
 dependencies = [
@@ -4023,6 +4027,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sim-api",
+ "sim-bluetooth",
  "sim-control",
  "sim-ui",
  "ureq",

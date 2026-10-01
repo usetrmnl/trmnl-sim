@@ -301,6 +301,9 @@ impl Fake {
             Command::WriteCoverage { reply, .. } => {
                 let _ = reply.send(Err("the demo has no firmware to cover".into()));
             }
+            Command::Bluetooth { reply, .. } => {
+                let _ = reply.send(Err("the demo has no Bluetooth firmware".into()));
+            }
             Command::Quit => {}
         }
     }

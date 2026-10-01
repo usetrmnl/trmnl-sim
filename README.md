@@ -185,6 +185,86 @@ The default networks are **TRMNL-Sim** (any password) and **Neighbors WiFi** (`h
 **TRMNL-Sim-5G** (channel 36) is seen only by 5 GHz radios (the C5 and the X's modem, which
 then does all HTTP). Networks taking any password reject `fail`, to test a failed join.
 
+### Bluetooth
+
+The mock backend runs the firmware's **real NimBLE host, GATT endpoints and
+Espressif Security 1** over a portable simulated HCI controller. It has been
+verified with the OG ESP32-C3 `trmnl` build using ESP-IDF 4.4.7. Other firmware
+controller interfaces are not yet verified. Mock Bluetooth has no host radio or
+platform framework dependencies.
+
+```sh
+bin/sim ../firmware/.pio/build/trmnl --headless --control 127.0.0.1:7878
+```
+
+Bluetooth is always mocked, on every host platform. It needs no host Bluetooth
+adapter, permissions, or backend configuration and does not connect to physical
+phones. `/status.bluetooth` reports `active` (`"mock"` while the guest controller
+is initialized, otherwise `null`), `initialized` (controller enabled),
+`advertising`, `connection`, `advertisement`, and `scan_response`.
+
+The control API provides one mock central and raw ATT exchanges; discover GATT
+handles by UUID from guest responses rather than assuming firmware handle numbers:
+
+| POST path | JSON body | Response |
+|---|---|---|
+| `/bluetooth/connect` | `{}` | `connection` token |
+| `/bluetooth/att` | `{"connection": TOKEN, "data": [10, HANDLE_LOW, HANDLE_HIGH]}` | ATT reply in `data` |
+| `/bluetooth/receive` | `{"connection": TOKEN}` | Next notification/indication in `data`, or `[]` |
+| `/bluetooth/disconnect` | `{"connection": TOKEN}` | Disconnect completion accepted |
+
+For example, after `/status.bluetooth.advertising` becomes `true`, this script
+connects, discovers primary GATT services, and disconnects (Python standard library only):
+
+```python
+import json
+from urllib.request import Request, urlopen
+
+
+def post(path, body):
+    request = Request("http://127.0.0.1:7878" + path,
+                      data=json.dumps(body).encode(),
+                      headers={"Content-Type": "application/json"})
+    with urlopen(request, timeout=15) as response:
+        return json.load(response)
+
+
+connection = post("/bluetooth/connect", {})["connection"]
+try:
+    reply = post("/bluetooth/att", {
+        "connection": connection,
+        "data": list(bytes.fromhex("100100ffff0028")),
+    })
+    print(bytes(reply["data"]).hex())
+finally:
+    post("/bluetooth/disconnect", {"connection": connection})
+```
+
+ATT errors are returned as ATT bytes, not turned into backend failures. A single
+request may be pending; its limit is five seconds of virtual time, with an eight
+second wall-clock bound when paused. Timeout discards the connection. Reset and
+reconnect invalidate tokens, and pending requests are failed without replay.
+Notifications are bounded to 64 queued packets; overflow disconnects the central.
+Indications are acknowledged when queued. Write commands complete on enqueue.
+The implemented radio is peripheral-only, one link, without SMP/link encryption;
+application-layer Security 1 still executes in full. Central-role scanning and
+whitelists are not implemented.
+
+Firmware integration coverage lives in [trmnl-spec](https://github.com/usetrmnl/trmnl-spec),
+with the shared Ruby simulator client and TLS mock. Its OG Bluetooth specs cover discovery,
+QR-based Security 1, encrypted status, long writes, oversize rejection, reconnect,
+wrong proof, reset invalidation, and encrypted WiFi/setup-code handoff:
+
+```sh
+cd ../trmnl-spec
+ENVS=trmnl:full FIRMWARE_REPO=../firmware SIM_REPO=../trmnl-sim \
+  bundle exec rspec spec/core/og_bluetooth_spec.rb
+```
+
+See that repository's setup instructions for the QR decoder and `PAIRING_HOST` override
+when testing firmware built for another setup server. The specs use offline networking
+and a local TLS server; they do not contact the configured real server.
+
 ### Time
 
 Virtual time comes from executed cycles, paced to wall-clock time by default. `--turbo`
@@ -327,6 +407,7 @@ crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
 ├─ sim-ui/             egui desktop window
 ├─ sim-control/        HTTP control API
+├─ sim-bluetooth/      portable H4 controller; guest NimBLE/GATT stays in firmware
 ├─ mock-trmnl/         built-in mock TRMNL server and image conversion (/mock API)
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
 ```

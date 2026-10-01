@@ -131,6 +131,38 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
     let ok = || Ok(json_reply(200, json!({ "ok": true })));
     match (method, path) {
         (Method::Get, "/status") => Ok(json_reply(200, status_json(h))),
+        (Method::Post, "/bluetooth/connect" | "/bluetooth/disconnect" | "/bluetooth/att" | "/bluetooth/receive") => {
+            let b = body_json(body)?;
+            let connection = || b["connection"].as_u64().ok_or("need connection token");
+            let operation = match path {
+                "/bluetooth/connect" => sim_api::BluetoothOperation::Connect,
+                "/bluetooth/disconnect" => sim_api::BluetoothOperation::Disconnect { connection: connection()? },
+                "/bluetooth/receive" => sim_api::BluetoothOperation::Receive { connection: connection()? },
+                _ => {
+                    let values = b["data"].as_array().ok_or("need data byte array")?;
+                    if values.is_empty() || values.len() > 517 {
+                        return Err("ATT data must contain 1..517 bytes".into());
+                    }
+                    let data = values
+                        .iter()
+                        .map(|v| {
+                            v.as_u64()
+                                .filter(|n| *n <= 255)
+                                .map(|n| n as u8)
+                                .ok_or_else(|| "data must contain integers 0..255".to_string())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    sim_api::BluetoothOperation::Exchange { connection: connection()?, data }
+                }
+            };
+            let (reply, result) = crossbeam_channel::bounded(1);
+            h.send(Command::Bluetooth { operation, reply });
+            Ok(match result.recv_timeout(Duration::from_secs(10)) {
+                Ok(Ok(r)) => json_reply(200, json!({"ok": true, "connection": r.connection, "data": r.data})),
+                Ok(Err(e)) => err(409, e),
+                Err(_) => err(504, "Bluetooth command timed out"),
+            })
+        }
         (Method::Post, "/button") => {
             let down = body_json(body)?["down"].as_bool().ok_or("need {\"down\": bool}")?;
             h.send(Command::Button(down));
@@ -363,6 +395,14 @@ fn status_json(h: &SimHandle) -> Value {
         "touching": st.touching.map(|z| z.name()),
         "battery_mv": st.battery_mv,
         "button_down": st.button_down,
+        "bluetooth": {
+            "active": st.bluetooth.active,
+            "initialized": st.bluetooth.initialized,
+            "advertising": st.bluetooth.advertising,
+            "connection": st.bluetooth.connection,
+            "advertisement": st.bluetooth.advertisement,
+            "scan_response": st.bluetooth.scan_response,
+        },
         "wifi_available": st.wifi_available,
         "wifi_connected": st.wifi_connected,
         "ip": st.ip,

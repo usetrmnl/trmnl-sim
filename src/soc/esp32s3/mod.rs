@@ -905,6 +905,10 @@ impl Machine for Esp32s3 {
         self.hle.wifi.set_portal_client(on, now);
     }
 
+    fn bluetooth(&mut self) -> &mut crate::hle::bluetooth::BluetoothState {
+        &mut self.hle.bluetooth
+    }
+
     fn net_status(&self) -> NetStatus {
         let w = &self.hle.wifi;
         NetStatus { connected: w.is_connected(), ip: w.ip().map(|i| i.to_string()), portal_url: w.portal_url() }
@@ -970,6 +974,7 @@ impl Machine for Esp32s3 {
         self.bus.flash.flush()?;
         self.bus.p.mac = s.mac;
         self.hle.wifi.base_mac = s.mac;
+        self.hle.bluetooth.controller.set_address(s.mac);
         self.hle.chip_reset();
         self.hooks.clear_pending();
         self.requests.clear();

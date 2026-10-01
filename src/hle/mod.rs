@@ -6,6 +6,7 @@
 //! memory through [`GuestMem`]. A hook may also call back into guest code
 //! (e.g. `esp_event_post`) and resume in a continuation when it returns.
 
+pub mod bluetooth;
 pub mod idf;
 pub mod memcheck;
 pub mod wifi;
@@ -85,6 +86,7 @@ pub struct SleepConfig {
 /// Host-side state owned by the HLE layer. Survives across hooks; reset with the chip.
 pub struct HleState {
     pub wifi: wifi::WifiState,
+    pub bluetooth: bluetooth::BluetoothState,
     pub sleep: SleepConfig,
     /// Where the second core should start (ESP32 dual-core ROM API).
     pub appcpu_boot_addr: Option<u32>,
@@ -96,6 +98,7 @@ impl HleState {
     pub fn new(mac: [u8; 6]) -> Self {
         HleState {
             wifi: wifi::WifiState::new(mac),
+            bluetooth: bluetooth::BluetoothState::new(mac),
             sleep: SleepConfig::default(),
             appcpu_boot_addr: None,
             wake_stub_returned: false,
@@ -104,6 +107,7 @@ impl HleState {
 
     pub fn chip_reset(&mut self) {
         self.wifi.reset();
+        self.bluetooth.reset();
         self.sleep = SleepConfig::default();
         self.appcpu_boot_addr = None;
         self.wake_stub_returned = false;

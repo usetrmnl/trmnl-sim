@@ -12,6 +12,7 @@ default = ["gui"]
 gui = ["dep:sim-ui"]
 
 [dependencies]
+sim-bluetooth = { path = "crates/sim-bluetooth" }
 sim-api = { path = "crates/sim-api" }
 sim-ui = { path = "crates/sim-ui", optional = true }
 sim-control = { path = "crates/sim-control" }
