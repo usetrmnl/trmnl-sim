@@ -3,6 +3,7 @@
 //! The emulator runs on its own thread and publishes state through a [`sim_api::SimHandle`];
 //! this crate only reads that shared state and sends [`sim_api::Command`]s.
 
+mod bluetooth;
 mod console;
 mod device;
 mod faults;
@@ -87,12 +88,14 @@ enum LeftTab {
     Server,
     Faults,
     Nvs,
+    Bluetooth,
 }
 
 impl LeftTab {
     fn label(self) -> &'static str {
         match self {
             LeftTab::Server => "Server",
+            LeftTab::Bluetooth => "BLE",
             LeftTab::Faults => "Faults",
             LeftTab::Nvs => "NVS",
         }
@@ -101,6 +104,7 @@ impl LeftTab {
     fn hover(self) -> &'static str {
         match self {
             LeftTab::Server => "The built-in TRMNL server: serve your own images to the device",
+            LeftTab::Bluetooth => "The mock Bluetooth controller: advertisement and a manual central",
             LeftTab::Faults => "Network, flash and hardware faults",
             LeftTab::Nvs => "Saved firmware preferences in live NVS flash",
         }
@@ -158,6 +162,7 @@ struct SimApp {
     console: ConsoleView,
     show_console: bool,
     preferences: preferences::PreferencesPanel,
+    bluetooth: bluetooth::BluetoothPanel,
     zoom: Zoom,
     /// The user picked a zoom preset (disables the initial auto-fit fallback).
     zoom_user_set: bool,
@@ -198,6 +203,7 @@ impl SimApp {
             h,
             show_console: true,
             preferences: preferences::PreferencesPanel::default(),
+            bluetooth: bluetooth::BluetoothPanel::default(),
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
             zoom_user_set: false,
             white_bezel: false,
@@ -238,14 +244,16 @@ impl SimApp {
     }
 
     /// The left panel's tab strip. Clicking the selected tab collapses the panel. A star
-    /// marks a tab whose state affects the device: the mock server running, a fault on.
+    /// marks a tab with something live: the mock server running, the firmware advertising or
+    /// a central connected, a fault on.
     fn left_tabs(&mut self, ui: &mut Ui) {
-        let tabs = [LeftTab::Server, LeftTab::Faults, LeftTab::Nvs];
+        let tabs = [LeftTab::Server, LeftTab::Faults, LeftTab::Nvs, LeftTab::Bluetooth];
         let has_server = self.server.is_some();
         for tab in tabs.into_iter().filter(|&t| t != LeftTab::Server || has_server) {
             let selected = self.left_tab == Some(tab);
             let starred = match tab {
                 LeftTab::Server => self.server.as_ref().is_some_and(|s| s.is_running()),
+                LeftTab::Bluetooth => self.status.bluetooth.advertising || self.status.bluetooth.connection.is_some(),
                 LeftTab::Faults => self.faults_on(),
                 LeftTab::Nvs => false,
             };
@@ -961,6 +969,7 @@ impl eframe::App for SimApp {
             self.notice = None;
         }
         self.handle_dropped_files(&ctx);
+        self.bluetooth.poll(&self.h, &self.status.bluetooth);
         if let Some(p) = &mut self.server {
             p.poll(&self.status);
             for (text, error) in std::mem::take(&mut p.notices) {
@@ -1003,6 +1012,7 @@ impl eframe::App for SimApp {
                             p.ui(ui, &self.h, &self.status, &board);
                         }
                     }
+                    LeftTab::Bluetooth => self.bluetooth.ui(ui, &self.h, &self.status.bluetooth),
                     LeftTab::Faults => self.faults_tab(ui),
                     LeftTab::Nvs => self.preferences.ui(ui, &self.h),
                 }
@@ -1327,6 +1337,63 @@ mod render_tests {
         h.run_steps(3);
         assert!(ports.commands.try_iter().any(|c| matches!(c, Command::ReadPreferences(_))));
         save(&mut h, "preferences");
+    }
+
+    #[test]
+    fn bluetooth_tab_connects_and_exchanges_att() {
+        use egui_kittest::kittest::Queryable;
+        let (mut h, ports) = harness(800, 480, BoardInfo::default(), false);
+        {
+            let mut s = ports.status.lock();
+            s.bluetooth.initialized = true;
+            s.bluetooth.advertising = true;
+            s.bluetooth.advertisement = vec![2, 0x01, 0x06, 6, 0x09, b'T', b'R', b'M', b'N', b'L'];
+        }
+        h.run_steps(3);
+        h.get_by_label("BLE*").click();
+        h.run_steps(3);
+        h.get_by_label("TRMNL");
+        h.get_by_label("Connect").click();
+        h.run_steps(3);
+        let reply = ports
+            .commands
+            .try_iter()
+            .find_map(|c| match c {
+                Command::Bluetooth { operation: sim_api::BluetoothOperation::Connect, reply } => Some(reply),
+                _ => None,
+            })
+            .expect("Connect sends a Bluetooth connect");
+        ports.status.lock().bluetooth.connection = Some(7);
+        reply.send(Ok(sim_api::BluetoothReply { connection: Some(7), data: vec![] })).unwrap();
+        h.run_steps(3);
+        // The panel polls notifications on its own connection: answer that, then send a preset.
+        for c in ports.commands.try_iter() {
+            if let Command::Bluetooth { operation: sim_api::BluetoothOperation::Receive { connection: 7 }, reply } = c {
+                reply
+                    .send(Ok(sim_api::BluetoothReply { connection: Some(7), data: vec![0x1b, 0x2a, 0x00, 0x01] }))
+                    .unwrap();
+            }
+        }
+        h.run_steps(3);
+        h.get_by_label("Exchange MTU").click();
+        h.run_steps(3);
+        let (data, reply) = ports
+            .commands
+            .try_iter()
+            .find_map(|c| match c {
+                Command::Bluetooth {
+                    operation: sim_api::BluetoothOperation::Exchange { connection: 7, data },
+                    reply,
+                } => Some((data, reply)),
+                _ => None,
+            })
+            .expect("the preset sends an ATT exchange");
+        assert_eq!(data, vec![0x02, 0x00, 0x02]);
+        reply.send(Ok(sim_api::BluetoothReply { connection: Some(7), data: vec![0x03, 0x00, 0x02] })).unwrap();
+        h.run_steps(3);
+        h.get_by_label("MTU rsp 512 · 03 00 02");
+        h.get_by_label("Notification 0x002a · 1b 2a 00 01");
+        save(&mut h, "bluetooth");
     }
 
     #[test]

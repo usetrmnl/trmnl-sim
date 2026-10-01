@@ -85,9 +85,11 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
-The GUI's left utility panel has two tabs, **Server** (the built-in mock server) and
-**NVS**. Click the selected tab again to collapse the panel. **NVS** shows the firmware's
-saved values, grouped by partition and namespace. Search by key, type, or value, copy values, and refresh
+The GUI's left utility panel has tabs for **Server** (the built-in mock server),
+**Faults**, **NVS** and **BLE** (the mock Bluetooth controller's state, the decoded
+advertisement, and a manual central for raw ATT exchanges); a tab is marked `*` while
+something in it is live. Click the selected tab again to collapse the panel. **NVS**
+shows the firmware's saved values, grouped by partition and namespace. Search by key, type, or value, copy values, and refresh
 manually or automatically. Values are unmasked; blobs appear as hexadecimal bytes.
 While the firmware is in deep sleep, you can add, edit, or delete preferences. Changes
 are saved immediately without waking the device and take effect on its next wake.
