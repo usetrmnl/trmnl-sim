@@ -85,8 +85,9 @@ cargo build --release
 ./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
-In the GUI, **Storage → Preferences** shows the firmware's saved NVS values, grouped
-by partition and namespace. Search by key, type, or value, copy values, and refresh
+The GUI's left utility panel has two tabs, **Server** (the built-in mock server) and
+**NVS**. Click the selected tab again to collapse the panel. **NVS** shows the firmware's
+saved values, grouped by partition and namespace. Search by key, type, or value, copy values, and refresh
 manually or automatically. Values are unmasked; blobs appear as hexadecimal bytes.
 While the firmware is in deep sleep, you can add, edit, or delete preferences. Changes
 are saved immediately without waking the device and take effect on its next wake.

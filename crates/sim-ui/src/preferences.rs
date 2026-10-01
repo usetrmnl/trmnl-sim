@@ -3,6 +3,9 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, TryRecvError};
 use sim_api::{Command, Preference, PreferenceChange, PreferencesSnapshot, SimHandle};
 
+/// Why editing is disabled: the firmware must be in deep sleep, not using its flash.
+const NEEDS_SLEEP: &str = "Editing requires deep sleep. Edits take effect on the next wake.";
+
 type EditResult = Result<PreferencesSnapshot, String>;
 
 pub struct PreferencesPanel {
@@ -43,12 +46,14 @@ impl PreferencesPanel {
         self.error = None;
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, handle: &SimHandle, open: &mut bool) {
-        if !*open {
-            self.was_open = false;
-            self.pending = None;
-            return;
-        }
+    /// The tab isn't shown: stop polling, and re-read on the next show.
+    pub fn hidden(&mut self) {
+        self.was_open = false;
+        self.pending = None;
+    }
+
+    /// The NVS tab's contents.
+    pub fn ui(&mut self, ui: &mut egui::Ui, handle: &SimHandle) {
         if let Some((rx, sent)) = &self.saving {
             let result = match rx.try_recv() {
                 Ok(result) => Some(result),
@@ -98,105 +103,89 @@ impl PreferencesPanel {
         }
         self.was_open = true;
         let editable = self.snapshot.as_ref().is_some_and(|s| s.editable) && self.saving.is_none();
-        egui::Window::new("Firmware preferences").open(open).default_size([760.0, 440.0]).min_width(440.0).show(
-            ctx,
-            |ui| {
-                ui.weak(if editable {
-                    "Deep sleep · edits are saved immediately and take effect on the next wake"
-                } else {
-                    "Saved values from live NVS flash · editing requires deep sleep"
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(self.pending.is_none() && self.saving.is_none(), egui::Button::new("Refresh"))
-                        .clicked()
-                    {
-                        self.refresh(handle);
-                    }
-                    ui.checkbox(&mut self.auto_refresh, "Auto-refresh");
-                    if ui.add_enabled(editable, egui::Button::new("Add preference")).clicked() {
-                        self.editing = Some(Editor::new());
-                        self.error = None;
-                        self.notice = None;
-                    }
-                    if self.pending.is_some() || self.saving.is_some() {
-                        ui.spinner();
-                    } else if let Some(updated) = self.updated {
-                        ui.weak(format!("Updated {}s ago", updated.elapsed().as_secs()));
-                    }
-                });
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search namespace, key, type, or value"));
-                ui.separator();
-                if let Some(error) = &self.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                if let Some(notice) = &self.notice {
-                    ui.label(notice);
-                }
-                let Some(snapshot) = &self.snapshot else {
-                    ui.label("Loading preferences…");
-                    return;
-                };
-                for warning in &snapshot.warnings {
-                    ui.colored_label(ui.visuals().warn_fg_color, warning);
-                }
-                let filter = self.filter.to_lowercase();
-                let entries: Vec<_> = snapshot
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        [&entry.partition, &entry.namespace, &entry.key, entry.kind, &entry.value]
-                            .iter()
-                            .any(|text| text.to_lowercase().contains(&filter))
-                    })
-                    .collect();
-                ui.weak(format!("{} of {} preferences", entries.len(), snapshot.entries.len()));
-                if entries.is_empty() {
-                    ui.label(if snapshot.entries.is_empty() {
-                        "No saved preferences found."
-                    } else {
-                        "No matching preferences."
-                    });
-                }
-                egui::ScrollArea::vertical().id_salt("preferences_rows").show(ui, |ui| {
-                    for entries in entries.chunk_by(|a, b| a.partition == b.partition && a.namespace == b.namespace) {
-                        let first = entries[0];
-                        ui.add_space(10.0);
-                        ui.strong(format!("{} / {}", first.partition, first.namespace));
-                        egui::Grid::new((&first.partition, &first.namespace))
-                            .num_columns(4)
-                            .striped(true)
-                            .min_col_width(65.0)
-                            .max_col_width(450.0)
-                            .show(ui, |ui| {
-                                ui.weak("Key");
-                                ui.weak("Type");
-                                ui.weak("Value");
-                                ui.label("");
-                                ui.end_row();
-                                for entry in entries {
-                                    ui.monospace(&entry.key);
-                                    ui.weak(entry.kind);
-                                    ui.add(egui::Label::new(egui::RichText::new(&entry.value).monospace()).wrap());
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("Copy").on_hover_text("Copy value").clicked() {
-                                            ui.ctx().copy_text(entry.edit_value().into());
-                                        }
-                                        if ui.add_enabled(editable, egui::Button::new("Edit").small()).clicked() {
-                                            self.editing = Some(Editor::from(*entry));
-                                            self.error = None;
-                                            self.notice = None;
-                                        }
-                                    });
-                                    ui.end_row();
-                                }
-                            });
-                    }
-                });
-            },
+        ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(self.saving.is_none(), egui::Button::new("Refresh")).clicked() {
+                self.refresh(handle);
+            }
+            ui.checkbox(&mut self.auto_refresh, "Auto-refresh");
+            if ui
+                .add_enabled(editable, egui::Button::new("Add preference"))
+                .on_disabled_hover_text(NEEDS_SLEEP)
+                .clicked()
+            {
+                self.editing = Some(Editor::new());
+                self.error = None;
+                self.notice = None;
+            }
+        });
+        ui.add(
+            egui::TextEdit::singleline(&mut self.filter)
+                .hint_text("Search namespace, key, type, or value")
+                .desired_width(f32::INFINITY),
         );
+        ui.separator();
+        if let Some(error) = &self.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        if let Some(notice) = &self.notice {
+            ui.label(notice);
+        }
+        let Some(snapshot) = &self.snapshot else {
+            ui.label("Loading preferences…");
+            return;
+        };
+        for warning in &snapshot.warnings {
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
+        }
+        let filter = self.filter.to_lowercase();
+        let entries: Vec<_> = snapshot
+            .entries
+            .iter()
+            .filter(|entry| {
+                [&entry.partition, &entry.namespace, &entry.key, entry.kind, &entry.value]
+                    .iter()
+                    .any(|text| text.to_lowercase().contains(&filter))
+            })
+            .collect();
+        ui.weak(format!("{} of {} preferences", entries.len(), snapshot.entries.len()));
+        if entries.is_empty() {
+            ui.label(if snapshot.entries.is_empty() {
+                "No saved preferences found."
+            } else {
+                "No matching preferences."
+            });
+        }
+        // One row per key (key, type and buttons above the wrapped value), to fit a narrow panel.
+        egui::ScrollArea::vertical().id_salt("preferences_rows").auto_shrink([false, false]).show(ui, |ui| {
+            for entries in entries.chunk_by(|a, b| a.partition == b.partition && a.namespace == b.namespace) {
+                let first = entries[0];
+                crate::section(ui, &format!("{} / {}", first.partition, first.namespace));
+                for entry in entries {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.monospace(egui::RichText::new(&entry.key).strong());
+                        ui.weak(entry.kind);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(editable, egui::Button::new("Edit").small())
+                                .on_disabled_hover_text(NEEDS_SLEEP)
+                                .clicked()
+                            {
+                                self.editing = Some(Editor::from(*entry));
+                                self.error = None;
+                                self.notice = None;
+                            }
+                            if ui.small_button("Copy").on_hover_text("Copy value").clicked() {
+                                ui.ctx().copy_text(entry.edit_value().into());
+                            }
+                        });
+                    });
+                    ui.add(egui::Label::new(egui::RichText::new(&entry.value).monospace()).wrap());
+                }
+            }
+        });
         if let Some(editor) = &mut self.editing {
-            match editor.show(ctx, editable, self.saving.is_some(), self.error.as_deref()) {
+            match editor.show(ui.ctx(), editable, self.saving.is_some(), self.error.as_deref()) {
                 Some(EditAction::Save(change)) => {
                     let (reply, rx) = crossbeam_channel::bounded(1);
                     handle.send(Command::ChangePreference { change, reply });
@@ -210,7 +199,7 @@ impl PreferencesPanel {
                 None => {}
             }
         }
-        ctx.request_repaint_after(Duration::from_millis(100));
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
 }
 
@@ -258,11 +247,14 @@ impl Editor {
 
     fn show(&mut self, ctx: &egui::Context, editable: bool, saving: bool, error: Option<&str>) -> Option<EditAction> {
         let mut action = None;
-        egui::Window::new(if self.existing { "Edit preference" } else { "New preference" })
-            .id(egui::Id::new("preference_editor"))
-            .collapsible(false)
-            .default_width(480.0)
-            .show(ctx, |ui| {
+        let title = if self.existing {
+            format!("Edit {}/{}/{}", self.partition, self.namespace, self.key)
+        } else {
+            "New preference".into()
+        };
+        egui::Window::new(title).id(egui::Id::new("preference_editor")).collapsible(false).default_width(480.0).show(
+            ctx,
+            |ui| {
                 ui.add_enabled_ui(!saving, |ui| {
                     egui::Grid::new("preference_fields").num_columns(2).show(ui, |ui| {
                         for (label, text) in [
@@ -300,7 +292,7 @@ impl Editor {
                         ui.label(format!("Delete {}/{} from {}?", self.namespace, self.key, self.partition));
                     }
                     ui.horizontal(|ui| {
-                        let label = if self.deleting { "Confirm delete" } else { "Save preference" };
+                        let label = if self.deleting { "Confirm delete" } else { "Save" };
                         if ui.add_enabled(editable, egui::Button::new(label)).clicked() {
                             action = Some(EditAction::Save(PreferenceChange {
                                 partition: self.partition.clone(),
@@ -311,11 +303,11 @@ impl Editor {
                         }
                         if self.existing
                             && !self.deleting
-                            && ui.add_enabled(editable, egui::Button::new("Delete preference")).clicked()
+                            && ui.add_enabled(editable, egui::Button::new("Delete")).clicked()
                         {
                             self.deleting = true;
                         }
-                        if ui.button("Cancel edit").clicked() {
+                        if ui.button("Cancel").clicked() {
                             action = Some(EditAction::Cancel);
                         }
                     });
@@ -323,7 +315,8 @@ impl Editor {
                 if saving {
                     ui.spinner();
                 }
-            });
+            },
+        );
         action
     }
 }

@@ -81,6 +81,32 @@ enum Zoom {
     Fixed(f32),
 }
 
+/// The left utility panel's tabs; the panel is collapsed when none is selected.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LeftTab {
+    Server,
+    Faults,
+    Nvs,
+}
+
+impl LeftTab {
+    fn label(self) -> &'static str {
+        match self {
+            LeftTab::Server => "Server",
+            LeftTab::Faults => "Faults",
+            LeftTab::Nvs => "NVS",
+        }
+    }
+
+    fn hover(self) -> &'static str {
+        match self {
+            LeftTab::Server => "The built-in TRMNL server: serve your own images to the device",
+            LeftTab::Faults => "Network, flash and hardware faults",
+            LeftTab::Nvs => "Saved firmware preferences in live NVS flash",
+        }
+    }
+}
+
 /// A value we asked the emulator to change; shown optimistically until the status catches up.
 struct Pending<T> {
     value: T,
@@ -132,7 +158,6 @@ struct SimApp {
     console: ConsoleView,
     show_console: bool,
     preferences: preferences::PreferencesPanel,
-    show_preferences: bool,
     zoom: Zoom,
     /// The user picked a zoom preset (disables the initial auto-fit fallback).
     zoom_user_set: bool,
@@ -151,7 +176,7 @@ struct SimApp {
     faults_pending: Option<Pending<sim_api::Faults>>,
     notice: Option<Notice>,
     server: Option<ServerPanel>,
-    show_server: bool,
+    left_tab: Option<LeftTab>,
 }
 
 impl SimApp {
@@ -165,7 +190,7 @@ impl SimApp {
         let status = h.status.lock().clone();
         let server = opts.mock.clone().map(ServerPanel::new);
         SimApp {
-            show_server: server.as_ref().is_some_and(|s| s.is_running()),
+            left_tab: server.as_ref().is_some_and(|s| s.is_running()).then_some(LeftTab::Server),
             server,
             screen: Screen::new(h.frame.clone()),
             console: ConsoleView::new(h.console.clone()),
@@ -173,7 +198,6 @@ impl SimApp {
             h,
             show_console: true,
             preferences: preferences::PreferencesPanel::default(),
-            show_preferences: false,
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
             zoom_user_set: false,
             white_bezel: false,
@@ -211,6 +235,25 @@ impl SimApp {
 
     fn notify(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some(Notice { text: text.into(), error, at: Instant::now() });
+    }
+
+    /// The left panel's tab strip. Clicking the selected tab collapses the panel. A star
+    /// marks a tab whose state affects the device: the mock server running, a fault on.
+    fn left_tabs(&mut self, ui: &mut Ui) {
+        let tabs = [LeftTab::Server, LeftTab::Faults, LeftTab::Nvs];
+        let has_server = self.server.is_some();
+        for tab in tabs.into_iter().filter(|&t| t != LeftTab::Server || has_server) {
+            let selected = self.left_tab == Some(tab);
+            let starred = match tab {
+                LeftTab::Server => self.server.as_ref().is_some_and(|s| s.is_running()),
+                LeftTab::Faults => self.faults_on(),
+                LeftTab::Nvs => false,
+            };
+            let label = if starred { format!("{}*", tab.label()) } else { tab.label().to_string() };
+            if ui.selectable_label(selected, label).on_hover_text(tab.hover()).clicked() {
+                self.left_tab = if selected { None } else { Some(tab) };
+            }
+        }
     }
 
     // ---- input ------------------------------------------------------------------------------
@@ -289,7 +332,7 @@ impl SimApp {
                 Err(e) => self.notice = Some(Notice { text: e, error: true, at: Instant::now() }),
             }
         }
-        self.show_server = true;
+        self.left_tab = Some(LeftTab::Server);
     }
 
     fn paint_drop_hint(&self, ctx: &egui::Context) {
@@ -534,12 +577,10 @@ impl SimApp {
             if board.has_button {
                 section(ui, "Button");
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Exact press:").on_hover_text(
-                        "Press for an exact duration of virtual time (accurate in turbo mode).\n\
-                         Or hold the button next to the device / hold Space.",
-                    );
                     for (label, ms) in [("tap", 100), ("1 s", 1100), ("5 s", 5100), ("15 s", 15100)] {
-                        if ui.small_button(label).clicked() {
+                        let hover = "Press for an exact duration of virtual time (accurate in turbo mode).\n\
+                                     Or hold the button next to the device / hold Space.";
+                        if ui.small_button(label).on_hover_text(hover).clicked() {
                             self.send(Command::Press { ms });
                         }
                     }
@@ -589,16 +630,6 @@ impl SimApp {
                 "Not connected".to_string()
             };
             ui.weak(net);
-            if self.server.is_some() {
-                ui.toggle_value(&mut self.show_server, "🖧 Mock server panel")
-                    .on_hover_text("The built-in TRMNL server: serve your own images to the device");
-            }
-
-            section(ui, "Storage");
-            ui.toggle_value(&mut self.show_preferences, "Preferences")
-                .on_hover_text("Inspect saved firmware preferences in live NVS flash");
-
-            self.faults_section(ui);
 
             section(ui, "Battery");
             let mut mv = Pending::resolve(&mut self.battery_pending, self.status.battery_mv);
@@ -651,9 +682,7 @@ impl SimApp {
     }
 
     fn device_view(&mut self, ui: &mut Ui) {
-        const SIDE_W: f32 = 150.0;
-        const SIDE_H: f32 = 196.0;
-        const GAP: f32 = 22.0;
+        const GAP: f32 = 16.0;
         const PAD: f32 = 8.0;
         const CAPTION: f32 = 20.0;
 
@@ -663,12 +692,12 @@ impl SimApp {
         let scr = self.screen.size();
         let geom = Geometry::new(scr, board.has_touchbar, board.has_dock);
         let total_unit = geom.total(scr);
-        let side = board.has_button || board.has_touchbar;
-        let (side_w, gap) = if side { (SIDE_W, GAP) } else { (0.0, 0.0) };
+        let below = board.has_button || board.has_touchbar;
+        let (below_h, gap) = if below { (BELOW_H, GAP) } else { (0.0, 0.0) };
         let caption = if board.name.is_empty() { 0.0 } else { CAPTION };
         let fit = {
-            let zx = (avail.x - side_w - gap - 2.0 * PAD) / total_unit.x;
-            let zy = (avail.y - 2.0 * PAD - caption) / total_unit.y;
+            let zx = (avail.x - 2.0 * PAD) / total_unit.x;
+            let zy = (avail.y - 2.0 * PAD - caption - gap - below_h) / total_unit.y;
             zx.min(zy).clamp(0.05, 8.0)
         };
         // Until the user picks a zoom, an initial fixed zoom that doesn't fit switches to fit
@@ -689,7 +718,8 @@ impl SimApp {
 
         let body = geom.body(scr) * zoom;
         let dev = total_unit * zoom + Vec2::new(0.0, caption);
-        let group = Vec2::new(dev.x + gap + side_w, dev.y.max(if side { SIDE_H } else { 0.0 }));
+        let below_w = if below { BELOW_W } else { 0.0 };
+        let group = Vec2::new(dev.x.max(below_w), dev.y + gap + below_h);
         let content = group + Vec2::splat(2.0 * PAD);
 
         egui::ScrollArea::both().id_salt("device_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -697,17 +727,18 @@ impl SimApp {
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let g = Rect::from_center_size(rect.center(), group);
             let snap = |v: f32| (v * ppp).round() / ppp;
-            let top = g.center().y - dev.y / 2.0;
+            let top = g.min.y;
+            let left = g.center().x - dev.x / 2.0;
             if caption > 0.0 {
                 ui.painter().text(
-                    Pos2::new(g.min.x + 2.0, top),
+                    Pos2::new(left + 2.0, top),
                     Align2::LEFT_TOP,
                     &board.name,
                     FontId::proportional(13.0),
                     ui.visuals().weak_text_color(),
                 );
             }
-            let body_rect = Rect::from_min_size(Pos2::new(snap(g.min.x), snap(top + caption)), body);
+            let body_rect = Rect::from_min_size(Pos2::new(snap(left), snap(top + caption)), body);
 
             let mut zones = [ZoneVis::Idle; 3];
             if board.has_touchbar {
@@ -733,15 +764,15 @@ impl SimApp {
             };
             self.screen.paint(ui.painter(), body_rect, zoom, &geom, &look);
 
-            if side {
-                let side = Rect::from_min_size(
-                    Pos2::new(body_rect.max.x + GAP, g.center().y - SIDE_H / 2.0),
-                    Vec2::new(SIDE_W, SIDE_H),
+            if below {
+                let row = Rect::from_min_size(
+                    Pos2::new(g.center().x - BELOW_W / 2.0, g.min.y + dev.y + GAP),
+                    Vec2::new(BELOW_W, BELOW_H),
                 );
                 if board.has_button {
-                    self.physical_button(ui, side);
+                    self.physical_button(ui, row);
                 } else {
-                    self.touch_side(ui, side);
+                    self.touch_row(ui, row);
                 }
             }
         });
@@ -774,29 +805,37 @@ impl SimApp {
         }
     }
 
-    /// Side column for touch-bar boards: legend, hold timer and last-touch readout.
-    fn touch_side(&mut self, ui: &mut Ui, area: Rect) {
+    /// Row below the device for touch-bar boards: legend on the left, hold timer and
+    /// last-touch readout on the right.
+    fn touch_row(&mut self, ui: &mut Ui, area: Rect) {
         let v = ui.visuals().clone();
         let painter = ui.painter().clone();
-        let cx = area.center().x;
-        let mut y = area.min.y + 16.0;
+        let mut y = area.center().y - 32.0;
         painter.text(
-            Pos2::new(cx, y),
-            Align2::CENTER_TOP,
+            Pos2::new(area.min.x, y),
+            Align2::LEFT_TOP,
             "Touch bar",
             FontId::proportional(14.0),
             v.strong_text_color(),
         );
         y += 20.0;
         for line in ["click = tap · hold = finger down", "shift-click latches a zone", "keys: arrows or 1 2 3"] {
-            painter.text(Pos2::new(cx, y), Align2::CENTER_TOP, line, FontId::proportional(11.0), v.weak_text_color());
+            painter.text(
+                Pos2::new(area.min.x, y),
+                Align2::LEFT_TOP,
+                line,
+                FontId::proportional(11.0),
+                v.weak_text_color(),
+            );
             y += 15.0;
         }
-        y += 18.0;
+
+        let col = hold_column(area);
+        let cx = col.center().x;
         let held = self.touch.longest_hold();
-        let bar = Rect::from_min_size(Pos2::new(area.min.x, y), Vec2::new(area.width(), 10.0));
+        let bar = Rect::from_min_size(Pos2::new(col.min.x, col.center().y - 30.0), Vec2::new(col.width(), 10.0));
         hold_bar(&painter, &v, bar, held, 3.0, &[0.6, 2.0], false);
-        y = bar.max.y + 20.0;
+        let mut y = bar.max.y + 20.0;
         let names =
             |m: [bool; 3]| ZONES.iter().zip(m).filter(|(_, d)| *d).map(|(z, _)| z.name()).collect::<Vec<_>>().join("+");
         let line = if let Some(h) = held {
@@ -824,11 +863,13 @@ impl SimApp {
         }
     }
 
+    /// Row below the device for button boards: the button and its labels on the left, hold
+    /// timer and last-press readout on the right.
     fn physical_button(&mut self, ui: &mut Ui, area: Rect) {
         let v = ui.visuals().clone();
         let painter = ui.painter().clone();
-        let dia = 76.0;
-        let center = Pos2::new(area.center().x, area.min.y + dia / 2.0 + 2.0);
+        let dia = 52.0;
+        let center = Pos2::new(area.min.x + dia / 2.0 + 2.0, area.center().y);
         let hit = Rect::from_center_size(center, Vec2::splat(dia));
         let resp = ui.interact(hit, ui.id().with("physical_button"), Sense::click_and_drag()).on_hover_text(
             "The device's button. Hold for 1 s / 5 s / 15 s; double-click within 800 ms.\nKeyboard: hold Space.",
@@ -859,33 +900,31 @@ impl SimApp {
         }
         painter.circle_filled(center + offset, dia / 2.0, fill);
         painter.circle_stroke(center + offset, dia / 2.0, Stroke::new(1.5, ring));
-        painter.circle_stroke(center + offset, dia / 2.0 - 7.0, Stroke::new(1.0, ring.gamma_multiply(0.6)));
+        painter.circle_stroke(center + offset, dia / 2.0 - 5.0, Stroke::new(1.0, ring.gamma_multiply(0.6)));
         let label_col = if pressed { v.selection.stroke.color } else { v.text_color() };
-        painter.text(center + offset, Align2::CENTER_CENTER, "PUSH", FontId::proportional(13.0), label_col);
+        painter.text(center + offset, Align2::CENTER_CENTER, "PUSH", FontId::proportional(10.0), label_col);
 
-        let mut y = hit.max.y + 8.0;
+        let x = hit.max.x + 14.0;
         painter.text(
-            Pos2::new(area.center().x, y),
-            Align2::CENTER_TOP,
+            Pos2::new(x, center.y - 2.0),
+            Align2::LEFT_BOTTOM,
             "Button",
             FontId::proportional(14.0),
             v.strong_text_color(),
         );
-        y += 18.0;
         painter.text(
-            Pos2::new(area.center().x, y),
-            Align2::CENTER_TOP,
+            Pos2::new(x, center.y + 2.0),
+            Align2::LEFT_TOP,
             "hold Space",
             FontId::proportional(11.0),
             v.weak_text_color(),
         );
-        y += 24.0;
 
         // Hold timer: sqrt scale over 0..16 s so the 1 s / 5 s / 15 s marks are spread out.
-        let bar = Rect::from_min_size(Pos2::new(area.min.x, y), Vec2::new(area.width(), 10.0));
+        let col = hold_column(area);
+        let bar = Rect::from_min_size(Pos2::new(col.min.x, col.center().y - 22.0), Vec2::new(col.width(), 10.0));
         let held = self.button.pressed_at.map(|p| p.elapsed().as_secs_f32());
         hold_bar(&painter, &v, bar, held, 16.0, &[1.0, 5.0, 15.0], true);
-        y = bar.max.y + 20.0;
 
         let line = if let Some(h) = held {
             format!("holding {h:.2} s")
@@ -900,7 +939,13 @@ impl SimApp {
         } else {
             String::new()
         };
-        painter.text(Pos2::new(area.center().x, y), Align2::CENTER_TOP, line, FontId::monospace(11.0), v.text_color());
+        painter.text(
+            Pos2::new(col.center().x, bar.max.y + 20.0),
+            Align2::CENTER_TOP,
+            line,
+            FontId::monospace(11.0),
+            v.text_color(),
+        );
     }
 }
 
@@ -935,17 +980,36 @@ impl eframe::App for SimApp {
             ui.add_space(4.0);
             self.controls(ui);
         });
-        let board = self.board();
-        if let Some(p) = &mut self.server {
-            let (h, status) = (self.h.clone(), self.status.clone());
-            egui::Panel::left("server").resizable(true).default_size(330.0).min_size(240.0).show_collapsible(
-                ui,
-                &mut self.show_server,
-                |ui| {
-                    ui.add_space(4.0);
-                    p.ui(ui, &h, &status, &board);
-                },
-            );
+        // The Server tab disappears with the mock server (`--no-mock`).
+        if self.server.is_none() && self.left_tab == Some(LeftTab::Server) {
+            self.left_tab = None;
+        }
+        if let Some(tab) = self.left_tab {
+            egui::Panel::left("utility").resizable(true).default_size(360.0).min_size(260.0).show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    self.left_tabs(ui);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("⏴").on_hover_text("Hide the panel").clicked() {
+                            self.left_tab = None;
+                        }
+                    });
+                });
+                ui.separator();
+                match tab {
+                    LeftTab::Server => {
+                        let board = self.board();
+                        if let Some(p) = &mut self.server {
+                            p.ui(ui, &self.h, &self.status, &board);
+                        }
+                    }
+                    LeftTab::Faults => self.faults_tab(ui),
+                    LeftTab::Nvs => self.preferences.ui(ui, &self.h),
+                }
+            });
+        }
+        if self.left_tab != Some(LeftTab::Nvs) {
+            self.preferences.hidden();
         }
         egui::Panel::bottom("console").resizable(true).default_size(230.0).min_size(90.0).show_collapsible(
             ui,
@@ -958,16 +1022,18 @@ impl eframe::App for SimApp {
             },
         );
         egui::CentralPanel::default().show(ui, |ui| {
-            if !self.show_console {
+            if !self.show_console || self.left_tab.is_none() {
                 ui.horizontal(|ui| {
-                    if ui.small_button("⬆ Serial console").clicked() {
+                    if self.left_tab.is_none() {
+                        self.left_tabs(ui);
+                    }
+                    if !self.show_console && ui.small_button("⬆ Serial console").clicked() {
                         self.show_console = true;
                     }
                 });
             }
             self.device_view(ui);
         });
-        self.preferences.show(&ctx, &self.h, &mut self.show_preferences);
         self.paint_drop_hint(&ctx);
 
         self.apply_button();
@@ -989,6 +1055,15 @@ impl eframe::App for SimApp {
         };
         ctx.request_repaint_after(after);
     }
+}
+
+/// The row below the device (button or touch bar controls).
+const BELOW_W: f32 = 440.0;
+const BELOW_H: f32 = 68.0;
+
+/// The right-hand part of the row below the device, holding the hold timer.
+fn hold_column(row: Rect) -> Rect {
+    Rect::from_min_max(Pos2::new(row.max.x - 240.0, row.min.y), row.max)
 }
 
 /// A hold-duration bar with labelled threshold ticks. The fill colour steps up with each
@@ -1204,7 +1279,7 @@ mod render_tests {
         use egui_kittest::kittest::Queryable;
         let (mut h, ports) = harness(800, 480, BoardInfo::default(), false);
         h.run_steps(3);
-        h.get_by_label("Preferences").click();
+        h.get_by_label("NVS").click();
         h.run_steps(3);
         let reply = ports
             .commands
@@ -1231,7 +1306,8 @@ mod render_tests {
         h.get_by_label("visible-secret");
         h.get_by_label("Edit").click();
         h.run_steps(3);
-        h.get_by_label("Save preference").click();
+        h.get_by_label("Edit nvs/settings/password");
+        h.get_by_label("Save").click();
         h.run_steps(3);
         let (change, reply) = ports
             .commands
@@ -1245,7 +1321,7 @@ mod render_tests {
         reply.send(Err("deep sleep required".into())).unwrap();
         h.run_steps(3);
         h.get_all_by_label("deep sleep required").next().expect("write rejection shown");
-        h.get_by_label("Cancel edit").click();
+        h.get_by_label("Cancel").click();
         h.run_steps(3);
         h.get_by_label("Refresh").click();
         h.run_steps(3);
@@ -1259,9 +1335,11 @@ mod render_tests {
         let (mut h, _p) = harness(800, 480, BoardInfo::default(), false);
         h.run_steps(5);
         save(&mut h, "og");
-        // the faults, expanded
         use egui_kittest::kittest::Queryable;
-        h.get_by_label("FAULTS").click();
+        h.get_by_label("Faults").click();
+        h.run_steps(5);
+        h.get_by_label("DNS fails").click();
+        h.get_by_label("⚡ Cut power on next NVS write").click();
         h.run_steps(5);
         save(&mut h, "og_faults");
     }
