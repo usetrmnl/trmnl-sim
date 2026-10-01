@@ -250,30 +250,20 @@ The implemented radio is peripheral-only, one link, without SMP/link encryption;
 application-layer Security 1 still executes in full. Central-role scanning and
 whitelists are not implemented.
 
-Run the firmware integration check (it creates isolated temporary flash):
+Firmware integration coverage lives in [trmnl-spec](https://github.com/usetrmnl/trmnl-spec),
+with the shared Ruby simulator client and TLS mock. Its OG Bluetooth specs cover discovery,
+QR-based Security 1, encrypted status, long writes, oversize rejection, reconnect,
+wrong proof, reset invalidation, and encrypted WiFi/setup-code handoff:
 
 ```sh
-python3 tests/bluetooth/test_firmware.py ../firmware/.pio/build/trmnl
+cd ../trmnl-spec
+ENVS=trmnl:full FIRMWARE_REPO=../firmware SIM_REPO=../trmnl-sim \
+  bundle exec rspec spec/core/og_bluetooth_spec.rb
 ```
 
-For QR-based authentication checks, install Python `cryptography` in your test
-environment and supply an executable that accepts a screenshot PNG path and
-prints its decoded BLE QR payload (and exits nonzero when no QR is found):
-
-```sh
-python3 tests/bluetooth/test_firmware.py ../firmware/.pio/build/trmnl \
-  --qr-decoder /path/to/qr-decoder --provision
-```
-
-The extended check verifies the displayed QR, real Security 1, encrypted status,
-long writes, NimBLE's 512-byte attribute limit, reconnect, wrong proof, and reset
-invalidation. `--provision` additionally verifies rejected
-invalid credentials, encrypted Wi-Fi configuration, HTTPS setup, the setup code,
-and its acknowledgment in a second isolated run. It uses the built-in mock server
-behind a temporary loopback TLS proxy and redirects only the simulator's DNS and
-port mapping. Both runs use offline networking; they do not contact the configured
-real server. No host trust-store changes are needed. These tests never read
-internal firmware pairing state.
+See that repository's setup instructions for the QR decoder and `PAIRING_HOST` override
+when testing firmware built for another setup server. The specs use offline networking
+and a local TLS server; they do not contact the configured real server.
 
 ### Time
 
