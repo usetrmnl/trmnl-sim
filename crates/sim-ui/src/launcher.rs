@@ -113,7 +113,7 @@ impl eframe::App for Launcher {
                 ui.checkbox(&mut self.erase, "Erase flash")
                     .on_hover_text("Start factory-fresh: forget WiFi, API key and settings (--erase; not remembered)");
                 ui.checkbox(&mut self.hot_reload, "Hot reload").on_hover_text(
-                    "On each wake from deep sleep, load the firmware again if it was rebuilt (--hot-reload)",
+                    "On each wake, reset or power cycle, load the firmware again if it was rebuilt (--hot-reload)",
                 );
             });
 

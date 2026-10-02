@@ -32,7 +32,7 @@ pub struct RunnerOptions {
     pub coverage: Option<Reporter>,
     /// Faults injected from the start (`--faults`).
     pub faults: Faults,
-    /// `--hot-reload`: load a rebuilt firmware when the device wakes from deep sleep.
+    /// `--hot-reload`: load a rebuilt firmware whenever the device boots again.
     pub hot_reload: Option<HotReload>,
 }
 
@@ -50,9 +50,10 @@ impl HotReload {
     }
 }
 
-/// Wake from deep sleep, first loading a rebuilt firmware (`--hot-reload`). A new build boots
-/// from power-on, as after flashing it over USB: the old one's RTC memory means nothing to it.
-fn wake(m: &mut dyn Machine, ports: &SimPorts, opts: &mut RunnerOptions, by_timer: bool, by_gpio: bool) {
+/// Boot the device again (wake, reset button, power cycle), first loading a rebuilt firmware
+/// (`--hot-reload`). A new build boots from power-on, as after flashing it over USB: the old
+/// one's RTC memory means nothing to it.
+fn boot(m: &mut dyn Machine, ports: &SimPorts, opts: &mut RunnerOptions, kind: ResetKind) {
     if let Some(hr) = &mut opts.hot_reload {
         let stamps = [crate::firmware::file_stamp(&hr.firmware), crate::firmware::file_stamp(&hr.elf)];
         if stamps != hr.stamps {
@@ -77,7 +78,7 @@ fn wake(m: &mut dyn Machine, ports: &SimPorts, opts: &mut RunnerOptions, by_time
             }
         }
     }
-    m.reset(ResetKind::DeepSleepWake { by_timer, by_gpio });
+    m.reset(kind);
 }
 
 /// How a run ended.
@@ -347,13 +348,13 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 }
                 Command::Reset => {
                     ports.console.lock().push_sim("reset button pressed");
-                    m.reset(ResetKind::ResetPin);
+                    boot(m.as_mut(), &ports, &mut opts, ResetKind::ResetPin);
                     power = Power::On;
                     rebase = true;
                 }
                 Command::PowerCycle => {
                     ports.console.lock().push_sim("power cycled");
-                    m.reset(ResetKind::PowerOn);
+                    boot(m.as_mut(), &ports, &mut opts, ResetKind::PowerOn);
                     power = Power::On;
                     rebase = true;
                 }
@@ -364,7 +365,8 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                             m.advance_time(t.saturating_sub(now));
                         }
                         ports.console.lock().push_sim("woken from deep sleep (timer)");
-                        wake(m.as_mut(), &ports, &mut opts, true, false);
+                        let kind = ResetKind::DeepSleepWake { by_timer: true, by_gpio: false };
+                        boot(m.as_mut(), &ports, &mut opts, kind);
                         power = Power::On;
                         rebase = true;
                     }
@@ -641,7 +643,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                                 st.faults = faults.clone();
                                 st.power_losses = power_losses;
                             }
-                            m.reset(ResetKind::PowerOn);
+                            boot(m.as_mut(), &ports, &mut opts, ResetKind::PowerOn);
                             anchor_wall = Instant::now();
                             anchor_virt = m.now_ns();
                         }
@@ -674,7 +676,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 let by_timer = wake_at.is_some_and(|t| m.now_ns() >= t);
                 if by_gpio || by_timer {
                     ports.console.lock().push_sim(if by_gpio { "woken by button" } else { "woken by timer" });
-                    wake(m.as_mut(), &ports, &mut opts, by_timer, by_gpio);
+                    boot(m.as_mut(), &ports, &mut opts, ResetKind::DeepSleepWake { by_timer, by_gpio });
                     power = Power::On;
                     anchor_wall = Instant::now();
                     anchor_virt = m.now_ns();

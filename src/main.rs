@@ -98,9 +98,9 @@ struct Cli {
     /// The firmware's ELF (default: the firmware's path with the .elf extension).
     #[arg(long, value_name = "PATH")]
     elf: Option<PathBuf>,
-    /// When the device wakes from deep sleep, load the firmware again if it (or its ELF) has
-    /// changed, and boot it from power-on, as after flashing it: rebuild and see it on the next
-    /// wake without restarting the simulator.
+    /// Whenever the device boots again (wake from deep sleep, reset button, power cycle), load
+    /// the firmware again if it (or its ELF) has changed, and boot it from power-on, as after
+    /// flashing it: rebuild and see it on the next wake without restarting the simulator.
     #[arg(long)]
     hot_reload: bool,
     /// Where else to look for the ELF of a build an OTA update installs (repeatable). The
