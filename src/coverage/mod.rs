@@ -6,7 +6,7 @@
 //! lcov tracefile: a line is hit if any instruction attributed to it executed, and
 //! reported with count 0 if it has code that never ran.
 //!
-//! Each known app ELF (`firmware.elf`, plus `--elf` builds booted after an OTA) has
+//! Each known app ELF (`firmware.elf`, plus an `--ota-firmware` build booted after an OTA) has
 //! its own bitmap; the one the bootloader starts is active. Bitmaps survive resets
 //! and deep sleep, so a run accumulates everything the firmware did. Functions
 //! replaced by an HLE hook never run their guest body; unless it ran anyway (a hook

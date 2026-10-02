@@ -168,10 +168,9 @@ fn split_merged(data: &[u8]) -> Vec<(u32, Vec<u8>)> {
 
 impl Firmware {
     /// Load a merged flash image (`merged_firmware.bin`, everything `esptool write_flash 0x0`
-    /// would write) and its ELF, the same path with the `.elf` extension.
-    pub fn from_merged(path: &Path) -> Result<Self> {
-        let elf_path = path.with_extension("elf");
-        let elf = std::fs::read(&elf_path).with_context(|| format!("reading {}", elf_path.display()))?;
+    /// would write) and its ELF.
+    pub fn from_merged(path: &Path, elf_path: &Path) -> Result<Self> {
+        let elf = std::fs::read(elf_path).with_context(|| format!("reading {}", elf_path.display()))?;
         let elf_sha256 = sha256(&elf);
         let symbols = Symbols::from_elf(&elf)?;
         let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;

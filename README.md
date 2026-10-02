@@ -167,7 +167,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
 | Option | |
 |---|---|
-| `<firmware>` | Merged flash image (`FW1.8.17-trmnl.bin`); its ELF is the same path with `.elf`. Without it the window asks |
+| `<firmware>` | Merged flash image (`FW1.8.17-trmnl.bin`); its ELF is the same path with `.elf` unless `--elf` says otherwise. Without it the window asks |
 | `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the `-<env>` in the image's file name |
 | `--flash PATH` | Flash image (default `sim-flash.bin` next to the firmware); the firmware is written on every start, NVS and SPIFFS are kept |
 | `--erase` | Start from erased flash |
@@ -181,7 +181,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--portal-port N` | Host port for the captive portal (default 8080, 0 = any) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
 | `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
-| `--elf PATH` | Extra firmware ELFs the device may boot after an OTA (repeatable) |
+| `--elf PATH` | The firmware's ELF (default: the firmware's path with `.elf`) |
 | `--seconds S` | Stop after S seconds of virtual time |
 | `--screenshot PNG` | Save the display when the run ends |
 | `--panel-rev HEX` | What the panel's REV command returns (the `Panel-Rev` header) |
@@ -493,8 +493,8 @@ RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so
 
 **HLE and OTA.** Hooks are bound to the ELF's addresses. Each boot, the simulator
 matches the slot's app descriptor to a known ELF, so an OTA to another build needs its ELF
-(`--ota-firmware` and the window's firmware picker load the one next to the image; else
-`--elf`) or the run halts with a clear message. Coverage leaves out an app picked in the window.
+(`--ota-firmware` and the Server tab's firmware picker load the one next to the image) or the
+run halts with a clear message. Coverage leaves out an app picked in the window.
 
 ## Limitations
 

@@ -265,7 +265,7 @@ impl Esp32c5 {
         let Some(i) = self.apps.iter().position(|a| a.0 == sha) else {
             self.pending_halt = Some(format!(
                 "the app at {off:#x} (version {version}, ELF sha256 {}) has no matching ELF; \
-                 HLE needs symbols. Pass it with --elf <firmware.elf>",
+                 HLE needs symbols. Offer the update with --ota-firmware (its .elf next to it)",
                 firmware::hex(&sha)
             ));
             return;

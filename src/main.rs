@@ -27,7 +27,7 @@ use devices::spi_flash::SpiFlash;
 #[command(version, about)]
 struct Cli {
     /// Merged flash image (e.g. FW1.8.17-trmnl.bin); its ELF is the same path with the .elf
-    /// extension. Without one, the window asks for it.
+    /// extension unless --elf says otherwise. Without one, the window asks for it.
     firmware: Option<PathBuf>,
     /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
     /// seeed_reTerminal_E1001); it picks the board. Default: the `-<env>` in the firmware's
@@ -95,9 +95,9 @@ struct Cli {
     /// /firmware.bin; its ELF (the same path with .elf) is loaded so the device can boot it.
     #[arg(long, value_name = "PATH")]
     ota_firmware: Option<PathBuf>,
-    /// Additional firmware ELFs the device may boot after an OTA update (repeatable).
-    #[arg(long)]
-    elf: Vec<PathBuf>,
+    /// The firmware's ELF (default: the firmware's path with the .elf extension).
+    #[arg(long, value_name = "PATH")]
+    elf: Option<PathBuf>,
     /// Log calls to these firmware functions (comma separated symbol names).
     #[arg(long, value_delimiter = ',')]
     trace: Vec<String>,
@@ -211,7 +211,8 @@ fn main() -> Result<()> {
         #[cfg(not(feature = "gui"))]
         None => anyhow::bail!("built without the `gui` feature: pass the firmware image"),
     };
-    let fw = firmware::Firmware::from_merged(&firmware)?;
+    let elf = cli.elf.clone().unwrap_or_else(|| firmware.with_extension("elf"));
+    let fw = firmware::Firmware::from_merged(&firmware, &elf)?;
     let fw_dir = firmware.parent().map(PathBuf::from).unwrap_or_default();
     let restore = cli.restore.as_deref().map(savepoint::SavePoint::load).transpose()?;
     let flash_path = cli.flash.clone().unwrap_or_else(|| fw_dir.join("sim-flash.bin"));
@@ -237,8 +238,8 @@ fn main() -> Result<()> {
     };
     let rom = std::fs::read(&rom_path)?;
 
-    let ota_elf = cli.ota_firmware.as_ref().map(|p| p.with_extension("elf"));
-    let extra_elfs: Vec<PathBuf> = cli.elf.iter().cloned().chain(ota_elf).collect();
+    // The app an OTA update may install, with its ELF next to it.
+    let extra_elfs: Vec<PathBuf> = cli.ota_firmware.iter().map(|p| p.with_extension("elf")).collect();
     let mut apps = vec![(fw.elf_sha256, fw.symbols.clone(), fw.name.clone())];
     for p in &extra_elfs {
         let a = firmware::ExtraApp::from_elf(p)?;
@@ -358,8 +359,7 @@ fn main() -> Result<()> {
     }
     let coverage = match &cli.coverage {
         Some(path) => {
-            let elfs: Vec<PathBuf> =
-                std::iter::once(firmware.with_extension("elf")).chain(extra_elfs.clone()).collect();
+            let elfs: Vec<PathBuf> = std::iter::once(elf.clone()).chain(extra_elfs.clone()).collect();
             let data = elfs.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
             machine.set_coverage(coverage::Coverage::new(&data.iter().map(Vec::as_slice).collect::<Vec<_>>())?);
             // DWARF paths are absolute: so is the root.

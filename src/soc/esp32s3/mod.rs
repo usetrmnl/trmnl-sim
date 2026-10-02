@@ -351,7 +351,7 @@ impl Esp32s3 {
         self.hle.wifi.set_abi(hle::wifi::WifiAbi::for_idf(&app.idf_version));
         let Some(i) = self.apps.iter().position(|a| a.0 == app.elf_sha256) else {
             self.pending_halt = Some(format!(
-                "the app at {:#x} (version {}, ELF sha256 {}) has no matching ELF; pass it with --elf",
+                "the app at {:#x} (version {}, ELF sha256 {}) has no matching ELF; offer the update with --ota-firmware (its .elf next to it)",
                 app.offset,
                 app.version,
                 firmware::hex(&app.elf_sha256)
