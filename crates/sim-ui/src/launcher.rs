@@ -93,6 +93,11 @@ impl eframe::App for Launcher {
                 }
                 path_label(ui, self.firmware.as_deref(), "none");
             });
+            row(ui, "", |ui| {
+                ui.checkbox(&mut self.hot_reload, "Hot reload").on_hover_text(
+                    "On each wake, reset or power cycle, load the firmware again if it was rebuilt (--hot-reload)",
+                );
+            });
 
             row(ui, "Board", |ui| {
                 let selected = self.board.map(|i| label(&self.boards[i])).unwrap_or_else(|| "Choose…".into());
@@ -112,9 +117,6 @@ impl eframe::App for Launcher {
             row(ui, "", |ui| {
                 ui.checkbox(&mut self.erase, "Erase flash")
                     .on_hover_text("Start factory-fresh: forget WiFi, API key and settings (--erase; not remembered)");
-                ui.checkbox(&mut self.hot_reload, "Hot reload").on_hover_text(
-                    "On each wake, reset or power cycle, load the firmware again if it was rebuilt (--hot-reload)",
-                );
             });
 
             let problems = self.problems();
