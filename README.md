@@ -182,6 +182,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
 | `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
 | `--elf PATH` | The firmware's ELF (default: the firmware's path with `.elf`) |
+| `--elf-dir DIR` | Also look here for the ELF of a build an OTA update installs (repeatable; see [HLE and OTA](#architecture)) |
 | `--seconds S` | Stop after S seconds of virtual time |
 | `--screenshot PNG` | Save the display when the run ends |
 | `--panel-rev HEX` | What the panel's REV command returns (the `Panel-Rev` header) |
@@ -492,9 +493,12 @@ RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so
 `Board` plus its devices; a new chip is a `soc/` module.
 
 **HLE and OTA.** Hooks are bound to the ELF's addresses. Each boot, the simulator
-matches the slot's app descriptor to a known ELF, so an OTA to another build needs its ELF
-(`--ota-firmware` and the Server tab's firmware picker load the one next to the image) or the
-run halts with a clear message. Coverage leaves out an app picked in the window.
+matches the slot's app descriptor to a known ELF, so an OTA to another build needs its ELF.
+`--ota-firmware` and the Server tab's firmware picker load the one next to the image. For an
+update from anywhere else, the descriptor's ELF SHA-256 finds it: any `.elf` in the
+directories of the firmware, its ELF, `--ota-firmware` or `--elf-dir` that hashes to it. With
+none, the run halts with a clear message. Coverage leaves out an app picked in the window or
+found this way.
 
 ## Limitations
 
@@ -509,7 +513,7 @@ run halts with a clear message. Coverage leaves out an app picked in the window.
 - Timing counts instructions (1 per cycle), not cycles; flash operations are instant.
 - The e-paper model is exact in pixels but approximate in grays and ghosting; the 4-color
   refresh is a fixed frame sequence.
-- OTA to another build needs its ELF.
+- OTA to another build needs its ELF in a searched directory.
 - Save points: only deep-sleep ones keep chip state; a powered modem comes back off.
 
 ## Troubleshooting

@@ -214,6 +214,65 @@ impl ExtraApp {
     }
 }
 
+/// Where to look for the ELF of an app booted without one (installed by an OTA update from a
+/// server that only sent the image). Its app descriptor records its ELF's SHA-256, so any
+/// `.elf` in these directories that hashes to it is the one.
+#[derive(Default)]
+pub struct ElfSearch {
+    dirs: Vec<PathBuf>,
+    /// SHA-256 of the files hashed so far, by path and modification time.
+    seen: HashMap<PathBuf, (std::time::SystemTime, [u8; 32])>,
+}
+
+impl ElfSearch {
+    pub fn new(dirs: Vec<PathBuf>) -> Self {
+        let mut unique = std::collections::HashSet::new();
+        let dirs = dirs
+            .into_iter()
+            .map(|d| if d.as_os_str().is_empty() { PathBuf::from(".") } else { d })
+            .filter(|d| unique.insert(d.clone()))
+            .collect();
+        ElfSearch { dirs, seen: HashMap::new() }
+    }
+
+    /// The ELF whose SHA-256 is `sha`, if one of the directories has it.
+    pub fn find(&mut self, sha: &[u8; 32]) -> Option<ExtraApp> {
+        for dir in &self.dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else { continue };
+            for path in entries.flatten().map(|e| e.path()) {
+                if path.extension().is_none_or(|e| e != "elf") {
+                    continue;
+                }
+                let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else { continue };
+                let hash = match self.seen.get(&path) {
+                    Some((t, h)) if *t == mtime => *h,
+                    _ => {
+                        let Ok(data) = std::fs::read(&path) else { continue };
+                        let h = sha256(&data);
+                        self.seen.insert(path.clone(), (mtime, h));
+                        h
+                    }
+                };
+                if hash == *sha {
+                    return ExtraApp::from_elf(&path).ok();
+                }
+            }
+        }
+        None
+    }
+
+    /// Why an app at `off` can't run: no ELF anywhere.
+    pub fn not_found(&self, off: u32, version: &str, sha: &[u8; 32]) -> String {
+        let dirs: Vec<String> = self.dirs.iter().map(|d| d.display().to_string()).collect();
+        format!(
+            "the app at {off:#x} (version {version}, ELF sha256 {}) has no matching ELF, and none of {} \
+             has one; HLE needs its symbols. Put its ELF there, or pass --elf-dir",
+            hex(sha),
+            if dirs.is_empty() { "no directories".into() } else { dirs.join(", ") }
+        )
+    }
+}
+
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     use sha2::Digest;
     sha2::Sha256::digest(data).into()
@@ -412,6 +471,24 @@ pub fn find_rom_elf(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elf_search_matches_by_hash() {
+        let dir = std::env::temp_dir().join(format!("trmnl-sim-elf-search-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The test binary stands in for an ELF: the object crate parses it as well.
+        let elf = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        std::fs::write(dir.join("other.elf"), b"not this one").unwrap();
+        std::fs::write(dir.join("FW1.8.18-trmnl.elf"), &elf).unwrap();
+        std::fs::write(dir.join("FW1.8.18-trmnl.bin"), &elf).unwrap();
+        let mut search = ElfSearch::new(vec![dir.clone(), dir.clone(), "/nonexistent".into()]);
+        let found = search.find(&sha256(&elf)).map(|a| a.name);
+        let missing = search.find(&[0; 32]).map(|a| a.name);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(found, Some(dir.join("FW1.8.18-trmnl.elf").display().to_string()));
+        assert_eq!(missing, None);
+        assert!(search.not_found(0x10000, "1.8.18", &[0; 32]).contains("--elf-dir"));
+    }
 
     #[test]
     fn merged_image_keeps_empty_partitions() {

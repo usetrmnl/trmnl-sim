@@ -63,6 +63,8 @@ pub struct Esp32s3 {
     rom_sections: Vec<(u32, Vec<u8>)>,
     rom_syms: Symbols,
     apps: Vec<([u8; 32], Symbols, String)>,
+    /// Where to look for the ELF of an app booted without one.
+    elf_search: firmware::ElfSearch,
     active_app: Option<usize>,
     /// Flash offset of the app booted last (to report a boot from the other OTA slot).
     boot_offset: Option<u32>,
@@ -209,6 +211,7 @@ impl Esp32s3 {
         flash: SpiFlash,
         board: Box<dyn Board>,
         apps: Vec<([u8; 32], Symbols, String)>,
+        elf_search: firmware::ElfSearch,
         trace: &[String],
     ) -> anyhow::Result<Self> {
         let rom_sections = firmware::rom_sections(rom_elf)?;
@@ -234,6 +237,7 @@ impl Esp32s3 {
             syms: rom_syms.clone(),
             rom_syms,
             apps,
+            elf_search,
             active_app: None,
             boot_offset: None,
             trace: trace.to_vec(),
@@ -349,14 +353,20 @@ impl Esp32s3 {
         }
         self.boot_offset = Some(app.offset);
         self.hle.wifi.set_abi(hle::wifi::WifiAbi::for_idf(&app.idf_version));
-        let Some(i) = self.apps.iter().position(|a| a.0 == app.elf_sha256) else {
-            self.pending_halt = Some(format!(
-                "the app at {:#x} (version {}, ELF sha256 {}) has no matching ELF; offer the update with --ota-firmware (its .elf next to it)",
-                app.offset,
-                app.version,
-                firmware::hex(&app.elf_sha256)
-            ));
-            return;
+        let sha = app.elf_sha256;
+        let i = match self.apps.iter().position(|a| a.0 == sha) {
+            Some(i) => i,
+            None => match self.elf_search.find(&sha) {
+                Some(a) => {
+                    self.msg(format!("found the ELF of the app at {:#x}: {}", app.offset, a.name));
+                    self.apps.push((a.elf_sha256, a.symbols, a.name));
+                    self.apps.len() - 1
+                }
+                None => {
+                    self.pending_halt = Some(self.elf_search.not_found(app.offset, &app.version, &sha));
+                    return;
+                }
+            },
         };
         if self.active_app == Some(i) {
             self.cover_app();

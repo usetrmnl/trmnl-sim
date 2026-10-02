@@ -98,6 +98,11 @@ struct Cli {
     /// The firmware's ELF (default: the firmware's path with the .elf extension).
     #[arg(long, value_name = "PATH")]
     elf: Option<PathBuf>,
+    /// Where else to look for the ELF of a build an OTA update installs (repeatable). The
+    /// directories of the firmware, its ELF and --ota-firmware are searched first; the app's
+    /// recorded ELF SHA-256 picks the file.
+    #[arg(long, value_name = "DIR")]
+    elf_dir: Vec<PathBuf>,
     /// Log calls to these firmware functions (comma separated symbol names).
     #[arg(long, value_delimiter = ',')]
     trace: Vec<String>,
@@ -245,6 +250,10 @@ fn main() -> Result<()> {
         let a = firmware::ExtraApp::from_elf(p)?;
         apps.push((a.elf_sha256, a.symbols, a.name));
     }
+    let dir_of = |p: &PathBuf| p.parent().map(PathBuf::from).unwrap_or_default();
+    let search = [&firmware, &elf].into_iter().chain(&cli.ota_firmware).map(dir_of).chain(cli.elf_dir.clone());
+    let elf_search = firmware::ElfSearch::new(search.collect());
+
     let memcheck_mode = cli.memcheck.as_deref().map(|m| match m {
         "halt" => memcheck::Mode::Halt,
         _ => memcheck::Mode::Log,
@@ -308,7 +317,7 @@ fn main() -> Result<()> {
     };
     let mut machine: Box<dyn soc::Machine> = match fw.chip_id {
         firmware::CHIP_ESP32S3 => {
-            let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, &cli.trace)?;
+            let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, elf_search, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
             }
@@ -320,7 +329,7 @@ fn main() -> Result<()> {
             Box::new(m)
         }
         firmware::CHIP_ESP32C5 => {
-            let mut m = soc::esp32c5::Esp32c5::new(&rom, flash, board, apps, &cli.trace)?;
+            let mut m = soc::esp32c5::Esp32c5::new(&rom, flash, board, apps, elf_search, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
             }
@@ -332,7 +341,7 @@ fn main() -> Result<()> {
             Box::new(m)
         }
         _ => {
-            let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, &cli.trace)?;
+            let mut m = soc::esp32c3::Esp32c3::new(&rom, flash, board, apps, elf_search, &cli.trace)?;
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
             }
