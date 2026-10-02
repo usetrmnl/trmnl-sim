@@ -1,6 +1,6 @@
-//! The window shown when the simulator starts without a board and firmware: pick both (and
-//! optionally the MAC, or erase the flash), then the simulator window opens. The last choice is
-//! remembered for next time, except erasing the flash.
+//! The window shown when the simulator starts without a firmware image: pick it and the board
+//! (and optionally the MAC, erasing the flash and hot reload), then the simulator window opens.
+//! The last choice is remembered for next time, except erasing the flash.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,8 @@ pub struct Launch {
     pub mac: Option<[u8; 6]>,
     /// `--erase`
     pub erase: bool,
+    /// `--hot-reload`
+    pub hot_reload: bool,
 }
 
 #[derive(Default)]
@@ -33,6 +35,7 @@ struct Launcher {
     firmware: Option<PathBuf>,
     mac: String,
     erase: bool,
+    hot_reload: bool,
     result: Arc<Mutex<Option<Launch>>>,
 }
 
@@ -71,6 +74,7 @@ impl Launcher {
             firmware: self.firmware.clone()?,
             mac: parse_mac(&self.mac),
             erase: self.erase,
+            hot_reload: self.hot_reload,
         })
     }
 }
@@ -108,6 +112,9 @@ impl eframe::App for Launcher {
             row(ui, "", |ui| {
                 ui.checkbox(&mut self.erase, "Erase flash")
                     .on_hover_text("Start factory-fresh: forget WiFi, API key and settings (--erase; not remembered)");
+                ui.checkbox(&mut self.hot_reload, "Hot reload").on_hover_text(
+                    "On each wake from deep sleep, load the firmware again if it was rebuilt (--hot-reload)",
+                );
             });
 
             let problems = self.problems();
@@ -197,6 +204,7 @@ fn load_last(app: &mut Launcher) {
     app.board = v["env"].as_str().and_then(|e| app.boards.iter().position(|b| b.env == e));
     app.firmware = v["firmware"].as_str().map(PathBuf::from);
     app.mac = v["mac"].as_str().unwrap_or_default().to_string();
+    app.hot_reload = v["hot_reload"].as_bool().unwrap_or(false);
 }
 
 /// Remember a launch, except `erase`: a factory reset is never repeated by accident.
@@ -206,6 +214,7 @@ fn save_last(l: &Launch) {
         "env": l.env,
         "firmware": l.firmware.to_string_lossy(),
         "mac": l.mac.as_ref().map(format_mac),
+        "hot_reload": l.hot_reload,
     });
     // Remembering is a convenience: a read-only config directory isn't worth an error.
     let _ = path.parent().map(std::fs::create_dir_all);

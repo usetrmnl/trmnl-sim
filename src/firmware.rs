@@ -361,22 +361,50 @@ pub fn prepare_flash(path: &Path, size: usize, fw: &Firmware, erase: bool) -> Re
         Ok(d) if d.len() == size && !erase => d,
         _ => vec![0xff; size],
     };
-    for (off, img) in &fw.images {
-        let off = *off as usize;
-        if off + img.len() > size {
-            bail!("image at {off:#x} does not fit in flash");
-        }
-        flash[off..off + img.len()].copy_from_slice(img);
-    }
-    // PlatformIO also writes boot_app0.bin (blank otadata) so the fresh app boots.
-    if let Some((ota_off, ota_len)) = find_partition(&flash, 1, 0) {
-        flash[ota_off as usize..(ota_off + ota_len) as usize].fill(0xff);
-    }
+    write_images(&mut flash, fw)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(path, &flash)?;
     Ok(flash)
+}
+
+/// Write the firmware into `flash` like a USB flash: its images, and a blank otadata so its app
+/// boots. NVS and SPIFFS are left alone.
+pub fn write_images(flash: &mut [u8], fw: &Firmware) -> Result<()> {
+    for (off, img) in &fw.images {
+        let off = *off as usize;
+        if off + img.len() > flash.len() {
+            bail!("image at {off:#x} does not fit in flash");
+        }
+        flash[off..off + img.len()].copy_from_slice(img);
+    }
+    // PlatformIO also writes boot_app0.bin (blank otadata) so the fresh app boots.
+    if let Some((ota_off, ota_len)) = find_partition(flash, 1, 0) {
+        flash[ota_off as usize..(ota_off + ota_len) as usize].fill(0xff);
+    }
+    Ok(())
+}
+
+/// `flash` with `fw` written in, for loading a new build into a running device: it must be for
+/// the same chip, and its app must be the one its ELF describes (they're written one after the
+/// other, so a build in progress may not match yet).
+pub fn install(flash: &[u8], chip_id: u16, fw: &Firmware) -> Result<Vec<u8>> {
+    if fw.chip_id != chip_id {
+        bail!("it is for another chip");
+    }
+    let mut data = flash.to_vec();
+    write_images(&mut data, fw)?;
+    if booting_app(&data).map(|a| a.elf_sha256) != Some(fw.elf_sha256) {
+        bail!("the image and its ELF don't match (still building?)");
+    }
+    Ok(data)
+}
+
+/// Modification time and size of a file, to notice it changing.
+pub fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 /// Find a partition by type/subtype in the table at 0x8000: (offset, size).

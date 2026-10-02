@@ -489,6 +489,13 @@ impl Machine for Esp32c3 {
         self.cover_app();
     }
 
+    fn install_firmware(&mut self, fw: &firmware::Firmware) -> anyhow::Result<()> {
+        let data = firmware::install(&self.bus.flash.data, firmware::CHIP_ESP32C3, fw)?;
+        self.bus.flash.replace_image(data)?;
+        self.add_app(fw.elf_sha256, fw.symbols.clone(), fw.name.clone());
+        Ok(())
+    }
+
     fn add_app(&mut self, sha: [u8; 32], symbols: Symbols, name: String) {
         if !self.apps.iter().any(|a| a.0 == sha) {
             self.apps.push((sha, symbols, name));

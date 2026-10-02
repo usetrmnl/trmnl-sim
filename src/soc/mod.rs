@@ -92,6 +92,9 @@ pub trait Machine: Send {
     fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()>;
     /// Start recording code coverage (accumulates across resets).
     fn set_coverage(&mut self, cov: Coverage);
+    /// Write a new build into flash (see `firmware::install`) and know its ELF; the next boot
+    /// runs it.
+    fn install_firmware(&mut self, fw: &crate::firmware::Firmware) -> anyhow::Result<()>;
     /// Another app the device may boot (after an OTA update): ELF SHA-256, symbols, name.
     /// It is matched against the booting slot's app descriptor at the next boot.
     fn add_app(&mut self, sha: [u8; 32], symbols: Symbols, name: String);

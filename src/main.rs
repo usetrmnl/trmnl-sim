@@ -98,6 +98,11 @@ struct Cli {
     /// The firmware's ELF (default: the firmware's path with the .elf extension).
     #[arg(long, value_name = "PATH")]
     elf: Option<PathBuf>,
+    /// When the device wakes from deep sleep, load the firmware again if it (or its ELF) has
+    /// changed, and boot it from power-on, as after flashing it: rebuild and see it on the next
+    /// wake without restarting the simulator.
+    #[arg(long)]
+    hot_reload: bool,
     /// Where else to look for the ELF of a build an OTA update installs (repeatable). The
     /// directories of the firmware, its ELF and --ota-firmware are searched first; the app's
     /// recorded ELF SHA-256 picks the file.
@@ -211,6 +216,7 @@ fn main() -> Result<()> {
             // What the launcher sets; the rest stays as given on the command line.
             cli.mac = l.mac.or(cli.mac);
             cli.erase |= l.erase;
+            cli.hot_reload |= l.hot_reload;
             (l.env, l.firmware)
         }
         #[cfg(not(feature = "gui"))]
@@ -397,6 +403,7 @@ fn main() -> Result<()> {
         restore,
         coverage,
         faults,
+        hot_reload: cli.hot_reload.then(|| runner::HotReload::new(firmware.clone(), elf.clone())),
     };
     let mock = mock_trmnl::MockServer::new(panel);
     let status = handle.status.clone();

@@ -9,7 +9,7 @@ locally or in GitHub Actions.
 You always say which image to run (`trmnl-sim <image>`). The board is the PlatformIO env the
 firmware was built with: the `-<env>` in the image's file name (`FW1.8.17-trmnl.bin`), else
 `--env`. Started without an image, the window asks for it (setting the board from its name
-where it can), and optionally the MAC and whether to erase the flash. It offers the last
+where it can), and optionally the MAC, whether to erase the flash, and hot reload. It offers the last
 choice again, apart from erasing (kept in `trmnl-sim/preferences.json` in your config
 directory).
 The firmware's post-build steps write the image and its ELF; envs without a merge step in
@@ -181,6 +181,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--portal-port N` | Host port for the captive portal (default 8080, 0 = any) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
 | `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
+| `--hot-reload` | On each wake from deep sleep, load the firmware again if it or its ELF changed, and boot it from power-on (NVS and SPIFFS kept): rebuild and see it on the next wake |
 | `--elf PATH` | The firmware's ELF (default: the firmware's path with `.elf`) |
 | `--elf-dir DIR` | Also look here for the ELF of a build an OTA update installs (repeatable; see [HLE and OTA](#architecture)) |
 | `--seconds S` | Stop after S seconds of virtual time |
