@@ -173,7 +173,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--erase` | Start from erased flash |
 | `--mac AA:BB:..` | eFuse MAC, i.e. the device identity on the server |
 | `--headless` | No window; serial output to stdout. Exits with status 2 if the CPU halts |
-| `--control ADDR` | Serve the [control API](#control-api), e.g. `127.0.0.1:7878` (port 0 = pick one) |
+| `--control ADDR` | Serve the [control API](#control-api) and its [MCP server](#mcp-server), e.g. `127.0.0.1:7878` (port 0 = pick one) |
 | `--turbo` | Don't pace to wall-clock time (see [Time](#time)) |
 | `--fast-sleep` | Fast-forward deep sleeps |
 | `--offline` | Only the host (`10.0.2.2`) and the NTP server are reachable |
@@ -397,6 +397,34 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 | `GET /memcheck` | with `--memcheck`: violations, suppressed ones, heap statistics, stack marks |
 | `GET /faults` | injected faults, power losses, flash counts, the partition table |
 | `POST /faults {...}`, `DELETE /faults` | merge [faults](#fault-injection); clear them all |
+| `POST /mcp` | the [MCP server](#mcp-server) |
+
+The endpoints are listed once, in `crates/sim-control/src/endpoints.rs`: the HTTP server
+answers only those, and the MCP server offers each as a tool.
+
+### MCP server
+
+`/mcp` on the control address is a [Model Context Protocol](https://modelcontextprotocol.io)
+server (Streamable HTTP, JSON answers) for AI agents, with one tool per control endpoint
+(`status`, `press`, `wait`, `screenshot`, `mock_display`, `faults_set`, …):
+
+```sh
+bin/sim FW1.8.17-trmnl.bin --control 127.0.0.1:7878
+claude mcp add --transport http trmnl-sim http://127.0.0.1:7878/mcp
+```
+
+A tool's arguments are the endpoint's body keys and query parameters (path parameters
+too, e.g. `mock_expected_image {"name"}`), and a call runs exactly the HTTP request it
+stands for, so validation, defaults and answers are the same. JSON answers come back as
+text and structured content; an HTTP error status makes the result an error. PNG answers
+(`screenshot`, `mock_expected_image`) are image content, also written to `save_to` if
+given. Raw request bodies (`screenshot_compare`'s reference, `mock_add_image`,
+`mock_add_file`) are given as `file`, a path on the simulator's machine, or `data_base64`.
+Requests from non-local browser origins are refused.
+
+Adding an endpoint means adding its row to `ENDPOINTS` (method, path, tool name, description,
+parameters); the unit tests fail if a route the routers handle is missing from the table or
+a row reaches no handler, and an unlisted route answers 404 over HTTP too.
 
 ### Code coverage
 
