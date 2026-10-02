@@ -112,7 +112,7 @@ fn settings_path() -> Option<PathBuf> {
     } else {
         std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| Some(home()?.join(".config")))?
     };
-    Some(dir.join("trmnl-sim").join("launcher.json"))
+    Some(dir.join("trmnl-sim").join("preferences.json"))
 }
 
 /// The board and firmware chosen last time, if any.
