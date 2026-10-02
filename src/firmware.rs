@@ -147,6 +147,25 @@ fn table_app_offset(table: &[u8]) -> Option<u32> {
     ota0
 }
 
+/// The parts of a merged image to write into flash. merge_bin pads the gaps with 0xFF, so
+/// writing all of it would erase NVS on every start: keep to what flashing the split images
+/// writes, the bootloader and partition table, then each partition the image has contents
+/// for (the app, a filesystem image).
+fn split_merged(data: &[u8]) -> Vec<(u32, Vec<u8>)> {
+    let table = &data[0x8000.min(data.len())..0x8c00.min(data.len())];
+    let mut images = vec![(0, data[..0x8c00.min(data.len())].to_vec())];
+    for e in table.chunks_exact(32).take_while(|e| e[..2] == [0xAA, 0x50]) {
+        let off = u32::from_le_bytes([e[4], e[5], e[6], e[7]]) as usize;
+        let size = u32::from_le_bytes([e[8], e[9], e[10], e[11]]) as usize;
+        if let Some(part) = data.get(off.min(data.len())..(off + size).min(data.len()))
+            && part.iter().any(|&b| b != 0xff)
+        {
+            images.push((off as u32, part.to_vec()));
+        }
+    }
+    images
+}
+
 impl Firmware {
     /// Load a merged flash image (`merged_firmware.bin`, everything `esptool write_flash 0x0`
     /// would write) and its ELF, the same path with the `.elf` extension.
@@ -163,7 +182,7 @@ impl Firmware {
         if data.get(0x8000..0x8002) != Some(&[0xAA, 0x50]) {
             bail!("{}: no partition table at 0x8000; is it an app image rather than a merged one?", path.display());
         }
-        let images = vec![(0, data)];
+        let images = split_merged(&data);
         let boot = image_at(&images, 0)
             .filter(|b| b.first() == Some(&0xE9))
             .or_else(|| image_at(&images, 0x2000))
@@ -389,4 +408,28 @@ pub fn rom_search_dirs() -> Vec<PathBuf> {
 /// Locate a ROM ELF (e.g. `esp32c3_rev3_rom.elf`) in [`rom_search_dirs`].
 pub fn find_rom_elf(name: &str) -> Option<PathBuf> {
     rom_search_dirs().into_iter().map(|d| d.join(name)).find(|p| p.exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merged_image_keeps_empty_partitions() {
+        let entry = |ptype: u8, subtype: u8, off: u32, size: u32| {
+            let mut e = vec![0xAA, 0x50, ptype, subtype];
+            e.extend(off.to_le_bytes());
+            e.extend(size.to_le_bytes());
+            e.resize(32, 0);
+            e
+        };
+        let mut data = vec![0xff; 0x30000];
+        data[0] = 0xE9;
+        let table = [entry(1, 2, 0x9000, 0x5000), entry(0, 0, 0x10000, 0x10000), entry(1, 0x82, 0x20000, 0x10000)];
+        data[0x8000..0x8060].copy_from_slice(&table.concat());
+        data[0x10000] = 0xE9;
+        let parts: Vec<(u32, usize)> = split_merged(&data).iter().map(|(o, d)| (*o, d.len())).collect();
+        // NVS and the blank filesystem are left alone; the app partition is written.
+        assert_eq!(parts, [(0, 0x8c00), (0x10000, 0x10000)]);
+    }
 }
