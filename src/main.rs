@@ -175,7 +175,9 @@ fn parse_u32(s: &str) -> Result<u32, String> {
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let cli = Cli::parse();
+    // The launcher (with the GUI) may fill in options.
+    #[cfg_attr(not(feature = "gui"), allow(unused_mut))]
+    let mut cli = Cli::parse();
     let (env, firmware) = match (&cli.env, &cli.firmware) {
         (Some(e), Some(f)) => (e.clone(), f.clone()),
         _ if cli.headless => anyhow::bail!("--headless needs the environment and the firmware image"),
@@ -185,10 +187,16 @@ fn main() -> Result<()> {
                 .into_iter()
                 .map(|(env, name)| sim_ui::BoardChoice { env: env.into(), name: name.into() })
                 .collect();
-            match sim_ui::launch(boards)? {
-                Some(l) => l,
-                None => return Ok(()),
-            }
+            let Some(l) = sim_ui::launch(boards)? else { return Ok(()) };
+            // What the launcher sets; the rest stays as given on the command line.
+            cli.mac = l.mac.or(cli.mac);
+            cli.flash = l.flash.or(cli.flash);
+            cli.ota_firmware = l.ota_firmware.or(cli.ota_firmware);
+            cli.erase |= l.erase;
+            cli.turbo |= l.turbo;
+            cli.fast_sleep |= l.fast_sleep;
+            cli.offline |= l.offline;
+            (l.env, l.firmware)
         }
         #[cfg(not(feature = "gui"))]
         _ => anyhow::bail!("built without the `gui` feature: pass the environment and the firmware image"),
