@@ -7,9 +7,7 @@ automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally 
 GitHub Actions.
 
 The device is picked by the PlatformIO env, from `--env` or the name of the image's directory
-(`.pio/build/<env>`). PlatformIO calls the ELF `firmware.elf`: `bin/sim` (and trmnl-spec) add
-a `merged_firmware.elf` symlink to it; by hand, `ln -s firmware.elf merged_firmware.elf` in
-the build directory. Envs without a merge step in the firmware's `platformio.ini` (e.g.
+(`.pio/build/<env>`). The firmware's post-build steps write both files. Envs without a merge step in the firmware's `platformio.ini` (e.g.
 `trmnl_test`, `local`, `WAVESHARE_397`) have no image to run.
 
 TRMNL devices:

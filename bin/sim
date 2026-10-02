@@ -8,7 +8,6 @@
 #
 # <firmware> is ../trmnl-firmware unless TRMNL_FIRMWARE says otherwise. The firmware
 # itself is not built here: run `pio run -e <env>` in the firmware checkout first.
-# PlatformIO names the ELF firmware.elf, so a build gets a merged_firmware.elf symlink to it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -42,9 +41,9 @@ if [[ ! -f "$image" ]]; then
   [[ -n "$env" ]] && echo "       build it with: (cd $firmware && pio run -e $env)" >&2
   exit 1
 fi
-elf="${image%.*}.elf"
-if [[ ! -e "$elf" && "$(basename "$image")" == merged_firmware.bin && -f "$(dirname "$image")/firmware.elf" ]]; then
-  ln -s firmware.elf "$elf"
+if [[ ! -f "${image%.*}.elf" ]]; then
+  echo "error: no ELF for the image at ${image%.*}.elf" >&2
+  exit 1
 fi
 
 bin/build
