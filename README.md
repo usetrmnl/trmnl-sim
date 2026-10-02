@@ -7,7 +7,8 @@ HTTP control API for automated tests ([trmnl-spec](https://github.com/usetrmnl/t
 GitHub Actions.
 
 You always say what to run: the board, as the PlatformIO env the firmware was built with,
-and the image (`trmnl-sim <env> <image>`). Started without them, the window asks for both.
+and the image (`trmnl-sim <env> <image>`). Started without them, the window asks for both,
+offering the last choice (kept in `trmnl-sim/launcher.json` in your config directory).
 The firmware's post-build steps write the image and its ELF; envs without a merge step in
 the firmware's `platformio.ini` (e.g. `trmnl_test`, `local`, `WAVESHARE_397`) have none.
 

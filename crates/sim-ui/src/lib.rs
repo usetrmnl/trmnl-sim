@@ -61,9 +61,14 @@ fn app_icon() -> egui::IconData {
 
 pub use launcher::{BoardChoice, Launch, launch};
 
-/// Ask for a merged firmware image with an open dialog (`None`: cancelled).
-fn pick_firmware() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
+/// Ask for a merged firmware image with an open dialog, starting in `dir` (`None`: cancelled).
+fn pick_firmware(dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    let dialog = rfd::FileDialog::new();
+    let dialog = match dir {
+        Some(d) => dialog.set_directory(d),
+        None => dialog,
+    };
+    dialog
         .set_title("Open a merged firmware image (merged_firmware.bin, its .elf next to it)")
         .add_filter("Merged firmware image", &["bin"])
         .pick_file()
