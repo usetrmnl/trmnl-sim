@@ -72,6 +72,10 @@ impl Image {
     }
 }
 
+/// Where the simulator serves the firmware chosen for OTA updates (`--ota-firmware`, or
+/// picked in the window).
+pub const OTA_FIRMWARE_PATH: &str = "/firmware.bin";
+
 /// A file served verbatim, e.g. a `firmware.bin` for OTA updates.
 #[derive(Clone, Debug)]
 pub enum FileSource {

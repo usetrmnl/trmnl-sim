@@ -919,6 +919,12 @@ impl Machine for Esp32s3 {
         self.cover_app();
     }
 
+    fn add_app(&mut self, sha: [u8; 32], symbols: Symbols, name: String) {
+        if !self.apps.iter().any(|a| a.0 == sha) {
+            self.apps.push((sha, symbols, name));
+        }
+    }
+
     fn coverage(&mut self) -> Option<&mut Coverage> {
         self.coverage.as_deref_mut()
     }

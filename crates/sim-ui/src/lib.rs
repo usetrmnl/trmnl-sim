@@ -36,11 +36,13 @@ pub struct UiOptions {
     pub scale: f32,
     /// The built-in mock TRMNL server, for the "Server" panel (shown at startup if it runs).
     pub mock: Option<mock_trmnl::MockServer>,
+    /// The app image the Server panel offers for OTA updates (`--ota-firmware`).
+    pub ota_firmware: Option<std::path::PathBuf>,
 }
 
 impl Default for UiOptions {
     fn default() -> Self {
-        UiOptions { title: "TRMNL Simulator".to_string(), scale: 1.0, mock: None }
+        UiOptions { title: "TRMNL Simulator".to_string(), scale: 1.0, mock: None, ota_firmware: None }
     }
 }
 
@@ -193,7 +195,7 @@ impl SimApp {
             _ => {}
         }
         let status = h.status.lock().clone();
-        let server = opts.mock.clone().map(ServerPanel::new);
+        let server = opts.mock.clone().map(|m| ServerPanel::new(m, opts.ota_firmware.clone()));
         SimApp {
             left_tab: server.as_ref().is_some_and(|s| s.is_running()).then_some(LeftTab::Server),
             server,

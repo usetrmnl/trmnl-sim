@@ -8,6 +8,7 @@ pub mod esp32s3;
 
 use crate::board::Board;
 use crate::coverage::Coverage;
+use crate::firmware::Symbols;
 use crate::savepoint::SocState;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +92,9 @@ pub trait Machine: Send {
     fn restore_soc(&mut self, s: &SocState) -> anyhow::Result<()>;
     /// Start recording code coverage (accumulates across resets).
     fn set_coverage(&mut self, cov: Coverage);
+    /// Another app the device may boot (after an OTA update): ELF SHA-256, symbols, name.
+    /// It is matched against the booting slot's app descriptor at the next boot.
+    fn add_app(&mut self, sha: [u8; 32], symbols: Symbols, name: String);
     fn coverage(&mut self) -> Option<&mut Coverage>;
     /// The `--memcheck` report as JSON (`None` when memcheck is off).
     fn memcheck_json(&mut self) -> Option<String> {

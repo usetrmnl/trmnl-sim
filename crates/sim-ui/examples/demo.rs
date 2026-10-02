@@ -310,6 +310,11 @@ impl Fake {
             Command::Bluetooth { reply, .. } => {
                 let _ = reply.send(Err("the demo has no Bluetooth firmware".into()));
             }
+            Command::AddApp { elf, reply } => {
+                if let Some(tx) = reply {
+                    let _ = tx.send(Ok(elf.display().to_string()));
+                }
+            }
             Command::Quit => {}
         }
     }

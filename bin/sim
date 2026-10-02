@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Build the simulator, then run it on a firmware build.
 #
-#   bin/sim                 # TRMNL OG (<firmware>/.pio/build/trmnl)
-#   bin/sim TRMNL_X         # any PlatformIO env (<firmware>/.pio/build/<env>)
-#   bin/sim path/to/build   # any PlatformIO build directory
+#   bin/sim                 # TRMNL OG (<firmware>/.pio/build/trmnl/merged_firmware.bin)
+#   bin/sim TRMNL_X         # any PlatformIO env (<firmware>/.pio/build/<env>/merged_firmware.bin)
+#   bin/sim path/to/fw.bin  # any merged image, with its ELF next to it (path/to/fw.elf)
 #   bin/sim TRMNL_X --erase # arguments after the device go to trmnl-sim (see --help)
 #
 # <firmware> is ../trmnl-firmware unless TRMNL_FIRMWARE says otherwise. The firmware
 # itself is not built here: run `pio run -e <env>` in the firmware checkout first.
+# PlatformIO names the ELF firmware.elf, so a build gets a merged_firmware.elf symlink to it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,20 +28,24 @@ case "$target" in
     ;;
 esac
 
-# A path is a build directory; anything else is an env in the firmware checkout.
+# A path is a merged image; anything else is an env in the firmware checkout.
 if [[ "$target" == */* ]]; then
   env=""
-  build_dir="$target"
+  image="$target"
 else
   env="$target"
-  build_dir="$firmware/.pio/build/$env"
+  image="$firmware/.pio/build/$env/merged_firmware.bin"
 fi
 
-if [[ ! -f "$build_dir/firmware.elf" ]]; then
-  echo "error: no firmware build at $build_dir" >&2
+if [[ ! -f "$image" ]]; then
+  echo "error: no firmware image at $image" >&2
   [[ -n "$env" ]] && echo "       build it with: (cd $firmware && pio run -e $env)" >&2
   exit 1
 fi
+elf="${image%.*}.elf"
+if [[ ! -e "$elf" && "$(basename "$image")" == merged_firmware.bin && -f "$(dirname "$image")/firmware.elf" ]]; then
+  ln -s firmware.elf "$elf"
+fi
 
 bin/build
-exec ./target/release/trmnl-sim "$build_dir" "$@"
+exec ./target/release/trmnl-sim "$image" "$@"

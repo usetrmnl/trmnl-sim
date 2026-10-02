@@ -26,9 +26,11 @@ use devices::spi_flash::SpiFlash;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// PlatformIO build directory, e.g. ../trmnl-firmware/.pio/build/trmnl
-    build_dir: PathBuf,
-    /// Persistent flash image (NVS/SPIFFS survive restarts). Default: <build_dir>/sim-flash.bin
+    /// Merged flash image, e.g. ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin; its
+    /// ELF is the same path with the .elf extension (merged_firmware.elf).
+    firmware: PathBuf,
+    /// Persistent flash image (NVS/SPIFFS survive restarts). Default: sim-flash.bin next to
+    /// the firmware.
     #[arg(long)]
     flash: Option<PathBuf>,
     /// Erase flash (factory reset) before flashing the firmware.
@@ -84,6 +86,10 @@ struct Cli {
     /// Initial display zoom (0 = fit to window).
     #[arg(long, default_value_t = 0.0)]
     scale: f32,
+    /// App image (firmware.bin) the built-in server offers for OTA updates, at
+    /// /firmware.bin; its ELF (the same path with .elf) is loaded so the device can boot it.
+    #[arg(long, value_name = "PATH")]
+    ota_firmware: Option<PathBuf>,
     /// Additional firmware ELFs the device may boot after an OTA update (repeatable).
     #[arg(long)]
     elf: Vec<PathBuf>,
@@ -95,7 +101,7 @@ struct Cli {
     #[arg(long, value_name = "FILE")]
     coverage: Option<PathBuf>,
     /// Write coverage paths under this directory relative to it (default: the firmware
-    /// checkout the build dir is in).
+    /// checkout the firmware is in).
     #[arg(long, value_name = "DIR")]
     coverage_root: Option<PathBuf>,
     /// Only report source files whose (relative) path starts with one of these, e.g.
@@ -123,7 +129,8 @@ struct Cli {
     #[arg(long, value_enum)]
     sensor: Vec<board::spi_epd::Sensor>,
     /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
-    /// seeed_reTerminal_E1001); it picks the board. Default: the build directory's name.
+    /// seeed_reTerminal_E1001); it picks the board. Default: the name of the firmware's
+    /// directory.
     #[arg(long)]
     env: Option<String>,
     /// Access points in range of the device's own radio, replacing the defaults: a JSON
@@ -162,9 +169,10 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
 
-    let fw = firmware::Firmware::from_build_dir(&cli.build_dir)?;
+    let fw = firmware::Firmware::from_merged(&cli.firmware)?;
+    let fw_dir = cli.firmware.parent().map(PathBuf::from).unwrap_or_default();
     let restore = cli.restore.as_deref().map(savepoint::SavePoint::load).transpose()?;
-    let flash_path = cli.flash.clone().unwrap_or_else(|| cli.build_dir.join("sim-flash.bin"));
+    let flash_path = cli.flash.clone().unwrap_or_else(|| fw_dir.join("sim-flash.bin"));
     let flash_data = firmware::prepare_flash(&flash_path, fw.flash_size, &fw, cli.erase)?;
     let flash = SpiFlash::new(flash_data, Some(flash_path.clone()));
 
@@ -187,8 +195,10 @@ fn main() -> Result<()> {
     };
     let rom = std::fs::read(&rom_path)?;
 
+    let ota_elf = cli.ota_firmware.as_ref().map(|p| p.with_extension("elf"));
+    let extra_elfs: Vec<PathBuf> = cli.elf.iter().cloned().chain(ota_elf).collect();
     let mut apps = vec![(fw.elf_sha256, fw.symbols.clone(), fw.name.clone())];
-    for p in &cli.elf {
+    for p in &extra_elfs {
         let a = firmware::ExtraApp::from_elf(p)?;
         apps.push((a.elf_sha256, a.symbols, a.name));
     }
@@ -203,11 +213,13 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // Which board: the PlatformIO environment, from --env or the build directory's name.
+    // Which board: the PlatformIO environment, from --env or the firmware directory's name
+    // (.pio/build/<env>).
     let env = match &cli.env {
         Some(e) => e.clone(),
-        None => std::fs::canonicalize(&cli.build_dir)
+        None => std::fs::canonicalize(&cli.firmware)
             .ok()
+            .and_then(|f| f.parent().map(PathBuf::from))
             .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_default(),
     };
@@ -319,11 +331,11 @@ fn main() -> Result<()> {
     let coverage = match &cli.coverage {
         Some(path) => {
             let elfs: Vec<PathBuf> =
-                std::iter::once(cli.build_dir.join("firmware.elf")).chain(cli.elf.clone()).collect();
+                std::iter::once(cli.firmware.with_extension("elf")).chain(extra_elfs.clone()).collect();
             let data = elfs.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
             machine.set_coverage(coverage::Coverage::new(&data.iter().map(Vec::as_slice).collect::<Vec<_>>())?);
             let filter = coverage::PathFilter {
-                root: cli.coverage_root.clone().or_else(|| coverage::checkout_of(&cli.build_dir)),
+                root: cli.coverage_root.clone().or_else(|| coverage::checkout_of(&fw_dir)),
                 include: cli.coverage_include.clone(),
             };
             Some(coverage::Reporter::new(elfs, filter, path.clone()))
@@ -353,10 +365,9 @@ fn main() -> Result<()> {
     let mock = mock_trmnl::MockServer::new(panel);
     let status = handle.status.clone();
     mock.set_clock(move || status.lock().sim_time_ns);
-    // This build's firmware, for OTA updates from the built-in server.
-    let fw_bin = cli.build_dir.join("firmware.bin");
-    if fw_bin.exists() {
-        mock.set_file("/firmware.bin", mock_trmnl::FileSource::Path(fw_bin));
+    if let Some(p) = &cli.ota_firmware {
+        anyhow::ensure!(p.is_file(), "--ota-firmware: {} not found", p.display());
+        mock.set_file(mock_trmnl::OTA_FIRMWARE_PATH, mock_trmnl::FileSource::Path(p.clone()));
     }
     if let Some(port) = cli.mock_server {
         let bound = mock.start(port).with_context(|| format!("starting the mock server on port {port}"))?;
@@ -383,6 +394,7 @@ fn main() -> Result<()> {
                 title: format!("TRMNL Simulator — {}", fw.name),
                 scale: cli.scale,
                 mock: Some(mock.clone()),
+                ota_firmware: cli.ota_firmware.clone(),
             },
         )?;
         #[cfg(not(feature = "gui"))]

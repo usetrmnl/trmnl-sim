@@ -9,15 +9,14 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use egui::{Color32, RichText, TextureHandle, TextureOptions, Ui, Vec2};
-use mock_trmnl::{ConvertOptions, DEFAULT_IMAGE, FileSource, Fit, HttpFault, Image, MockServer, Request, Route};
+use mock_trmnl::{
+    ConvertOptions, DEFAULT_IMAGE, FileSource, Fit, HttpFault, Image, MockServer, OTA_FIRMWARE_PATH, Request, Route,
+};
 use serde_json::{Map, Value, json};
 use sim_api::{BoardInfo, Command, RunState, SimHandle, Status};
 
 use crate::{dot, format_sim_time, section};
 
-/// Where the OTA firmware is served from.
-const FIRMWARE_PATH: &str = "/firmware.bin";
-const CUSTOM_FIRMWARE_PATH: &str = "/firmware-custom.bin";
 /// Requests shown in the log (newest first).
 const LOG_ROWS: usize = 200;
 /// The simulated access point (any password works but `fail`).
@@ -50,8 +49,8 @@ pub(crate) struct ServerPanel {
     /// Conversions running in the background.
     converting: usize,
     onboard: Onboard,
-    /// A firmware file picked instead of this build's.
-    custom_firmware: Option<PathBuf>,
+    /// The app image offered for OTA updates (`--ota-firmware`, or picked here).
+    ota_firmware: Option<PathBuf>,
     /// The fault being set up for each route, and how many requests it takes (0: until
     /// cleared).
     fault_edit: [(HttpFault, u32); 2],
@@ -60,7 +59,7 @@ pub(crate) struct ServerPanel {
 }
 
 impl ServerPanel {
-    pub fn new(mock: MockServer) -> Self {
+    pub fn new(mock: MockServer, ota_firmware: Option<PathBuf>) -> Self {
         let (events_tx, events) = channel();
         ServerPanel {
             port: mock.port().unwrap_or(mock_trmnl::DEFAULT_PORT),
@@ -72,7 +71,7 @@ impl ServerPanel {
             events,
             converting: 0,
             onboard: Onboard::Idle,
-            custom_firmware: None,
+            ota_firmware,
             fault_edit: [(HttpFault::Status(500), 1), (HttpFault::Truncate(None), 1)],
             notices: Vec::new(),
         }
@@ -504,13 +503,9 @@ impl ServerPanel {
 
     fn actions_section(&mut self, ui: &mut Ui, h: &SimHandle, status: &Status) {
         section(ui, "Next request only");
-        let (queue, has_build_fw) = {
-            let st = self.mock.state();
-            (st.queue.clone(), st.files.contains_key(FIRMWARE_PATH))
-        };
-        let fw_label = match &self.custom_firmware {
+        let queue = self.mock.state().queue.clone();
+        let fw_label = match &self.ota_firmware {
             Some(p) => p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-            None if has_build_fw => "firmware.bin (this build)".into(),
             None => "none".into(),
         };
         ui.horizontal(|ui| {
@@ -518,24 +513,31 @@ impl ServerPanel {
             ui.label(RichText::new(fw_label).monospace());
             if ui
                 .small_button("Choose…")
-                .on_hover_text("Another build's firmware.bin. The simulator also needs its firmware.elf (--elf).")
+                .on_hover_text(
+                    "The app image (firmware.bin) to offer; its ELF, the same name with .elf, must be next to it",
+                )
                 .clicked()
                 && let Some(p) = rfd::FileDialog::new().add_filter("Firmware", &["bin"]).pick_file()
             {
-                self.mock.set_file(CUSTOM_FIRMWARE_PATH, FileSource::Path(p.clone()));
-                self.custom_firmware = Some(p);
+                let elf = p.with_extension("elf");
+                if elf.is_file() {
+                    // HLE needs the new app's symbols when the device boots it.
+                    h.send(Command::AddApp { elf, reply: None });
+                    self.mock.set_file(OTA_FIRMWARE_PATH, FileSource::Path(p.clone()));
+                    self.ota_firmware = Some(p);
+                } else {
+                    self.notices.push((format!("{} not found: the OTA firmware needs its ELF", elf.display()), true));
+                }
             }
         });
         let running = self.is_running();
         ui.horizontal_wrapped(|ui| {
-            let fw_path = if self.custom_firmware.is_some() { Some(CUSTOM_FIRMWARE_PATH) } else { None };
-            let fw_path = fw_path.or(has_build_fw.then_some(FIRMWARE_PATH));
             if ui
-                .add_enabled(running && fw_path.is_some(), egui::Button::new("⬆ Firmware update"))
-                .on_hover_text("update_firmware with a firmware_url on this server (OTA)")
+                .add_enabled(running && self.ota_firmware.is_some(), egui::Button::new("⬆ Firmware update"))
+                .on_hover_text("update_firmware with a firmware_url on this server (OTA); choose the firmware first")
                 .clicked()
             {
-                let url = format!("{}{}", self.mock.device_url().unwrap_or_default(), fw_path.unwrap_or_default());
+                let url = format!("{}{}", self.mock.device_url().unwrap_or_default(), OTA_FIRMWARE_PATH);
                 self.enqueue(h, status, [("update_firmware", json!(true)), ("firmware_url", json!(url))]);
             }
             if ui

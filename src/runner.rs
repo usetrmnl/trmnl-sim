@@ -474,6 +474,18 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         let _ = tx.send(result);
                     }
                 }
+                Command::AddApp { elf, reply } => {
+                    let result = crate::firmware::ExtraApp::from_elf(&elf).map_err(|e| format!("{e:#}")).map(|a| {
+                        m.add_app(a.elf_sha256, a.symbols, a.name.clone());
+                        a.name
+                    });
+                    if let Err(e) = &result {
+                        ports.console.lock().push_sim(&format!("OTA firmware ELF not loaded: {e}"));
+                    }
+                    if let Some(tx) = reply {
+                        let _ = tx.send(result);
+                    }
+                }
                 Command::WriteCoverage { path, reset, reply } => {
                     let _ = reply.send(write_coverage(m.as_mut(), opts.coverage.as_mut(), path.as_deref(), reset));
                     // Don't make up for the time spent writing it.

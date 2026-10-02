@@ -1,12 +1,16 @@
 # trmnl-sim
 
-A simulator for TRMNL devices that runs **unmodified compiled firmware**: the
-`bootloader.bin`, `partitions.bin` and `firmware.bin` you would flash, plus the build's
-`firmware.elf`. It gives you a window with the e-paper display and an HTTP control API for
+A simulator for TRMNL devices that runs **unmodified compiled firmware**: the merged image
+you would flash at 0 (`merged_firmware.bin`), plus its ELF, the same path with the `.elf`
+extension (`merged_firmware.elf`). It gives you a window with the e-paper display and an HTTP control API for
 automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in
 GitHub Actions.
 
-The device is picked by the PlatformIO env, from `--env` or the build directory's name.
+The device is picked by the PlatformIO env, from `--env` or the name of the image's directory
+(`.pio/build/<env>`). PlatformIO calls the ELF `firmware.elf`: `bin/sim` (and trmnl-spec) add
+a `merged_firmware.elf` symlink to it; by hand, `ln -s firmware.elf merged_firmware.elf` in
+the build directory. Envs without a merge step in the firmware's `platformio.ini` (e.g.
+`trmnl_test`, `local`, `WAVESHARE_397`) have no image to run.
 
 TRMNL devices:
 
@@ -69,7 +73,7 @@ Common to all devices:
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
 bin/sim        # build, then run the OG build (trmnl) from ../trmnl-firmware
-bin/sim TRMNL_X     # ... another env's build, or bin/sim path/to/build
+bin/sim TRMNL_X     # ... another env's build, or bin/sim path/to/merged.bin
 bin/sim TRMNL_X --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
@@ -78,11 +82,11 @@ Or by hand:
 
 ```sh
 cargo build --release
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl     # TRMNL OG
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr  # TRMNL BWRY
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X   # TRMNL X
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002  # reTerminal E1002
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2   # TRMNL OG gen 2 (ESP32-C5)
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin     # TRMNL OG
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr/merged_firmware.bin  # TRMNL BWRY
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin   # TRMNL X
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002/merged_firmware.bin  # reTerminal E1002
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2/merged_firmware.bin   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
 The GUI's left utility panel has tabs for **Server** (the built-in mock server),
@@ -141,13 +145,14 @@ Images added to it are resized and dithered to what the panel takes (1-bit BMP o
 4-color PNG on the BWRY, 4-bit PNG on the X) with server-style filenames. The control API's
 [`/mock` endpoints](#control-api) set the images and playlist, the display response (refresh
 rate, special function, registration, friendly ID), fields for the next request only (a
-firmware update, a reset), HTTP failures per route in the firmware's `scripts/mock_server.py`
+firmware update, a reset; the Server tab's firmware update needs the app image chosen first,
+or `--ota-firmware`), HTTP failures per route in the firmware's `scripts/mock_server.py`
 syntax, and list the recorded requests.
 
 Headless, e.g. for serial output or a screenshot:
 
 ```sh
-trmnl-sim ../trmnl-firmware/.pio/build/trmnl --headless --seconds 60 --screenshot screen.png
+trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 60 --screenshot screen.png
 ```
 
 Production builds don't log, so the simulator mirrors the firmware's `Log_*` messages to the
@@ -160,8 +165,8 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
 | Option | |
 |---|---|
-| `<build_dir>` | PlatformIO build dir (`firmware.elf`, `bootloader.bin`, `partitions.bin`, `firmware.bin`, or `merged_firmware.bin`) |
-| `--flash PATH` | Flash image (default `<build_dir>/sim-flash.bin`); the firmware is written on every start, NVS and SPIFFS are kept |
+| `<firmware>` | Merged flash image (`merged_firmware.bin`); its ELF is the same path with `.elf` |
+| `--flash PATH` | Flash image (default `sim-flash.bin` next to the firmware); the firmware is written on every start, NVS and SPIFFS are kept |
 | `--erase` | Start from erased flash |
 | `--mac AA:BB:..` | eFuse MAC, i.e. the device identity on the server |
 | `--headless` | No window; serial output to stdout. Exits with status 2 if the CPU halts |
@@ -172,6 +177,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--dns NAME=IP` | Answer DNS for NAME locally (repeatable) |
 | `--portal-port N` | Host port for the captive portal (default 8080, 0 = any) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
+| `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
 | `--elf PATH` | Extra firmware ELFs the device may boot after an OTA (repeatable) |
 | `--seconds S` | Stop after S seconds of virtual time |
 | `--screenshot PNG` | Save the display when the run ends |
@@ -186,7 +192,7 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--memcheck-suppress F,..` | Ignore violations with these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
-| `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the build directory's name |
+| `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the firmware directory's name |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
 | `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start (repeatable, merged) |
@@ -204,7 +210,7 @@ controller interfaces are not yet verified. Mock Bluetooth has no host radio or
 platform framework dependencies.
 
 ```sh
-bin/sim ../firmware/.pio/build/trmnl --headless --control 127.0.0.1:7878
+bin/sim ../firmware/.pio/build/trmnl/merged_firmware.bin --headless --control 127.0.0.1:7878
 ```
 
 Bluetooth is always mocked, on every host platform. It needs no host Bluetooth
@@ -396,7 +402,7 @@ and at exit maps them to source lines through the ELF's DWARF line tables, writi
 (0/1 per run). The firmware's own paths are relative to its checkout.
 
 ```sh
-trmnl-sim ../trmnl-firmware/.pio/build/trmnl --headless --seconds 30 --coverage og.info --coverage-include src/,lib/
+trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 30 --coverage og.info --coverage-include src/,lib/
 ```
 
 `POST /coverage` (Ruby: `sim.write_coverage`) writes one mid-run; after an OTA both builds
@@ -476,14 +482,15 @@ crates/
 ```
 
 **Chips and boards.** The image header names the chip (C3, S3 or C5); the board comes from
-the PlatformIO env (`--env` or the build directory's name). The C3 and C5 share the
+the PlatformIO env (`--env` or the firmware directory's name). The C3 and C5 share the
 RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so the HLE
 (WiFi for IDF 4.4 and 5.5, sleep, ADC) is the same code on every chip. A new board is a
 `Board` plus its devices; a new chip is a `soc/` module.
 
-**HLE and OTA.** Hooks are bound to `firmware.elf` addresses. Each boot, the simulator
+**HLE and OTA.** Hooks are bound to the ELF's addresses. Each boot, the simulator
 matches the slot's app descriptor to a known ELF, so an OTA to another build needs its ELF
-(`--elf`) or the run halts with a clear message.
+(`--ota-firmware` and the window's firmware picker load the one next to the image; else
+`--elf`) or the run halts with a clear message. Coverage leaves out an app picked in the window.
 
 ## Limitations
 

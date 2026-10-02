@@ -147,59 +147,23 @@ fn table_app_offset(table: &[u8]) -> Option<u32> {
     ota0
 }
 
-/// Offset of a data partition by subtype (0x82 = SPIFFS/LittleFS) in a partition table image.
-fn table_data_offset(table: &[u8], subtype: u8) -> Option<u32> {
-    for e in table.chunks(32) {
-        if e.len() < 32 || e[0] != 0xAA || e[1] != 0x50 {
-            break;
-        }
-        if e[2] == 1 && e[3] == subtype {
-            return Some(u32::from_le_bytes(e[4..8].try_into().ok()?));
-        }
-    }
-    None
-}
-
 impl Firmware {
-    /// Load a PlatformIO build directory (e.g. `.pio/build/trmnl`).
-    pub fn from_build_dir(dir: &Path) -> Result<Self> {
-        let elf_path = dir.join("firmware.elf");
+    /// Load a merged flash image (`merged_firmware.bin`, everything `esptool write_flash 0x0`
+    /// would write) and its ELF, the same path with the `.elf` extension.
+    pub fn from_merged(path: &Path) -> Result<Self> {
+        let elf_path = path.with_extension("elf");
         let elf = std::fs::read(&elf_path).with_context(|| format!("reading {}", elf_path.display()))?;
         let elf_sha256 = sha256(&elf);
-        let mut symbols = Symbols::from_elf(&elf)?;
-        if let Ok(b) = std::fs::read(dir.join("bootloader.elf")) {
-            // Bootloader and app occupy different IRAM ranges at different times;
-            // app symbols win on conflicts.
-            symbols.merge(&Symbols::from_elf(&b)?);
+        let symbols = Symbols::from_elf(&elf)?;
+        let data = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        // A merged image starts at 0 even where the bootloader lives at 0x2000 (ESP32-C5).
+        if data.first() != Some(&0xE9) && data.get(0x2000) != Some(&0xE9) {
+            bail!("{}: no bootloader image at 0 or 0x2000", path.display());
         }
-        let mut images = Vec::new();
-        let merged = dir.join("merged_firmware.bin");
-        let parts = ["bootloader.bin", "partitions.bin", "firmware.bin"];
-        if parts.iter().all(|n| dir.join(n).exists()) {
-            let table = std::fs::read(dir.join("partitions.bin"))?;
-            let app_off = table_app_offset(&table).context("partitions.bin has no app partition")?;
-            let boot = std::fs::read(dir.join("bootloader.bin"))?;
-            let chip = boot.get(12..14).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
-            images.push((bootloader_offset(chip), boot));
-            images.push((0x8000, table.clone()));
-            images.push((app_off, std::fs::read(dir.join("firmware.bin"))?));
-            // Filesystem image (fonts, assets; on TRMNL X also the modem firmware)
-            for fs in ["littlefs.bin", "spiffs.bin"] {
-                if let (Ok(data), Some(off)) = (std::fs::read(dir.join(fs)), table_data_offset(&table, 0x82)) {
-                    images.push((off, data));
-                    break;
-                }
-            }
-        } else if merged.exists() {
-            let data = std::fs::read(&merged)?;
-            // A merged image starts at 0 even where the bootloader lives at 0x2000 (ESP32-C5).
-            if data.first() != Some(&0xE9) && data.get(0x2000) != Some(&0xE9) {
-                bail!("{}: no bootloader image at 0 or 0x2000", merged.display());
-            }
-            images.push((0, data));
-        } else {
-            bail!("{} has no bootloader.bin/partitions.bin/firmware.bin or merged_firmware.bin", dir.display());
+        if data.get(0x8000..0x8002) != Some(&[0xAA, 0x50]) {
+            bail!("{}: no partition table at 0x8000; is it an app image rather than a merged one?", path.display());
         }
+        let images = vec![(0, data)];
         let boot = image_at(&images, 0)
             .filter(|b| b.first() == Some(&0xE9))
             .or_else(|| image_at(&images, 0x2000))
@@ -213,7 +177,7 @@ impl Firmware {
             _ => 4 << 20,
         };
         let chip_id = u16::from_le_bytes([boot[12], boot[13]]);
-        let name = app_desc(&images).unwrap_or_else(|| dir.display().to_string());
+        let name = app_desc(&images).unwrap_or_else(|| path.display().to_string());
         Ok(Firmware { name, elf_sha256, symbols, images, chip_id, flash_size })
     }
 }

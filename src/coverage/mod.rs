@@ -105,6 +105,14 @@ impl Coverage {
 
     /// App `i` is about to run, with HLE hooks at `hooked`.
     pub fn activate(&mut self, i: usize, hooked: impl IntoIterator<Item = u32>) {
+        // An app added after coverage started (an OTA file picked in the window) isn't
+        // recorded: park the live regions so its code doesn't mark the previous app's.
+        if i >= self.images.len() {
+            if let Some(a) = self.active.take() {
+                std::mem::swap(&mut self.live, &mut self.images[a].regions);
+            }
+            return;
+        }
         if self.active != Some(i) {
             if let Some(a) = self.active {
                 std::mem::swap(&mut self.live, &mut self.images[a].regions);

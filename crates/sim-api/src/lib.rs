@@ -562,6 +562,12 @@ pub enum Command {
         reset: bool,
         reply: Sender<Result<CoverageSummary, String>>,
     },
+    /// Load an app ELF the device may boot after an OTA update (HLE needs its symbols);
+    /// replies with the app's name.
+    AddApp {
+        elf: PathBuf,
+        reply: Option<Sender<Result<String, String>>>,
+    },
     /// Reply with the `--memcheck` report (JSON; `{"enabled": false}` when it's off).
     Memcheck(Sender<String>),
     /// Read committed NVS values from live flash without calling into the guest.
