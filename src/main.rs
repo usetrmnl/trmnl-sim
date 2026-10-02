@@ -345,8 +345,9 @@ fn main() -> Result<()> {
                 std::iter::once(firmware.with_extension("elf")).chain(extra_elfs.clone()).collect();
             let data = elfs.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
             machine.set_coverage(coverage::Coverage::new(&data.iter().map(Vec::as_slice).collect::<Vec<_>>())?);
-            let filter =
-                coverage::PathFilter { root: cli.coverage_root.clone(), include: cli.coverage_include.clone() };
+            // DWARF paths are absolute: so is the root.
+            let root = cli.coverage_root.as_ref().map(|r| std::fs::canonicalize(r).unwrap_or_else(|_| r.clone()));
+            let filter = coverage::PathFilter { root, include: cli.coverage_include.clone() };
             Some(coverage::Reporter::new(elfs, filter, path.clone()))
         }
         None => None,
