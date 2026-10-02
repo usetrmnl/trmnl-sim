@@ -163,6 +163,18 @@ pub fn password_accepted(password: Option<&str>, given: &str) -> bool {
     }
 }
 
+/// The PlatformIO environment named in a firmware file name, as `-<env>` followed by the end of
+/// the name, `.` or `-` (the firmware's versioned copies: `FW1.8.17-trmnl.bin`,
+/// `FW1.8.17-TRMNL_X-ota.bin`). The longest of `envs` that fits wins.
+pub fn env_in_file_name<'a>(name: &str, envs: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    envs.into_iter()
+        .filter(|env| {
+            name.match_indices(&format!("-{env}"))
+                .any(|(i, m)| name[i + m.len()..].chars().next().is_none_or(|c| c == '.' || c == '-'))
+        })
+        .max_by_key(|env| env.len())
+}
+
 /// Faults injected into the simulated device on demand (`Command::SetFaults`). All off by
 /// default; each field is independent.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -782,6 +794,22 @@ pub fn channel(frame: SharedFrame) -> (SimHandle, SimPorts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_from_file_names() {
+        let envs = ["trmnl", "trmnl_4clr", "TRMNL_X", "TRMNL_X_E1003", "xteink_x4", "xteink_x4_pwr_btn"];
+        let env = |n| env_in_file_name(n, envs);
+        assert_eq!(env("FW1.8.17-trmnl.bin"), Some("trmnl"));
+        assert_eq!(env("FW1.8.17-trmnl_4clr.bin"), Some("trmnl_4clr"));
+        assert_eq!(env("FW1.8.17-TRMNL_X-ota.bin"), Some("TRMNL_X"));
+        assert_eq!(env("FW1.8.17-TRMNL_X_E1003.bin"), Some("TRMNL_X_E1003"));
+        assert_eq!(env("FW1.8.17-xteink_x4_pwr_btn.bin"), Some("xteink_x4_pwr_btn"));
+        assert_eq!(env("my-trmnl"), Some("trmnl"));
+        // Not at a boundary, or not after a dash.
+        assert_eq!(env("FW1.8.17-trmnlx.bin"), None);
+        assert_eq!(env("trmnl.bin"), None);
+        assert_eq!(env("merged_firmware.bin"), None);
+    }
 
     #[test]
     fn fail_password_is_rejected_where_any_password_goes() {

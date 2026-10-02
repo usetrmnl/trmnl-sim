@@ -40,6 +40,15 @@ struct Launcher {
 const LABEL_W: f32 = 96.0;
 
 impl Launcher {
+    /// Use this firmware image, and the board its file name names (`FW1.8.17-trmnl.bin`), if any.
+    fn set_firmware(&mut self, p: PathBuf) {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if let Some(env) = sim_api::env_in_file_name(&name, self.boards.iter().map(|b| b.env.as_str())) {
+            self.board = self.boards.iter().position(|b| b.env == env);
+        }
+        self.firmware = Some(p);
+    }
+
     /// What is wrong with the choices, if anything (Start stays disabled).
     fn problems(&self) -> Vec<String> {
         let mut v = Vec::new();
@@ -71,6 +80,16 @@ impl eframe::App for Launcher {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Run firmware");
             ui.add_space(8.0);
+            row(ui, "Firmware", |ui| {
+                let start = self.firmware.as_deref().and_then(Path::parent);
+                if ui.button("Choose…").on_hover_text("merged_firmware.bin, with its .elf next to it").clicked()
+                    && let Some(p) = crate::pick_firmware(start)
+                {
+                    self.set_firmware(p);
+                }
+                path_label(ui, self.firmware.as_deref(), "none");
+            });
+
             row(ui, "Board", |ui| {
                 let selected = self.board.map(|i| label(&self.boards[i])).unwrap_or_else(|| "Choose…".into());
                 egui::ComboBox::from_id_salt("board").selected_text(selected).width(360.0).show_ui(ui, |ui| {
@@ -79,16 +98,6 @@ impl eframe::App for Launcher {
                     }
                 });
             });
-            row(ui, "Firmware", |ui| {
-                let start = self.firmware.as_deref().and_then(Path::parent);
-                if ui.button("Choose…").on_hover_text("merged_firmware.bin, with its .elf next to it").clicked()
-                    && let Some(p) = crate::pick_firmware(start)
-                {
-                    self.firmware = Some(p);
-                }
-                path_label(ui, self.firmware.as_deref(), "none");
-            });
-
             ui.add_space(6.0);
             ui.separator();
             ui.label(RichText::new("Options (blank: the default)").weak());
@@ -203,9 +212,10 @@ fn save_last(l: &Launch) {
     let _ = std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap_or_default());
 }
 
-/// Ask for the board, the firmware image, the MAC and whether to erase in a small window (`None`: closed
-/// without starting). Call it on the main thread, before [`crate::run`].
-pub fn launch(boards: Vec<BoardChoice>) -> anyhow::Result<Option<Launch>> {
+/// Ask for the board, the firmware image, the MAC and whether to erase in a small window
+/// (`None`: closed without starting); `env` (`--env`) preselects the board. Call it on the main
+/// thread, before [`crate::run`].
+pub fn launch(boards: Vec<BoardChoice>, env: Option<String>) -> anyhow::Result<Option<Launch>> {
     let result = Arc::new(Mutex::new(None));
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -216,6 +226,9 @@ pub fn launch(boards: Vec<BoardChoice>) -> anyhow::Result<Option<Launch>> {
     };
     let mut app = Launcher { boards, result: result.clone(), ..Default::default() };
     load_last(&mut app);
+    if let Some(e) = env {
+        app.board = app.boards.iter().position(|b| b.env == e).or(app.board);
+    }
     eframe::run_native("TRMNL Simulator launcher", native, Box::new(move |_| Ok(Box::new(app))))
         .map_err(|e| anyhow::anyhow!("GUI error: {e}"))?;
     Ok(result.lock().unwrap().take())
@@ -225,6 +238,17 @@ pub fn launch(boards: Vec<BoardChoice>) -> anyhow::Result<Option<Launch>> {
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn board_from_the_file_name() {
+        let boards = ["trmnl", "TRMNL_X"].map(|e| BoardChoice { env: e.into(), name: e.into() }).into();
+        let mut app = Launcher { boards, board: Some(0), ..Default::default() };
+        app.set_firmware("/fw/FW1.8.17-TRMNL_X.bin".into());
+        assert_eq!(app.board, Some(1));
+        // A name without an env leaves the board as it was.
+        app.set_firmware("/fw/merged_firmware.bin".into());
+        assert_eq!(app.board, Some(1));
+    }
 
     #[test]
     fn mac() {

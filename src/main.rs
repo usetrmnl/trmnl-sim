@@ -26,14 +26,14 @@ use devices::spi_flash::SpiFlash;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
-    /// seeed_reTerminal_E1001); it picks the board. Give it and the firmware, or neither: then
-    /// the window asks for both.
-    #[arg(requires = "firmware")]
-    env: Option<String>,
-    /// Merged flash image (e.g. merged_firmware.bin); its ELF is the same path with the .elf
-    /// extension.
+    /// Merged flash image (e.g. FW1.8.17-trmnl.bin); its ELF is the same path with the .elf
+    /// extension. Without one, the window asks for it.
     firmware: Option<PathBuf>,
+    /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
+    /// seeed_reTerminal_E1001); it picks the board. Default: the `-<env>` in the firmware's
+    /// file name (FW1.8.17-trmnl.bin).
+    #[arg(long)]
+    env: Option<String>,
     /// Persistent flash image (NVS/SPIFFS survive restarts). Default: sim-flash.bin next to
     /// the firmware.
     #[arg(long)]
@@ -178,23 +178,38 @@ fn main() -> Result<()> {
     // The launcher (with the GUI) may fill in options.
     #[cfg_attr(not(feature = "gui"), allow(unused_mut))]
     let mut cli = Cli::parse();
-    let (env, firmware) = match (&cli.env, &cli.firmware) {
-        (Some(e), Some(f)) => (e.clone(), f.clone()),
-        _ if cli.headless => anyhow::bail!("--headless needs the environment and the firmware image"),
+    let envs: Vec<&str> = board_envs().into_iter().map(|(e, _)| e).collect();
+    let (env, firmware) = match &cli.firmware {
+        Some(f) => {
+            let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let env = match &cli.env {
+                Some(e) => e.clone(),
+                None => sim_api::env_in_file_name(&name, envs.iter().copied())
+                    .with_context(|| {
+                        format!(
+                            "no board's env in the file name {name:?} (as -<env>): pass --env (known: {})",
+                            envs.join(", ")
+                        )
+                    })?
+                    .to_string(),
+            };
+            (env, f.clone())
+        }
+        None if cli.headless => anyhow::bail!("--headless needs the firmware image"),
         #[cfg(feature = "gui")]
-        _ => {
+        None => {
             let boards = board_envs()
                 .into_iter()
                 .map(|(env, name)| sim_ui::BoardChoice { env: env.into(), name: name.into() })
                 .collect();
-            let Some(l) = sim_ui::launch(boards)? else { return Ok(()) };
+            let Some(l) = sim_ui::launch(boards, cli.env.clone())? else { return Ok(()) };
             // What the launcher sets; the rest stays as given on the command line.
             cli.mac = l.mac.or(cli.mac);
             cli.erase |= l.erase;
             (l.env, l.firmware)
         }
         #[cfg(not(feature = "gui"))]
-        _ => anyhow::bail!("built without the `gui` feature: pass the environment and the firmware image"),
+        None => anyhow::bail!("built without the `gui` feature: pass the firmware image"),
     };
     let fw = firmware::Firmware::from_merged(&firmware)?;
     let fw_dir = firmware.parent().map(PathBuf::from).unwrap_or_default();
@@ -243,7 +258,6 @@ fn main() -> Result<()> {
     let parallel_spec = board::parallel_byod::find(&env);
     let spi_spec = board::spi_epd::find(&env);
     if parallel_spec.is_none() && spi_spec.is_none() && env != board::trmnl_x::ENV {
-        let envs: Vec<&str> = board_envs().into_iter().map(|(e, _)| e).collect();
         anyhow::bail!("unknown PlatformIO environment {env:?} (known: {})", envs.join(", "));
     }
     let (board, frame, panel): (Box<dyn board::Board>, sim_api::SharedFrame, mock_trmnl::Panel) = match spi_spec {

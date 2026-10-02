@@ -1,16 +1,17 @@
 # trmnl-sim
 
 A simulator for TRMNL devices that runs **unmodified compiled firmware**: the merged image
-you would flash at 0 (`merged_firmware.bin`), plus its ELF, the same path with the `.elf`
-extension (`merged_firmware.elf`). It gives you a window with the e-paper display and an
-HTTP control API for automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in
-GitHub Actions.
+you would flash at 0 (e.g. `FW1.8.17-trmnl.bin`), plus its ELF, the same path with the `.elf`
+extension (`FW1.8.17-trmnl.elf`). It gives you a window with the e-paper display and an HTTP
+control API for automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)),
+locally or in GitHub Actions.
 
-You always say what to run: the board, as the PlatformIO env the firmware was built with,
-and the image (`trmnl-sim <env> <image>`). Started without them, the window asks for both,
-and optionally the MAC and whether to erase the flash. It offers the last choice again, apart
-from erasing (kept in `trmnl-sim/preferences.json` in your
-config directory).
+You always say which image to run (`trmnl-sim <image>`). The board is the PlatformIO env the
+firmware was built with: the `-<env>` in the image's file name (`FW1.8.17-trmnl.bin`), else
+`--env`. Started without an image, the window asks for it (setting the board from its name
+where it can), and optionally the MAC and whether to erase the flash. It offers the last
+choice again, apart from erasing (kept in `trmnl-sim/preferences.json` in your config
+directory).
 The firmware's post-build steps write the image and its ELF; envs without a merge step in
 the firmware's `platformio.ini` (e.g. `trmnl_test`, `local`, `WAVESHARE_397`) have none.
 
@@ -73,9 +74,9 @@ Common to all devices:
 ```sh
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
-bin/sim        # build, then run; the window asks for the board and the image
-bin/sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin   # ... or say which
-bin/sim TRMNL_X ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin --erase   # extra arguments go to trmnl-sim
+bin/sim        # build, then run; the window asks for the image and the board
+bin/sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin   # ... or say which
+bin/sim ../trmnl-firmware/.pio/build/TRMNL_X/FW1.8.17-TRMNL_X.bin --erase   # extra arguments go to trmnl-sim
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
 
@@ -83,11 +84,11 @@ Or by hand:
 
 ```sh
 cargo build --release
-./target/release/trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin     # TRMNL OG
-./target/release/trmnl-sim trmnl_4clr ../trmnl-firmware/.pio/build/trmnl_4clr/merged_firmware.bin  # TRMNL BWRY
-./target/release/trmnl-sim TRMNL_X ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin   # TRMNL X
-./target/release/trmnl-sim seeed_reTerminal_E1002 ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002/merged_firmware.bin  # reTerminal E1002
-./target/release/trmnl-sim trmnl_gen2 ../trmnl-firmware/.pio/build/trmnl_gen2/merged_firmware.bin   # TRMNL OG gen 2 (ESP32-C5)
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin     # TRMNL OG
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr/FW1.8.17-trmnl_4clr.bin  # TRMNL BWRY
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X/FW1.8.17-TRMNL_X.bin   # TRMNL X
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002/FW1.8.17-seeed_reTerminal_E1002.bin  # reTerminal E1002
+./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2/FW1.8.17-trmnl_gen2.bin   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
 The GUI's left utility panel has tabs for **Server** (the built-in mock server),
@@ -153,7 +154,7 @@ syntax, and list the recorded requests.
 Headless, e.g. for serial output or a screenshot:
 
 ```sh
-trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 60 --screenshot screen.png
+trmnl-sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin --headless --seconds 60 --screenshot screen.png
 ```
 
 Production builds don't log, so the simulator mirrors the firmware's `Log_*` messages to the
@@ -166,8 +167,8 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
 | Option | |
 |---|---|
-| `<env>` | The PlatformIO env the firmware was built with; picks the board |
-| `<firmware>` | Merged flash image (`merged_firmware.bin`); its ELF is the same path with `.elf`. Give both or neither: without them the window asks |
+| `<firmware>` | Merged flash image (`FW1.8.17-trmnl.bin`); its ELF is the same path with `.elf`. Without it the window asks |
+| `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the `-<env>` in the image's file name |
 | `--flash PATH` | Flash image (default `sim-flash.bin` next to the firmware); the firmware is written on every start, NVS and SPIFFS are kept |
 | `--erase` | Start from erased flash |
 | `--mac AA:BB:..` | eFuse MAC, i.e. the device identity on the server |
@@ -211,7 +212,7 @@ controller interfaces are not yet verified. Mock Bluetooth has no host radio or
 platform framework dependencies.
 
 ```sh
-bin/sim trmnl ../firmware/.pio/build/trmnl/merged_firmware.bin --headless --control 127.0.0.1:7878
+bin/sim ../firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin --headless --control 127.0.0.1:7878
 ```
 
 Bluetooth is always mocked, on every host platform. It needs no host Bluetooth
@@ -404,7 +405,7 @@ and at exit maps them to source lines through the ELF's DWARF line tables, writi
 directory, e.g. the firmware checkout.
 
 ```sh
-trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 30 --coverage og.info \
+trmnl-sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin --headless --seconds 30 --coverage og.info \
   --coverage-root ../trmnl-firmware --coverage-include src/,lib/
 ```
 
@@ -485,7 +486,7 @@ crates/
 ```
 
 **Chips and boards.** The image header names the chip (C3, S3 or C5); the board comes from
-the PlatformIO env given on the command line or picked in the window. The C3 and C5 share the
+the PlatformIO env (the image's file name, `--env`, or picked in the window). The C3 and C5 share the
 RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so the HLE
 (WiFi for IDF 4.4 and 5.5, sleep, ADC) is the same code on every chip. A new board is a
 `Board` plus its devices; a new chip is a `soc/` module.

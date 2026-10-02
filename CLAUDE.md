@@ -24,7 +24,7 @@ suite); read the relevant section before changing a subsystem.
 | `bin/setup` | toolchains and ROM ELFs (`scripts/fetch-rom-elfs.sh` → gitignored `rom/`) |
 | `bin/build` | release build of the simulator |
 | `bin/test` | fmt, clippy (with and without the GUI), unit tests; run before committing |
-| `bin/sim [<env> <merged_firmware.bin>]` | run a firmware image (its `.elf` next to it) in the window; without arguments the window asks |
+| `bin/sim [<FW…-env.bin>] [--env ENV]` | run a firmware image (its `.elf` next to it) in the window; the board comes from `-<env>` in the name or `--env`; without arguments the window asks |
 
 Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's comment
 density and naming; comments explain hardware behaviour and why, with firmware file:line
@@ -53,7 +53,7 @@ references where relevant.
   (with CLIC mode for the C5) and Xtensa cores; `src/hle/`: ESP-IDF function replacements
   (WiFi, sleep, ADC) bound by ELF symbol.
 - `src/board/`: `spi_epd.rs` (data-driven SPI e-paper boards, one `BoardSpec` per firmware
-  `device_list[]` row, selected by the `<env>` argument), `trmnl_x.rs`,
+  `device_list[]` row, selected by `-<env>` in the image's name or `--env`), `trmnl_x.rs`,
   `parallel_byod.rs`; `src/devices/`: panel controllers (UC81xx, SSD16xx, dual-CS, parallel),
   I2C chips, the ESP-AT modem, SPI flash.
 - `crates/`: `sim-api` (emulator/front-end contract), `sim-ui` (egui), `sim-control` (HTTP

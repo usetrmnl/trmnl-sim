@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Build the simulator, then run a merged firmware image (its ELF next to it, the same path
-# with .elf) on a board, given by the PlatformIO environment the firmware was built with.
+# with .elf). The board is the PlatformIO env in the image's name (FW1.8.17-<env>.bin), else
+# --env.
 #
-#   bin/sim                                  # the window asks for the board and the image
-#   bin/sim trmnl path/to/merged_firmware.bin
-#   bin/sim trmnl path/to/merged_firmware.bin --erase   # more arguments go to trmnl-sim (--help)
+#   bin/sim                                        # the window asks for the image and the board
+#   bin/sim path/to/FW1.8.17-trmnl.bin
+#   bin/sim path/to/merged_firmware.bin --env trmnl --erase   # more arguments: trmnl-sim --help
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
