@@ -2,13 +2,14 @@
 
 A simulator for TRMNL devices that runs **unmodified compiled firmware**: the merged image
 you would flash at 0 (`merged_firmware.bin`), plus its ELF, the same path with the `.elf`
-extension (`merged_firmware.elf`). It gives you a window with the e-paper display and an HTTP control API for
-automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in
+extension (`merged_firmware.elf`). It gives you a window with the e-paper display and an
+HTTP control API for automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)), locally or in
 GitHub Actions.
 
-The device is picked by the PlatformIO env, from `--env` or the name of the image's directory
-(`.pio/build/<env>`). The firmware's post-build steps write both files. Envs without a merge step in the firmware's `platformio.ini` (e.g.
-`trmnl_test`, `local`, `WAVESHARE_397`) have no image to run.
+You always say what to run: the board, as the PlatformIO env the firmware was built with,
+and the image (`trmnl-sim <env> <image>`). Started without them, the window asks for both.
+The firmware's post-build steps write the image and its ELF; envs without a merge step in
+the firmware's `platformio.ini` (e.g. `trmnl_test`, `local`, `WAVESHARE_397`) have none.
 
 TRMNL devices:
 
@@ -54,9 +55,8 @@ Common to all devices:
 ## Requirements
 
 - Rust (stable, 1.85+).
-- A PlatformIO build of the firmware in `../trmnl-firmware` (`pio run -e trmnl`, `-e TRMNL_X`,
-  ... or a BYOD board's env). The X build also needs its `littlefs.bin`, which its post-build
-  script downloads.
+- A PlatformIO build of the firmware (`pio run -e trmnl`, `-e TRMNL_X`, ... or a BYOD board's
+  env). The X build also needs its `littlefs.bin`, which its post-build script downloads.
 - The chips' mask ROM ELFs: the C3 and S3 ones come with PlatformIO's `tool-esp-rom-elfs`;
   the C5's production-silicon ROM (`esp32c5_rev100_rom.elf`) comes from Espressif's
   [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs/releases), which
@@ -70,8 +70,9 @@ Common to all devices:
 ```sh
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
-bin/sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin   # build, then run a merged image
-bin/sim ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin --erase   # extra arguments go to trmnl-sim
+bin/sim        # build, then run; the window asks for the board and the image
+bin/sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin   # ... or say which
+bin/sim TRMNL_X ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin --erase   # extra arguments go to trmnl-sim
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
 
@@ -79,11 +80,11 @@ Or by hand:
 
 ```sh
 cargo build --release
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin     # TRMNL OG
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_4clr/merged_firmware.bin  # TRMNL BWRY
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin   # TRMNL X
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002/merged_firmware.bin  # reTerminal E1002
-./target/release/trmnl-sim ../trmnl-firmware/.pio/build/trmnl_gen2/merged_firmware.bin   # TRMNL OG gen 2 (ESP32-C5)
+./target/release/trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin     # TRMNL OG
+./target/release/trmnl-sim trmnl_4clr ../trmnl-firmware/.pio/build/trmnl_4clr/merged_firmware.bin  # TRMNL BWRY
+./target/release/trmnl-sim TRMNL_X ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin   # TRMNL X
+./target/release/trmnl-sim seeed_reTerminal_E1002 ../trmnl-firmware/.pio/build/seeed_reTerminal_E1002/merged_firmware.bin  # reTerminal E1002
+./target/release/trmnl-sim trmnl_gen2 ../trmnl-firmware/.pio/build/trmnl_gen2/merged_firmware.bin   # TRMNL OG gen 2 (ESP32-C5)
 ```
 
 The GUI's left utility panel has tabs for **Server** (the built-in mock server),
@@ -149,7 +150,7 @@ syntax, and list the recorded requests.
 Headless, e.g. for serial output or a screenshot:
 
 ```sh
-trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 60 --screenshot screen.png
+trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 60 --screenshot screen.png
 ```
 
 Production builds don't log, so the simulator mirrors the firmware's `Log_*` messages to the
@@ -162,7 +163,8 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
 | Option | |
 |---|---|
-| `<firmware>` | Merged flash image (`merged_firmware.bin`); its ELF is the same path with `.elf` |
+| `<env>` | The PlatformIO env the firmware was built with; picks the board |
+| `<firmware>` | Merged flash image (`merged_firmware.bin`); its ELF is the same path with `.elf`. Give both or neither: without them the window asks |
 | `--flash PATH` | Flash image (default `sim-flash.bin` next to the firmware); the firmware is written on every start, NVS and SPIFFS are kept |
 | `--erase` | Start from erased flash |
 | `--mac AA:BB:..` | eFuse MAC, i.e. the device identity on the server |
@@ -183,13 +185,12 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--trace f1,f2` | Log every call to these firmware functions |
 | `--profile` | Print where the CPU spent its time on exit |
 | `--coverage FILE` | Write an lcov tracefile on exit (see [Code coverage](#code-coverage)) |
-| `--coverage-root DIR` | Source paths relative to DIR (default: the firmware checkout) |
+| `--coverage-root DIR` | Source paths relative to DIR, e.g. the firmware checkout (default: absolute) |
 | `--coverage-include P,..` | Only report files under these prefixes, e.g. `src/,lib/` |
 | `--memcheck[=halt]` | Check [memory use](#memory-checking); `=halt` stops at the first error |
 | `--memcheck-suppress F,..` | Ignore violations with these functions in their stacks |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
-| `--env NAME` | The PlatformIO env the firmware was built with; picks the board. Default: the firmware directory's name |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
 | `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start (repeatable, merged) |
@@ -207,7 +208,7 @@ controller interfaces are not yet verified. Mock Bluetooth has no host radio or
 platform framework dependencies.
 
 ```sh
-bin/sim ../firmware/.pio/build/trmnl/merged_firmware.bin --headless --control 127.0.0.1:7878
+bin/sim trmnl ../firmware/.pio/build/trmnl/merged_firmware.bin --headless --control 127.0.0.1:7878
 ```
 
 Bluetooth is always mocked, on every host platform. It needs no host Bluetooth
@@ -396,10 +397,12 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 `--coverage FILE` records which firmware instructions run (across resets and deep sleeps)
 and at exit maps them to source lines through the ELF's DWARF line tables, writing an
 [lcov](https://github.com/linux-test-project/lcov) tracefile with lines and functions hit
-(0/1 per run). The firmware's own paths are relative to its checkout.
+(0/1 per run). Source paths are absolute unless `--coverage-root` makes them relative to a
+directory, e.g. the firmware checkout.
 
 ```sh
-trmnl-sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 30 --coverage og.info --coverage-include src/,lib/
+trmnl-sim trmnl ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin --headless --seconds 30 --coverage og.info \
+  --coverage-root ../trmnl-firmware --coverage-include src/,lib/
 ```
 
 `POST /coverage` (Ruby: `sim.write_coverage`) writes one mid-run; after an OTA both builds
@@ -479,7 +482,7 @@ crates/
 ```
 
 **Chips and boards.** The image header names the chip (C3, S3 or C5); the board comes from
-the PlatformIO env (`--env` or the firmware directory's name). The C3 and C5 share the
+the PlatformIO env given on the command line or picked in the window. The C3 and C5 share the
 RISC-V core; the Xtensa windowed ABI is hidden behind a few `GuestCpu` calls, so the HLE
 (WiFi for IDF 4.4 and 5.5, sleep, ADC) is the same code on every chip. A new board is a
 `Board` plus its devices; a new chip is a `soc/` module.

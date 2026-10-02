@@ -26,9 +26,14 @@ use devices::spi_flash::SpiFlash;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Merged flash image, e.g. ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin; its
-    /// ELF is the same path with the .elf extension (merged_firmware.elf).
-    firmware: PathBuf,
+    /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
+    /// seeed_reTerminal_E1001); it picks the board. Give it and the firmware, or neither: then
+    /// the window asks for both.
+    #[arg(requires = "firmware")]
+    env: Option<String>,
+    /// Merged flash image (e.g. merged_firmware.bin); its ELF is the same path with the .elf
+    /// extension.
+    firmware: Option<PathBuf>,
     /// Persistent flash image (NVS/SPIFFS survive restarts). Default: sim-flash.bin next to
     /// the firmware.
     #[arg(long)]
@@ -100,8 +105,8 @@ struct Cli {
     /// the run ends (or on POST /coverage).
     #[arg(long, value_name = "FILE")]
     coverage: Option<PathBuf>,
-    /// Write coverage paths under this directory relative to it (default: the firmware
-    /// checkout the firmware is in).
+    /// Write coverage paths under this directory relative to it, e.g. the firmware checkout
+    /// (default: absolute paths).
     #[arg(long, value_name = "DIR")]
     coverage_root: Option<PathBuf>,
     /// Only report source files whose (relative) path starts with one of these, e.g.
@@ -128,11 +133,6 @@ struct Cli {
     /// Environment sensor on the I2C header of an SPI-panel board (repeatable): scd41, aht20.
     #[arg(long, value_enum)]
     sensor: Vec<board::spi_epd::Sensor>,
-    /// The PlatformIO environment the firmware was built with (e.g. trmnl, TRMNL_X,
-    /// seeed_reTerminal_E1001); it picks the board. Default: the name of the firmware's
-    /// directory.
-    #[arg(long)]
-    env: Option<String>,
     /// Access points in range of the device's own radio, replacing the defaults: a JSON
     /// array, e.g. '[{"ssid":"TRMNL_QA","rssi":-40},{"ssid":"Home","password":"pw"}]'
     /// (keys: ssid, password, rssi, channel, open, internet).
@@ -142,6 +142,14 @@ struct Cli {
     /// (repeatable; later ones are merged into earlier ones).
     #[arg(long, value_name = "JSON")]
     faults: Vec<String>,
+}
+
+/// Every PlatformIO environment the simulator has a board for, with the board's name.
+fn board_envs() -> Vec<(&'static str, &'static str)> {
+    let mut v = vec![(board::trmnl_x::ENV, "TRMNL X")];
+    v.extend(board::spi_epd::SPECS.iter().flat_map(|s| s.envs.iter().map(|e| (*e, s.name))));
+    v.extend(board::parallel_byod::SPECS.iter().flat_map(|s| s.envs.iter().map(|e| (*e, s.name))));
+    v
 }
 
 fn parse_dns(s: &str) -> Result<(String, std::net::Ipv4Addr), String> {
@@ -168,9 +176,25 @@ fn parse_u32(s: &str) -> Result<u32, String> {
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
-
-    let fw = firmware::Firmware::from_merged(&cli.firmware)?;
-    let fw_dir = cli.firmware.parent().map(PathBuf::from).unwrap_or_default();
+    let (env, firmware) = match (&cli.env, &cli.firmware) {
+        (Some(e), Some(f)) => (e.clone(), f.clone()),
+        _ if cli.headless => anyhow::bail!("--headless needs the environment and the firmware image"),
+        #[cfg(feature = "gui")]
+        _ => {
+            let boards = board_envs()
+                .into_iter()
+                .map(|(env, name)| sim_ui::BoardChoice { env: env.into(), name: name.into() })
+                .collect();
+            match sim_ui::launch(boards)? {
+                Some(l) => l,
+                None => return Ok(()),
+            }
+        }
+        #[cfg(not(feature = "gui"))]
+        _ => anyhow::bail!("built without the `gui` feature: pass the environment and the firmware image"),
+    };
+    let fw = firmware::Firmware::from_merged(&firmware)?;
+    let fw_dir = firmware.parent().map(PathBuf::from).unwrap_or_default();
     let restore = cli.restore.as_deref().map(savepoint::SavePoint::load).transpose()?;
     let flash_path = cli.flash.clone().unwrap_or_else(|| fw_dir.join("sim-flash.bin"));
     let flash_data = firmware::prepare_flash(&flash_path, fw.flash_size, &fw, cli.erase)?;
@@ -213,24 +237,11 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    // Which board: the PlatformIO environment, from --env or the firmware directory's name
-    // (.pio/build/<env>).
-    let env = match &cli.env {
-        Some(e) => e.clone(),
-        None => std::fs::canonicalize(&cli.firmware)
-            .ok()
-            .and_then(|f| f.parent().map(PathBuf::from))
-            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default(),
-    };
     let parallel_spec = board::parallel_byod::find(&env);
     let spi_spec = board::spi_epd::find(&env);
     if parallel_spec.is_none() && spi_spec.is_none() && env != board::trmnl_x::ENV {
-        let envs: Vec<&str> = std::iter::once(board::trmnl_x::ENV)
-            .chain(board::spi_epd::SPECS.iter().flat_map(|s| s.envs.iter().copied()))
-            .chain(board::parallel_byod::SPECS.iter().flat_map(|s| s.envs.iter().copied()))
-            .collect();
-        anyhow::bail!("unknown PlatformIO environment {env:?}: pass --env (known: {})", envs.join(", "));
+        let envs: Vec<&str> = board_envs().into_iter().map(|(e, _)| e).collect();
+        anyhow::bail!("unknown PlatformIO environment {env:?} (known: {})", envs.join(", "));
     }
     let (board, frame, panel): (Box<dyn board::Board>, sim_api::SharedFrame, mock_trmnl::Panel) = match spi_spec {
         Some(spec) => {
@@ -331,13 +342,11 @@ fn main() -> Result<()> {
     let coverage = match &cli.coverage {
         Some(path) => {
             let elfs: Vec<PathBuf> =
-                std::iter::once(cli.firmware.with_extension("elf")).chain(extra_elfs.clone()).collect();
+                std::iter::once(firmware.with_extension("elf")).chain(extra_elfs.clone()).collect();
             let data = elfs.iter().map(std::fs::read).collect::<std::io::Result<Vec<_>>>()?;
             machine.set_coverage(coverage::Coverage::new(&data.iter().map(Vec::as_slice).collect::<Vec<_>>())?);
-            let filter = coverage::PathFilter {
-                root: cli.coverage_root.clone().or_else(|| coverage::checkout_of(&fw_dir)),
-                include: cli.coverage_include.clone(),
-            };
+            let filter =
+                coverage::PathFilter { root: cli.coverage_root.clone(), include: cli.coverage_include.clone() };
             Some(coverage::Reporter::new(elfs, filter, path.clone()))
         }
         None => None,

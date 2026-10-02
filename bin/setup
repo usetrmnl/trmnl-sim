@@ -72,4 +72,4 @@ else
          and for the ESP32 ROM ELFs: https://platformio.org/install/cli"
 fi
 
-say "Done. Next: bin/build, or bin/sim <merged_firmware.bin> to build and run."
+say "Done. Next: bin/build, or bin/sim to build and run."

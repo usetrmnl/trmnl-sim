@@ -78,11 +78,13 @@ fn report_unknown(res: &scan::ScanResult) -> String {
 }
 
 /// Every instruction reachable from a symbol in the TRMNL firmware must decode.
-/// Skipped when the firmware build is not present (set XTENSA_FIRMWARE_ELF to override).
+/// Skipped unless XTENSA_FIRMWARE_ELF names an S3 build's firmware ELF.
 #[test]
 fn opcode_coverage_firmware() {
-    let path = std::env::var("XTENSA_FIRMWARE_ELF")
-        .unwrap_or_else(|_| "/Users/rockwell/Projects/trmnl/trmnl-firmware/.pio/build/TRMNL_X/firmware.elf".into());
+    let Ok(path) = std::env::var("XTENSA_FIRMWARE_ELF") else {
+        eprintln!("skipping: set XTENSA_FIRMWARE_ELF");
+        return;
+    };
     // The vector table (VECBASE) is at the start of .iram0.vectors; the vectors
     // themselves are reached through VECBASE, not calls.
     let Some(res) = coverage(&path, "firmware", &[]) else {
@@ -92,11 +94,13 @@ fn opcode_coverage_firmware() {
     assert!(res.unknown.is_empty(), "undecodable reachable instructions:\n{}", report_unknown(&res));
 }
 
-/// ... and its second-stage bootloader.
+/// ... and its second-stage bootloader (XTENSA_BOOTLOADER_ELF).
 #[test]
 fn opcode_coverage_bootloader() {
-    let path = std::env::var("XTENSA_BOOTLOADER_ELF")
-        .unwrap_or_else(|_| "/Users/rockwell/Projects/trmnl/trmnl-firmware/.pio/build/TRMNL_X/bootloader.elf".into());
+    let Ok(path) = std::env::var("XTENSA_BOOTLOADER_ELF") else {
+        eprintln!("skipping: set XTENSA_BOOTLOADER_ELF");
+        return;
+    };
     let Some(res) = coverage(&path, "bootloader", &[]) else {
         eprintln!("skipping: {path} not found");
         return;

@@ -7,6 +7,7 @@ mod bluetooth;
 mod console;
 mod device;
 mod faults;
+mod launcher;
 mod preferences;
 mod server;
 mod touch;
@@ -56,6 +57,16 @@ fn app_icon() -> egui::IconData {
     let info = r.next_frame(&mut buf).expect("icon.png");
     buf.truncate(info.buffer_size());
     egui::IconData { rgba: buf, width: info.width, height: info.height }
+}
+
+pub use launcher::{BoardChoice, Launch, launch};
+
+/// Ask for a merged firmware image with an open dialog (`None`: cancelled).
+fn pick_firmware() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Open a merged firmware image (merged_firmware.bin, its .elf next to it)")
+        .add_filter("Merged firmware image", &["bin"])
+        .pick_file()
 }
 
 /// Open the simulator window. Must be called on the main thread; blocks until the window

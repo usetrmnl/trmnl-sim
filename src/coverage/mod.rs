@@ -282,11 +282,3 @@ pub fn summarize(files: &BTreeMap<String, FileCoverage>) -> CoverageSummary {
     }
     s
 }
-
-/// The firmware checkout a PlatformIO build dir belongs to (`<checkout>/.pio/build/<env>`).
-pub fn checkout_of(build_dir: &Path) -> Option<PathBuf> {
-    let dir = build_dir.canonicalize().ok()?;
-    let env = dir.parent()?;
-    (env.file_name()? == "build" && env.parent()?.file_name()? == ".pio")
-        .then(|| env.parent()?.parent().map(Into::into))?
-}

@@ -1,32 +1,17 @@
 #!/usr/bin/env bash
-# Build the simulator, then run it on a merged firmware image (its ELF next to it, the same
-# path with .elf).
+# Build the simulator, then run a merged firmware image (its ELF next to it, the same path
+# with .elf) on a board, given by the PlatformIO environment the firmware was built with.
 #
-#   bin/sim path/to/merged_firmware.bin            # e.g. <firmware>/.pio/build/trmnl/merged_firmware.bin
-#   bin/sim path/to/merged_firmware.bin --erase    # further arguments go to trmnl-sim (see --help)
+#   bin/sim                                  # the window asks for the board and the image
+#   bin/sim trmnl path/to/merged_firmware.bin
+#   bin/sim trmnl path/to/merged_firmware.bin --erase   # more arguments go to trmnl-sim (--help)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
-
-case "${1:-}" in
-  "" | -*)
-    usage
-    [[ "${1:-}" == -h || "${1:-}" == --help ]] && exit 0
-    exit 1
-    ;;
-esac
-image="$1"
-shift
-
-if [[ ! -f "$image" ]]; then
-  echo "error: no firmware image at $image" >&2
-  exit 1
-fi
-if [[ ! -f "${image%.*}.elf" ]]; then
-  echo "error: no ELF for the image at ${image%.*}.elf" >&2
-  exit 1
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+  exit 0
 fi
 
 bin/build
-exec ./target/release/trmnl-sim "$image" "$@"
+exec ./target/release/trmnl-sim "$@"
