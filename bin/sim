@@ -1,44 +1,26 @@
 #!/usr/bin/env bash
-# Build the simulator, then run it on a firmware build.
+# Build the simulator, then run it on a merged firmware image (its ELF next to it, the same
+# path with .elf).
 #
-#   bin/sim                 # TRMNL OG (<firmware>/.pio/build/trmnl/merged_firmware.bin)
-#   bin/sim TRMNL_X         # any PlatformIO env (<firmware>/.pio/build/<env>/merged_firmware.bin)
-#   bin/sim path/to/fw.bin  # any merged image, with its ELF next to it (path/to/fw.elf)
-#   bin/sim TRMNL_X --erase # arguments after the device go to trmnl-sim (see --help)
-#
-# <firmware> is ../trmnl-firmware unless TRMNL_FIRMWARE says otherwise. The firmware
-# itself is not built here: run `pio run -e <env>` in the firmware checkout first.
+#   bin/sim path/to/merged_firmware.bin            # e.g. <firmware>/.pio/build/trmnl/merged_firmware.bin
+#   bin/sim path/to/merged_firmware.bin --erase    # further arguments go to trmnl-sim (see --help)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-firmware="${TRMNL_FIRMWARE:-../trmnl-firmware}"
-target="${1:-trmnl}"
-[[ $# -gt 0 ]] && shift
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
-case "$target" in
-  -h | --help)
-    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
-    exit 0
-    ;;
-  -*)
-    # No device given: default to the OG and pass everything on.
-    set -- "$target" "$@"
-    target=trmnl
+case "${1:-}" in
+  "" | -*)
+    usage
+    [[ "${1:-}" == -h || "${1:-}" == --help ]] && exit 0
+    exit 1
     ;;
 esac
-
-# A path is a merged image; anything else is an env in the firmware checkout.
-if [[ "$target" == */* ]]; then
-  env=""
-  image="$target"
-else
-  env="$target"
-  image="$firmware/.pio/build/$env/merged_firmware.bin"
-fi
+image="$1"
+shift
 
 if [[ ! -f "$image" ]]; then
   echo "error: no firmware image at $image" >&2
-  [[ -n "$env" ]] && echo "       build it with: (cd $firmware && pio run -e $env)" >&2
   exit 1
 fi
 if [[ ! -f "${image%.*}.elf" ]]; then

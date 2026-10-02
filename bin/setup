@@ -72,7 +72,4 @@ else
          and for the ESP32 ROM ELFs: https://platformio.org/install/cli"
 fi
 
-firmware="${TRMNL_FIRMWARE:-../trmnl-firmware}"
-[[ -d "$firmware" ]] || warn "no firmware checkout at $firmware (set TRMNL_FIRMWARE to point elsewhere)"
-
-say "Done. Next: bin/build, or bin/sim to build and run."
+say "Done. Next: bin/build, or bin/sim <merged_firmware.bin> to build and run."

@@ -70,9 +70,8 @@ Common to all devices:
 ```sh
 bin/setup      # install Rust (rustup), a C toolchain, the ESP32 ROM ELFs
 bin/build      # cargo build --release
-bin/sim        # build, then run the OG build (trmnl) from ../trmnl-firmware
-bin/sim TRMNL_X     # ... another env's build, or bin/sim path/to/merged.bin
-bin/sim TRMNL_X --erase   # extra arguments go to trmnl-sim; TRMNL_FIRMWARE=<checkout> to use another one
+bin/sim ../trmnl-firmware/.pio/build/trmnl/merged_firmware.bin   # build, then run a merged image
+bin/sim ../trmnl-firmware/.pio/build/TRMNL_X/merged_firmware.bin --erase   # extra arguments go to trmnl-sim
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
 ```
 
