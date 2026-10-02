@@ -1,5 +1,5 @@
 //! The window shown when the simulator starts without a board and firmware: pick both (and
-//! optionally a few command line options), then the simulator window opens. The last choice is
+//! optionally the MAC, or erase the flash), then the simulator window opens. The last choice is
 //! remembered for next time, except erasing the flash.
 
 use std::path::{Path, PathBuf};
@@ -22,18 +22,8 @@ pub struct Launch {
     pub firmware: PathBuf,
     /// `--mac`
     pub mac: Option<[u8; 6]>,
-    /// `--flash`
-    pub flash: Option<PathBuf>,
-    /// `--ota-firmware`
-    pub ota_firmware: Option<PathBuf>,
     /// `--erase`
     pub erase: bool,
-    /// `--turbo`
-    pub turbo: bool,
-    /// `--fast-sleep`
-    pub fast_sleep: bool,
-    /// `--offline`
-    pub offline: bool,
 }
 
 #[derive(Default)]
@@ -42,12 +32,7 @@ struct Launcher {
     board: Option<usize>,
     firmware: Option<PathBuf>,
     mac: String,
-    flash: Option<PathBuf>,
-    ota_firmware: Option<PathBuf>,
     erase: bool,
-    turbo: bool,
-    fast_sleep: bool,
-    offline: bool,
     result: Arc<Mutex<Option<Launch>>>,
 }
 
@@ -65,13 +50,6 @@ impl Launcher {
                 }
             }
         }
-        if let Some(p) = &self.ota_firmware {
-            for f in [p.clone(), p.with_extension("elf")] {
-                if !f.is_file() {
-                    v.push(format!("OTA firmware: {} not found", f.display()));
-                }
-            }
-        }
         if !self.mac.trim().is_empty() && parse_mac(&self.mac).is_none() {
             v.push("MAC address: expected 6 hex bytes like 7C:DF:A1:12:34:56".into());
         }
@@ -83,12 +61,7 @@ impl Launcher {
             env: self.boards.get(self.board?)?.env.clone(),
             firmware: self.firmware.clone()?,
             mac: parse_mac(&self.mac),
-            flash: self.flash.clone(),
-            ota_firmware: self.ota_firmware.clone(),
             erase: self.erase,
-            turbo: self.turbo,
-            fast_sleep: self.fast_sleep,
-            offline: self.offline,
         })
     }
 }
@@ -123,48 +96,9 @@ impl eframe::App for Launcher {
                 ui.add(egui::TextEdit::singleline(&mut self.mac).hint_text("7C:DF:A1:…").desired_width(160.0))
                     .on_hover_text("The device's identity on the server (--mac)");
             });
-            row(ui, "Flash file", |ui| {
-                let start =
-                    self.flash.as_deref().and_then(Path::parent).or(self.firmware.as_deref().and_then(Path::parent));
-                if ui.button("Choose…").on_hover_text("Where NVS and SPIFFS persist between runs (--flash)").clicked()
-                {
-                    let d = rfd::FileDialog::new().set_file_name("sim-flash.bin");
-                    if let Some(p) = start.map_or(d.clone(), |s| d.set_directory(s)).save_file() {
-                        self.flash = Some(p);
-                    }
-                }
-                clear_button(ui, &mut self.flash);
-                path_label(ui, self.flash.as_deref(), "sim-flash.bin next to the firmware");
-            });
-            row(ui, "OTA firmware", |ui| {
-                let start = self
-                    .ota_firmware
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .or(self.firmware.as_deref().and_then(Path::parent));
-                if ui
-                    .button("Choose…")
-                    .on_hover_text(
-                        "The app image the built-in server offers for updates, its .elf next to it (--ota-firmware)",
-                    )
-                    .clicked()
-                {
-                    let d = rfd::FileDialog::new().add_filter("App image", &["bin"]);
-                    if let Some(p) = start.map_or(d.clone(), |s| d.set_directory(s)).pick_file() {
-                        self.ota_firmware = Some(p);
-                    }
-                }
-                clear_button(ui, &mut self.ota_firmware);
-                path_label(ui, self.ota_firmware.as_deref(), "none");
-            });
             row(ui, "", |ui| {
                 ui.checkbox(&mut self.erase, "Erase flash")
                     .on_hover_text("Start factory-fresh: forget WiFi, API key and settings (--erase; not remembered)");
-                ui.checkbox(&mut self.turbo, "Turbo").on_hover_text("Run as fast as possible (--turbo)");
-                ui.checkbox(&mut self.fast_sleep, "Fast sleep")
-                    .on_hover_text("Fast-forward deep sleeps (--fast-sleep)");
-                ui.checkbox(&mut self.offline, "Offline")
-                    .on_hover_text("Only the host is reachable from the device (--offline)");
             });
 
             let problems = self.problems();
@@ -204,13 +138,6 @@ fn path_label(ui: &mut Ui, path: Option<&Path>, none: &str) {
     let char_w = ui.fonts_mut(|f| f.glyph_width(&font, 'x')).max(1.0);
     let fits = (ui.available_width() / char_w) as usize;
     ui.add(egui::Label::new(RichText::new(elide_start(&shown, fits)).monospace()).truncate()).on_hover_text(shown);
-}
-
-/// Back to the default, once a path is chosen.
-fn clear_button(ui: &mut Ui, path: &mut Option<PathBuf>) {
-    if path.is_some() && ui.button("Default").on_hover_text("Forget this path").clicked() {
-        *path = None;
-    }
 }
 
 /// "7C:DF:A1:12:34:56" (or with dashes).
@@ -258,44 +185,32 @@ fn load_last(app: &mut Launcher) {
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|d| serde_json::from_slice(&d).ok())
         .unwrap_or_default();
-    let path = |k: &str| v[k].as_str().map(PathBuf::from);
     app.board = v["env"].as_str().and_then(|e| app.boards.iter().position(|b| b.env == e));
-    app.firmware = path("firmware");
+    app.firmware = v["firmware"].as_str().map(PathBuf::from);
     app.mac = v["mac"].as_str().unwrap_or_default().to_string();
-    app.flash = path("flash");
-    app.ota_firmware = path("ota_firmware");
-    app.turbo = v["turbo"].as_bool().unwrap_or(false);
-    app.fast_sleep = v["fast_sleep"].as_bool().unwrap_or(false);
-    app.offline = v["offline"].as_bool().unwrap_or(false);
 }
 
 /// Remember a launch, except `erase`: a factory reset is never repeated by accident.
 fn save_last(l: &Launch) {
     let Some(path) = settings_path() else { return };
-    let p = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
     let v = json!({
         "env": l.env,
         "firmware": l.firmware.to_string_lossy(),
         "mac": l.mac.as_ref().map(format_mac),
-        "flash": p(&l.flash),
-        "ota_firmware": p(&l.ota_firmware),
-        "turbo": l.turbo,
-        "fast_sleep": l.fast_sleep,
-        "offline": l.offline,
     });
     // Remembering is a convenience: a read-only config directory isn't worth an error.
     let _ = path.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap_or_default());
 }
 
-/// Ask for the board, the firmware image and options in a small window (`None`: closed
+/// Ask for the board, the firmware image, the MAC and whether to erase in a small window (`None`: closed
 /// without starting). Call it on the main thread, before [`crate::run`].
 pub fn launch(boards: Vec<BoardChoice>) -> anyhow::Result<Option<Launch>> {
     let result = Arc::new(Mutex::new(None));
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("TRMNL Simulator")
-            .with_inner_size([640.0, 360.0])
+            .with_inner_size([640.0, 280.0])
             .with_icon(crate::app_icon()),
         ..Default::default()
     };
@@ -336,7 +251,7 @@ mod tests {
         std::fs::write(long.with_extension("elf"), b"").unwrap();
         let app = Launcher { boards, board: Some(0), firmware: Some(long), ..Default::default() };
         let mut h = egui_kittest::Harness::builder()
-            .with_size([640.0, 360.0])
+            .with_size([640.0, 280.0])
             .with_pixels_per_point(2.0)
             .build_eframe(move |_| app);
         h.run();

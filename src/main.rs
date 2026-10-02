@@ -190,12 +190,7 @@ fn main() -> Result<()> {
             let Some(l) = sim_ui::launch(boards)? else { return Ok(()) };
             // What the launcher sets; the rest stays as given on the command line.
             cli.mac = l.mac.or(cli.mac);
-            cli.flash = l.flash.or(cli.flash);
-            cli.ota_firmware = l.ota_firmware.or(cli.ota_firmware);
             cli.erase |= l.erase;
-            cli.turbo |= l.turbo;
-            cli.fast_sleep |= l.fast_sleep;
-            cli.offline |= l.offline;
             (l.env, l.firmware)
         }
         #[cfg(not(feature = "gui"))]
