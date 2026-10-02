@@ -36,10 +36,16 @@
 //! | GET    | `/faults`              |                                                | faults, partitions, flash counters |
 //! | POST   | `/faults`              | faults JSON, merged into the current ones (see [`faults`]) | as GET |
 //! | DELETE | `/faults`              | clear all faults                               | as GET |
+//! | POST   | `/mcp`                 | MCP JSON-RPC: every endpoint as a tool (see [`mcp`]) | |
 //!
 //! Screens are grayscale with 0 = black ink and 255 = paper.
+//!
+//! The routes are listed in [`endpoints::ENDPOINTS`]; the HTTP server answers only those, and
+//! the MCP server offers each as a tool, so a new endpoint is added there (and here).
 
+pub mod endpoints;
 pub mod faults;
+mod mcp;
 mod mock;
 mod preferences;
 pub mod wifi;
@@ -93,21 +99,37 @@ fn handle_request(h: &SimHandle, mock: Option<&mock_trmnl::MockServer>, mut req:
     let (path, query) = url.split_once('?').unwrap_or((&url, ""));
     let path = path.to_string();
     let q = parse_query(query);
+    let origin = req.headers().iter().find(|h| h.field.equiv("Origin")).map(|h| h.value.to_string());
     let mut body = Vec::new();
     let _ = std::io::Read::read_to_end(req.as_reader(), &mut body);
+    let reply = if path == "/mcp" {
+        mcp::handle(h, mock, &method, origin.as_deref(), &body)
+    } else if endpoints::find(&method, &path).is_none() {
+        err(404, format!("no route {method} {path}"))
+    } else {
+        dispatch(h, mock, &method, &path, &q, &body)
+    };
+    let _ = req.respond(reply);
+}
+
+/// Answer a control API request (from HTTP or an MCP tool call).
+fn dispatch(
+    h: &SimHandle,
+    mock: Option<&mock_trmnl::MockServer>,
+    method: &Method,
+    path: &str,
+    q: &[(String, String)],
+    body: &[u8],
+) -> Reply {
     let routed = if path == "/mock" || path.starts_with("/mock/") {
         match mock {
-            Some(m) => mock::route(m, &method, &path, &q, &body),
+            Some(m) => mock::route(m, method, path, q, body),
             None => Ok(err(404, "no mock server in this simulator")),
         }
     } else {
-        route(h, &method, &path, &q, &body)
+        route(h, method, path, q, body)
     };
-    let reply = match routed {
-        Ok(r) => r,
-        Err(e) => err(400, e),
-    };
-    let _ = req.respond(reply);
+    routed.unwrap_or_else(|e| err(400, e))
 }
 
 fn parse_query(q: &str) -> Vec<(String, String)> {
