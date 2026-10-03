@@ -4,6 +4,7 @@
 mod arch;
 mod board;
 mod coverage;
+mod debug;
 mod devices;
 mod faults;
 mod firmware;
@@ -62,6 +63,13 @@ struct Cli {
     /// Serve the HTTP control API for integration tests on this address (e.g. 127.0.0.1:7878).
     #[arg(long)]
     control: Option<std::net::SocketAddr>,
+    /// Serve the GDB remote protocol on this address (e.g. 127.0.0.1:3333; port 0 picks one):
+    /// `target remote` from the toolchain's GDB with the firmware's ELF.
+    #[arg(long, value_name = "ADDR")]
+    gdb: Option<String>,
+    /// With --gdb: hold the CPU at its first instruction until GDB attaches.
+    #[arg(long, requires = "gdb")]
+    gdb_wait: bool,
     /// Start the built-in mock TRMNL server on this port (default 8090; 0 = any free port).
     /// The device reaches it at http://10.0.2.2:PORT. It can also be started from the window
     /// or the control API.
@@ -398,7 +406,8 @@ fn main() -> Result<()> {
         echo_console: true,
         profile: cli.profile,
         firmware_name: fw.name.clone(),
-        exit_on_halt: cli.headless && cli.control.is_none(),
+        exit_on_halt: cli.headless && cli.control.is_none() && cli.gdb.is_none(),
+        gdb_wait: cli.gdb_wait,
         firmware: fw_id,
         restore,
         coverage,
@@ -419,6 +428,13 @@ fn main() -> Result<()> {
     if let Some(addr) = cli.control {
         let (bound, _t) = sim_control::serve_with_mock(handle.clone(), addr, Some(mock.clone()))?;
         eprintln!("trmnl-sim: control API on http://{bound}/");
+    }
+    if let Some(addr) = &cli.gdb {
+        let bound = sim_gdb::serve(addr, handle.clone()).with_context(|| format!("--gdb {addr}"))?;
+        eprintln!(
+            "trmnl-sim: GDB stub on {bound}{} (target remote {bound})",
+            if cli.gdb_wait { ", waiting for it" } else { "" }
+        );
     }
     eprintln!("trmnl-sim: {} ({} symbols), flash {}", fw.name, fw.symbols.len(), flash_path.display());
 

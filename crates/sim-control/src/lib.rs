@@ -365,6 +365,7 @@ fn state_name(s: &RunState) -> &'static str {
     match s {
         RunState::Running => "running",
         RunState::Paused => "paused",
+        RunState::Debugger => "debugger",
         RunState::Idle => "idle",
         RunState::LightSleep { .. } => "light_sleep",
         RunState::DeepSleep { .. } => "deep_sleep",
@@ -551,7 +552,7 @@ impl WaitSpec {
         };
         let state = v["state"].as_str().map(str::to_string);
         if let Some(s) = &state
-            && !["running", "paused", "idle", "light_sleep", "deep_sleep", "halted"].contains(&s.as_str())
+            && !["running", "paused", "debugger", "idle", "light_sleep", "deep_sleep", "halted"].contains(&s.as_str())
         {
             return Err(format!("unknown state {s}"));
         }

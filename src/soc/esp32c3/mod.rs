@@ -43,6 +43,7 @@ pub struct Esp32c3 {
     recent_resets: Vec<u64>,
     syms: Symbols,
     hooks: Hooks,
+    debug: crate::debug::DebugState,
     irq: Option<(u32, u32)>,
     requests: Vec<MachineRequest>,
     /// Simulator messages tagged with the serial output position they follow.
@@ -161,6 +162,7 @@ impl Esp32c3 {
             pending_halt: None,
             recent_resets: Vec::new(),
             hooks: Hooks::default(),
+            debug: Default::default(),
             irq: None,
             requests: Vec::new(),
             sim_msgs: Vec::new(),
@@ -297,6 +299,7 @@ impl Esp32c3 {
         }
         self.syms = syms;
         self.hooks = hooks;
+        self.debug.apply(&mut self.hooks);
         self.active_app = Some(i);
         self.cover_app();
     }
@@ -404,7 +407,6 @@ impl Esp32c3 {
 
     fn handle_trap(&mut self, cause: u32, tval: u32) -> Option<SliceExit> {
         let pc = self.cpu.pc;
-        self.trap_depth += 1;
         let desc = format!(
             "CPU exception {} at {} (mtval={tval:#x})",
             match cause {
@@ -418,6 +420,14 @@ impl Esp32c3 {
             },
             self.syms.describe(pc)
         );
+        if self.debug.attached {
+            let len = (cause == 3).then(|| crate::debug::riscv_insn_len(self.bus.peek_bytes(pc, 1)));
+            let fatal = crate::debug::riscv_fault_signal(cause);
+            if let Some(stop) = self.debug.trap(0, pc, fatal, len, desc.clone()) {
+                return Some(SliceExit::Debug(stop));
+            }
+        }
+        self.trap_depth += 1;
         if cause != 11 {
             self.msg(desc.clone());
         }
@@ -483,7 +493,13 @@ impl Esp32c3 {
     }
 }
 
+crate::debug::riscv_debuggable!(Esp32c3);
+
 impl Machine for Esp32c3 {
+    fn debug(&mut self) -> &mut dyn crate::debug::Debuggable {
+        self
+    }
+
     fn set_coverage(&mut self, cov: Coverage) {
         self.coverage = Some(Box::new(cov));
         self.cover_app();
@@ -514,6 +530,9 @@ impl Machine for Esp32c3 {
         if let Some(m) = self.pending_halt.take() {
             return SliceExit::Halted(m);
         }
+        if let Some(stop) = self.debug.pending.take() {
+            return SliceExit::Debug(stop);
+        }
         let until = self.bus.clock.cycles_at(until_ns);
         loop {
             if self.bus.clock.cycles >= until {
@@ -536,6 +555,9 @@ impl Machine for Esp32c3 {
             let stop = until.min(self.bus.next_event);
             while self.bus.clock.cycles < stop {
                 if self.hooks.maybe(self.cpu.pc) {
+                    if let Some(stop) = self.debug.check(0, self.cpu.pc) {
+                        return SliceExit::Debug(stop);
+                    }
                     if self.run_hook() {
                         if !self.requests.is_empty() {
                             break;
@@ -576,6 +598,9 @@ impl Machine for Esp32c3 {
                         self.handle_reset_request(r);
                         break;
                     }
+                    if let Some(stop) = self.bus.watch.stop() {
+                        return SliceExit::Debug(stop);
+                    }
                     if self.bus.mc.as_ref().is_some_and(|mc| mc.pending.is_some())
                         && let Some(exit) = self.memcheck_poll(pc)
                     {
@@ -584,6 +609,7 @@ impl Machine for Esp32c3 {
                 }
                 if let Some((line, pri)) = self.irq
                     && self.cpu.irq_enabled()
+                    && !self.debug.holds_interrupts()
                 {
                     self.cpu.enter_interrupt(line, pri);
                     self.irq_counts[line as usize] += 1;

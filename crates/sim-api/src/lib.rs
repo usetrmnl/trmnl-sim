@@ -7,6 +7,9 @@ pub use preferences::*;
 mod bluetooth;
 pub use bluetooth::*;
 
+mod debug;
+pub use debug::*;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -589,6 +592,11 @@ pub enum Command {
         change: PreferenceChange,
         reply: Sender<Result<PreferencesSnapshot, String>>,
     },
+    /// A debugger (the GDB stub) request.
+    Debug {
+        request: DebugRequest,
+        reply: DebugReplySender,
+    },
     Quit,
 }
 
@@ -596,6 +604,8 @@ pub enum Command {
 pub enum RunState {
     Running,
     Paused,
+    /// Stopped by the debugger (breakpoint, step, interrupt...).
+    Debugger,
     /// Waiting for an interrupt (FreeRTOS idle); still "awake".
     Idle,
     LightSleep {

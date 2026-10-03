@@ -195,6 +195,8 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--coverage-include P,..` | Only report files under these prefixes, e.g. `src/,lib/` |
 | `--memcheck[=halt]` | Check [memory use](#memory-checking); `=halt` stops at the first error |
 | `--memcheck-suppress F,..` | Ignore violations with these functions in their stacks |
+| `--gdb ADDR` | Serve the [GDB remote protocol](#debugging-with-gdb), e.g. `127.0.0.1:3333` (port 0 = pick one) |
+| `--gdb-wait` | With `--gdb`: hold the CPU at its first instruction until GDB attaches |
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
@@ -398,6 +400,45 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 | `GET /faults` | injected faults, power losses, flash counts, the partition table |
 | `POST /faults {...}`, `DELETE /faults` | merge [faults](#fault-injection); clear them all |
 
+### Debugging with GDB
+
+`--gdb 127.0.0.1:3333` lets the toolchain's GDB debug the firmware as it runs, with the
+firmware's ELF: breakpoints, single steps, watchpoints, registers, memory and backtraces with
+source lines, on every chip.
+
+```sh
+bin/sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin --gdb 127.0.0.1:3333 --gdb-wait
+~/.platformio/packages/tool-riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb \
+  ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.elf \
+  -ex 'target remote 127.0.0.1:3333' -ex 'break setup' -ex continue
+```
+
+The S3 boards (TRMNL X, PaperS3, ...) use `tool-xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb`.
+
+**In VS Code**, the firmware's `trmnl.code-workspace` has **Debug in simulator**: it builds
+PlatformIO's selected env, runs it here held at reset, and attaches, so breakpoints set in the
+editor catch the boot (`scripts/debug_sim.sh` in the firmware does the build-and-run part).
+
+- **All-stop.** Attaching stops the whole machine (both S3 cores, virtual time); `continue`
+  runs it again, Ctrl-C stops it. GDB threads are the cores: thread 1 is core 0, thread 2 the
+  S3's APP_CPU once it runs. While a step runs, interrupts wait, so `next` stays in your code.
+- **Breakpoints** cost nothing when unset and survive resets and deep-sleep wakes,
+  so `break setup` catches every boot. Calls to [HLE](#architecture)-replaced
+  functions (WiFi driver, sleep, ADC) complete in one step.
+- **Watchpoints** (`watch`, `rwatch`, `awatch`) see the CPU's loads and stores, stopping after
+  the accessing instruction; not writes the HLE or DMA makes.
+- **Crashes stop in GDB** before the firmware's panic handler runs: a fatal CPU exception
+  (illegal instruction, access fault, misaligned access, division by zero) shows as SIGILL,
+  SIGSEGV, SIGBUS or SIGFPE at the faulting instruction; `continue` lets the panic handler take
+  it. Breakpoint instructions (`ebreak`, `BREAK`) stop with SIGTRAP and are stepped over; a
+  simulator halt shows as SIGABRT with its message.
+- `monitor reset`, `monitor power-cycle` and `monitor wake` press the buttons; the status shows
+  `debugger` (`/status` state, `/wait {"state": "debugger"}`) while stopped.
+
+Memory reads are RAM, ROM and mapped flash; peripheral registers aren't read (some reads have
+side effects). The host network keeps going while the target is stopped, so a long stop can
+make a connection time out.
+
 ### Code coverage
 
 `--coverage FILE` records which firmware instructions run (across resets and deep sleeps)
@@ -482,6 +523,8 @@ crates/
 ├─ sim-api/            the contract between the emulator thread and front-ends
 ├─ sim-ui/             egui desktop window
 ├─ sim-control/        HTTP control API
+├─ sim-gdb/            GDB remote protocol stub (--gdb); the chip-specific parts are src/debug.rs
+│                      and arch/gdb.rs (register maps)
 ├─ sim-bluetooth/      portable H4 controller; guest NimBLE/GATT stays in firmware
 ├─ mock-trmnl/         built-in mock TRMNL server and image conversion (/mock API)
 └─ vnet/               user-mode router/NAT (smoltcp) + soft-AP client
@@ -526,6 +569,8 @@ found this way.
 - **An unmodelled register**: `RUST_LOG=trmnl_sim=trace` logs first accesses to them.
 - **Memory corruption**: `--memcheck` (see [Memory checking](#memory-checking)) catches the
   bad access where it happens.
+- **A crash or hang you want to step through**: `--gdb` (see [Debugging with GDB](#debugging-with-gdb))
+  stops at the faulting instruction before the panic handler, or at any breakpoint.
 - **A hang or crash on the TRMNL X**: `POST /debug` (Ruby: `sim.debug`) prints both cores'
   registers, a backtrace and the running task (`SIM_PEEK=addr,addr` adds memory words);
   `RUST_LOG=modem=debug` logs the AT traffic.

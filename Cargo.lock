@@ -3554,6 +3554,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim-gdb"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "log",
+ "parking_lot",
+ "sim-api",
+]
+
+[[package]]
 name = "sim-ui"
 version = "0.1.0"
 dependencies = [
@@ -4029,6 +4039,7 @@ dependencies = [
  "sim-api",
  "sim-bluetooth",
  "sim-control",
+ "sim-gdb",
  "sim-ui",
  "tempfile",
  "ureq",

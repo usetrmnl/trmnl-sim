@@ -207,6 +207,19 @@ impl Hooks {
         }
     }
 
+    /// Make `maybe` true at the debugger's breakpoints too, or at every pc while it single-
+    /// steps, so the run loops look at the debugger only when it can stop there.
+    pub fn set_debug_filter(&mut self, breakpoints: impl Iterator<Item = u32>, every_pc: bool) {
+        self.filter.fill(if every_pc { !0 } else { 0 });
+        if every_pc {
+            return;
+        }
+        for a in self.by_addr.keys().chain(self.traced.keys()).copied().chain(breakpoints) {
+            let i = Self::fidx(a);
+            self.filter[i / 64] |= 1 << (i % 64);
+        }
+    }
+
     pub fn trampoline(&mut self, addr: u32, name: &'static str, f: HookFn) {
         self.trampolines.insert(addr, (name, f));
     }

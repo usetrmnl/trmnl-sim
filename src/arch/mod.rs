@@ -2,6 +2,7 @@
 //! monomorphized per SoC, and implements [`GuestCpu`] so chip-agnostic code
 //! (HLE hooks, debugging) can drive it without knowing the ISA or ABI.
 
+pub mod gdb;
 pub mod riscv;
 pub mod xtensa;
 

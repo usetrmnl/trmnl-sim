@@ -1,0 +1,12 @@
+[package]
+name = "sim-gdb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossbeam-channel = "0.5"
+log = "0.4.34"
+sim-api = { path = "../sim-api" }
+
+[dev-dependencies]
+parking_lot = "0.12"

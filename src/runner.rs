@@ -5,7 +5,10 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use sim_api::{Command, CoverageSummary, Faults, RunState, SavePointInfo, SavePointSource, SimPorts, Status};
+use sim_api::{
+    Command, CoverageSummary, DebugReply, DebugRequest, DebugStop, Faults, RunState, SavePointInfo, SavePointSource,
+    SimPorts, Status, StopReason,
+};
 
 use crate::coverage::Reporter;
 use crate::savepoint::{FirmwareId, SavePoint, SavedPower, StateReader, StateWriter};
@@ -34,6 +37,8 @@ pub struct RunnerOptions {
     pub faults: Faults,
     /// `--hot-reload`: load a rebuilt firmware whenever the device boots again.
     pub hot_reload: Option<HotReload>,
+    /// `--gdb-wait`: nothing runs until a debugger attaches.
+    pub gdb_wait: bool,
 }
 
 /// The firmware files `--hot-reload` watches, and how they looked when last loaded.
@@ -79,6 +84,78 @@ fn boot(m: &mut dyn Machine, ports: &SimPorts, opts: &mut RunnerOptions, kind: R
         }
     }
     m.reset(kind);
+}
+
+/// The attached debugger (`--gdb`), if any.
+#[derive(Default)]
+struct Debugger {
+    events: Option<crossbeam_channel::Sender<DebugStop>>,
+    /// The target is stopped for it: nothing runs and virtual time stands still.
+    stopped: bool,
+}
+
+impl Debugger {
+    fn stop(&mut self, s: DebugStop) {
+        if let Some(events) = &self.events {
+            self.stopped = true;
+            let _ = events.send(s);
+        }
+    }
+
+    /// Answer a request; `halted`: why the emulator can't run on, if it can't.
+    fn request(&mut self, m: &mut dyn Machine, req: DebugRequest, halted: Option<&str>) -> DebugReply {
+        let ok = |done: bool, what: &str| if done { DebugReply::Ok } else { DebugReply::Error(what.into()) };
+        match req {
+            DebugRequest::Attach { events } => {
+                if self.events.is_some() {
+                    return DebugReply::Error("a debugger is already attached".into());
+                }
+                m.debug().debug_attach(true);
+                self.events = Some(events);
+                self.stop(DebugStop { core: 0, reason: StopReason::Interrupted });
+                DebugReply::Target(m.debug().debug_target())
+            }
+            DebugRequest::Detach => {
+                m.debug().debug_attach(false);
+                *self = Debugger::default();
+                DebugReply::Ok
+            }
+            DebugRequest::Interrupt => {
+                if !self.stopped {
+                    self.stop(DebugStop { core: 0, reason: StopReason::Interrupted });
+                }
+                DebugReply::Ok
+            }
+            DebugRequest::Target => DebugReply::Target(m.debug().debug_target()),
+            DebugRequest::Resume { step } => {
+                match halted {
+                    // Nothing can run: stop again right away rather than leave GDB waiting.
+                    Some(msg) => self.stop(DebugStop { core: 0, reason: StopReason::Halted(msg.into()) }),
+                    None => {
+                        m.debug().debug_resume(step);
+                        self.stopped = false;
+                    }
+                }
+                DebugReply::Ok
+            }
+            DebugRequest::ReadRegisters { core } => DebugReply::Registers(m.debug().debug_registers(core)),
+            DebugRequest::ReadRegister { core, n } => DebugReply::Register(m.debug().debug_register(core, n)),
+            DebugRequest::WriteRegister { core, n, value } => {
+                ok(m.debug().debug_set_register(core, n, &value), "register not writable")
+            }
+            DebugRequest::ReadMemory { addr, len } => DebugReply::Memory(m.debug().debug_read_memory(addr, len)),
+            DebugRequest::WriteMemory { addr, data } => {
+                ok(m.debug().debug_write_memory(addr, &data), "memory not writable")
+            }
+            DebugRequest::Breakpoint { addr, set } => {
+                m.debug().debug_breakpoint(addr, set);
+                DebugReply::Ok
+            }
+            DebugRequest::Watchpoint { kind, addr, len, set } => {
+                ok(m.debug().debug_watchpoint(kind, addr, len, set), "watchpoint not supported")
+            }
+        }
+    }
 }
 
 /// How a run ended.
@@ -231,6 +308,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
     let mut slots = Slots::default();
     let mut faults = Faults::default();
     let mut power_losses = 0u64;
+    let mut debugger = Debugger { stopped: opts.gdb_wait, ..Default::default() };
+    // A command that arrived while waiting for one (stopped or paused).
+    let mut next_cmd: Option<Command> = None;
     ports.status.lock().board = m.board().info();
     if !opts.faults.is_empty() {
         faults = set_faults(m.as_mut(), &ports, opts.faults.clone());
@@ -270,7 +350,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
         let bluetooth_now = m.now_ns();
         m.bluetooth().pump(bluetooth_now);
         // ---- commands ----
-        while let Ok(cmd) = ports.commands.try_recv() {
+        while let Some(cmd) = next_cmd.take().or_else(|| ports.commands.try_recv().ok()) {
             let mut rebase = false;
             match cmd {
                 Command::Bluetooth { operation, reply } => {
@@ -423,6 +503,13 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         Err("preferences can only be edited during deep sleep; running, paused, and light-sleep firmware may cache NVS".into())
                     };
                     let _ = reply.send(result);
+                }
+                Command::Debug { request, reply } => {
+                    let was_stopped = debugger.stopped;
+                    let halted = matches!(power, Power::Halted).then_some(halted_msg.as_str());
+                    let _ = reply.send(debugger.request(m.as_mut(), request, halted));
+                    // Don't make up for the time spent stopped.
+                    rebase |= was_stopped && !debugger.stopped;
                 }
                 Command::Memcheck(reply) => {
                     let _ = reply.send(m.memcheck_json().unwrap_or_else(|| r#"{"enabled": false}"#.into()));
@@ -592,7 +679,8 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
         let now_v = m.now_ns();
         let wall_target = anchor_virt + anchor_wall.elapsed().as_nanos() as u64;
         match power {
-            _ if paused => std::thread::sleep(Duration::from_millis(10)),
+            // Wait for a command rather than nap, so a debugger's requests are answered at once.
+            _ if paused || debugger.stopped => next_cmd = ports.commands.recv_timeout(Duration::from_millis(10)).ok(),
             Power::Halted => std::thread::sleep(Duration::from_millis(20)),
             Power::On => {
                 // Turbo fast-forwards, except while the host network is in use.
@@ -647,11 +735,13 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                             anchor_wall = Instant::now();
                             anchor_virt = m.now_ns();
                         }
+                        SliceExit::Debug(stop) => debugger.stop(stop),
                         SliceExit::Halted(msg) => {
                             ports.console.lock().push_sim(&format!("HALTED: {msg}"));
+                            debugger.stop(DebugStop { core: 0, reason: StopReason::Halted(msg.clone()) });
                             halted_msg = msg;
                             power = Power::Halted;
-                            if opts.exit_on_halt {
+                            if opts.exit_on_halt && debugger.events.is_none() {
                                 break 'main;
                             }
                         }
@@ -749,6 +839,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
             st.flash_programs = programs;
             st.flash_erases = erases;
             st.state = match power {
+                _ if debugger.stopped => RunState::Debugger,
                 _ if paused => RunState::Paused,
                 Power::On => match m.light_sleep() {
                     Some(wake_at) => RunState::LightSleep { wake_at_ns: wake_at },

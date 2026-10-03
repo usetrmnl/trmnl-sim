@@ -102,6 +102,8 @@ pub struct C3Bus {
     pub last_fault: Option<(u32, bool)>,
     /// `--memcheck`: shadow checks of CPU loads and stores.
     pub mc: Option<Box<Memcheck>>,
+    /// The debugger's watchpoints.
+    pub watch: crate::debug::Watchpoints,
 }
 
 impl C3Bus {
@@ -119,6 +121,7 @@ impl C3Bus {
             irq_dirty: true,
             last_fault: None,
             mc: None,
+            watch: Default::default(),
         }
     }
 
@@ -208,17 +211,21 @@ impl C3Bus {
     /// loop once the instruction retired, which `irq_dirty` makes it do.
     #[inline(always)]
     fn check(&mut self, addr: u32, len: u32, write: bool) {
-        if self.mc.is_some() {
+        if self.mc.is_some() || self.watch.active() {
             self.check_shadow(addr, len, write);
         }
     }
 
+    /// Also the debugger's watchpoints, which the run loop looks at the same way.
     #[cold]
     #[inline(never)]
     fn check_shadow(&mut self, addr: u32, len: u32, write: bool) {
         if let Some(mc) = self.mc.as_deref_mut()
             && mc.access(addr, len, write)
         {
+            self.irq_dirty = true;
+        }
+        if self.watch.active() && self.watch.access(0, addr, len, write) {
             self.irq_dirty = true;
         }
     }

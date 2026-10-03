@@ -16,6 +16,7 @@ sim-bluetooth = { path = "crates/sim-bluetooth" }
 sim-api = { path = "crates/sim-api" }
 sim-ui = { path = "crates/sim-ui", optional = true }
 sim-control = { path = "crates/sim-control" }
+sim-gdb = { path = "crates/sim-gdb" }
 mock-trmnl = { path = "crates/mock-trmnl" }
 vnet = { path = "crates/vnet" }
 anyhow = "1.0.104"

@@ -19,6 +19,9 @@ pub enum SliceExit {
     DeepSleep { timer_ns: Option<u64>, gpio_low_mask: u64 },
     /// The emulator cannot continue.
     Halted(String),
+    /// The debugger's breakpoint, step, watchpoint or a fault stopped the CPU (at an
+    /// instruction boundary; nothing more ran).
+    Debug(sim_api::DebugStop),
     /// A power-loss fault fired during a flash operation (described); the device has no
     /// power until it is reset with `ResetKind::PowerOn`.
     PowerLoss(String),
@@ -36,6 +39,8 @@ pub enum ResetKind {
 
 pub trait Machine: Send {
     fn bluetooth(&mut self) -> &mut crate::hle::bluetooth::BluetoothState;
+    /// The debugger's access to the cores and memory (`--gdb`).
+    fn debug(&mut self) -> &mut dyn crate::debug::Debuggable;
     /// Run until virtual time reaches `until_ns` (or something noteworthy happens).
     fn run_slice(&mut self, until_ns: u64) -> SliceExit;
     fn reset(&mut self, kind: ResetKind);

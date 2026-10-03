@@ -303,6 +303,8 @@ pub struct Xtensa {
     /// `pend_level` exceeds the current interrupt mask level.
     irq_armed: bool,
     pending_call: Option<PendingCall>,
+    /// The debugger is single-stepping: pending interrupts wait.
+    pub hold_irqs: bool,
     /// Lowest HLE scratch allocation for the next synthetic call (see `alloc_scratch`).
     scratch_low: Option<u32>,
     /// Direct-mapped decode cache: (pc, fetched word, decoded). Checked against the
@@ -380,6 +382,7 @@ impl Xtensa {
             pend_level: 0,
             irq_armed: false,
             pending_call: None,
+            hold_irqs: false,
             scratch_low: None,
             dcache: vec![(1, 0, decode(0)); DCACHE_SIZE].into_boxed_slice(),
             window_overflows: 0,
@@ -622,6 +625,16 @@ impl Xtensa {
         Exception { cause, pc, vaddr, double }
     }
 
+    /// Undo a general exception `raise_exception` just dispatched (not a double one), back to
+    /// the faulting instruction, for the debugger to stop there; running on raises it again.
+    /// EPC1, EXCCAUSE and EXCVADDR keep describing the fault.
+    pub fn undo_exception(&mut self, e: &Exception) {
+        self.pc = e.pc;
+        self.ps &= !ps::EXCM;
+        self.update_win();
+        self.update_armed();
+    }
+
     /// Take a debug exception (level 6) at the current PC with the given DEBUGCAUSE, as
     /// the hardware would for BREAK (DEBUGCAUSE bit 3 = BREAK, bit 4 = BREAK.N).
     pub fn take_debug_exception(&mut self, debugcause: u32) {
@@ -834,7 +847,7 @@ impl Xtensa {
     /// Take a pending interrupt or fetch, decode and execute one instruction.
     #[inline(always)]
     pub fn step<B: MemBus>(&mut self, bus: &mut B) -> Step {
-        if self.irq_armed && self.pc != SYNTH_CALL_PC {
+        if self.irq_armed && !self.hold_irqs && self.pc != SYNTH_CALL_PC {
             self.take_interrupt();
             return Step::Ok;
         }

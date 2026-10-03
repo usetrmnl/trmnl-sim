@@ -73,6 +73,7 @@ pub struct Esp32s3 {
     recent_resets: Vec<u64>,
     syms: Symbols,
     hooks: Hooks,
+    debug: crate::debug::DebugState,
     requests: Vec<MachineRequest>,
     sim_msgs: Vec<(usize, String)>,
     samples: HashMap<u32, u64>,
@@ -244,6 +245,7 @@ impl Esp32s3 {
             pending_halt: None,
             recent_resets: Vec::new(),
             hooks: Hooks::default(),
+            debug: Default::default(),
             requests: Vec::new(),
             sim_msgs: Vec::new(),
             samples: HashMap::new(),
@@ -393,6 +395,7 @@ impl Esp32s3 {
         }
         self.syms = syms;
         self.hooks = hooks;
+        self.debug.apply(&mut self.hooks);
         self.active_app = Some(i);
         self.cover_app();
     }
@@ -590,11 +593,17 @@ impl Esp32s3 {
         let mut done = 0;
         while done < n {
             let pc = self.cores[core].pc();
-            if self.hooks.maybe(pc) && self.run_hook(core) {
-                if !self.requests.is_empty() || self.hle.wake_stub_returned {
+            if self.hooks.maybe(pc) {
+                if let Some(stop) = self.debug.check(core, pc) {
+                    self.debug.pending = Some(stop);
                     return Ok((done, true));
                 }
-                continue;
+                if self.run_hook(core) {
+                    if !self.requests.is_empty() || self.hle.wake_stub_returned {
+                        return Ok((done, true));
+                    }
+                    continue;
+                }
             }
             if let Some(cov) = &mut self.coverage {
                 cov.hit(pc);
@@ -605,17 +614,42 @@ impl Esp32s3 {
                 Step::Wfi => return Ok((done, false)),
                 Step::Exception(e) => {
                     log::debug!("core {core}: exception {e:?} at {}", self.syms.describe(pc));
+                    if self.debug.attached
+                        && !e.double
+                        && let Some((signal, name)) = crate::debug::xtensa_fault(e.cause)
+                        && let Some(stop) = self.debug.trap(
+                            core,
+                            e.pc,
+                            Some(signal),
+                            None,
+                            format!("core {core}: {name} at {} (EXCVADDR {:#x})", self.syms.describe(e.pc), e.vaddr),
+                        )
+                    {
+                        self.cores[core].undo_exception(&e);
+                        self.debug.pending = Some(stop);
+                        return Ok((done, true));
+                    }
                 }
                 Step::Trap(Trap::Unimplemented { pc, raw, len }) => {
-                    self.msg(format!(
-                        "core {core}: unimplemented instruction {raw:0w$x} at {} -> IllegalInstruction",
+                    let desc = format!(
+                        "core {core}: unimplemented instruction {raw:0w$x} at {}",
                         self.syms.describe(pc),
                         w = len as usize * 2
-                    ));
+                    );
+                    if let Some(stop) = self.debug.trap(core, pc, Some(4), None, desc.clone()) {
+                        self.debug.pending = Some(stop);
+                        return Ok((done, true));
+                    }
+                    self.msg(format!("{desc} -> IllegalInstruction"));
                     self.cores[core].raise_exception(cause::ILLEGAL, 0);
                 }
-                Step::Trap(Trap::Break { pc, .. }) => {
+                Step::Trap(Trap::Break { pc, narrow, .. }) => {
                     let desc = format!("core {core}: BREAK at {}", self.syms.describe(pc));
+                    let len = if narrow { 2 } else { 3 };
+                    if let Some(stop) = self.debug.trap(core, pc, None, Some(len), desc.clone()) {
+                        self.debug.pending = Some(stop);
+                        return Ok((done, true));
+                    }
                     return Err(SliceExit::Halted(format!("{desc}\n{}", self.debug_dump())));
                 }
                 Step::Trap(Trap::HleCall { pc }) => {
@@ -627,6 +661,10 @@ impl Esp32s3 {
             self.retired += 1;
             if self.bus.irq_dirty {
                 self.update_irq();
+                if let Some(stop) = self.bus.watch.stop() {
+                    self.debug.pending = Some(stop);
+                    return Ok((done, true));
+                }
                 if self.bus.mc.as_ref().is_some_and(|mc| mc.pending.is_some())
                     && let Some(exit) = self.memcheck_poll(core, pc)
                 {
@@ -661,10 +699,73 @@ fn trampoline_boot_return(c: &mut HleCtx) -> hle::Flow {
     hle::Flow::Redirected
 }
 
+impl crate::debug::Debuggable for Esp32s3 {
+    fn debug_target(&self) -> sim_api::DebugTarget {
+        sim_api::DebugTarget { arch: "xtensa", cores: if self.core_running[1] { 2 } else { 1 }, target_xml: None }
+    }
+
+    fn debug_attach(&mut self, on: bool) {
+        self.debug.attach(on, &mut self.hooks);
+        self.bus.watch.clear();
+        for c in &mut self.cores {
+            c.hold_irqs = false;
+        }
+    }
+
+    fn debug_registers(&self, core: usize) -> Vec<sim_api::RegValue> {
+        crate::arch::gdb::xtensa_registers(&self.cores[core.min(1)])
+    }
+
+    fn debug_register(&self, core: usize, n: usize) -> Option<sim_api::RegValue> {
+        crate::arch::gdb::xtensa_register(&self.cores[core.min(1)], n)
+    }
+
+    fn debug_set_register(&mut self, core: usize, n: usize, value: &[u8]) -> bool {
+        crate::arch::gdb::xtensa_set_register(&mut self.cores[core.min(1)], n, value)
+    }
+
+    fn debug_read_memory(&self, addr: u32, len: usize) -> Vec<u8> {
+        crate::debug::read_memory(|a, n| self.bus.peek_bytes(a, n), addr, len)
+    }
+
+    fn debug_write_memory(&mut self, addr: u32, data: &[u8]) -> bool {
+        self.bus.load_bytes(addr, data)
+    }
+
+    fn debug_breakpoint(&mut self, addr: u32, set: bool) {
+        self.debug.set_breakpoint(addr, set, &mut self.hooks);
+    }
+
+    fn debug_watchpoint(&mut self, kind: sim_api::WatchKind, addr: u32, len: u32, set: bool) -> bool {
+        self.bus.watch.set(kind, addr, len, set);
+        true
+    }
+
+    fn debug_resume(&mut self, step: Option<usize>) {
+        let pcs = [self.cores[0].pc, self.cores[1].pc];
+        let pcs = self.debug.resume(step, &pcs, &mut self.hooks);
+        for (c, pc) in self.cores.iter_mut().zip(pcs) {
+            c.pc = pc;
+            c.hold_irqs = step.is_some();
+        }
+        // A parked core runs again only for an interrupt; the step must still happen.
+        if let Some(core) = step {
+            self.parked[core] = false;
+        }
+    }
+}
+
 impl Machine for Esp32s3 {
+    fn debug(&mut self) -> &mut dyn crate::debug::Debuggable {
+        self
+    }
+
     fn run_slice(&mut self, until_ns: u64) -> SliceExit {
         if let Some(m) = self.pending_halt.take() {
             return SliceExit::Halted(m);
+        }
+        if let Some(stop) = self.debug.pending.take() {
+            return SliceExit::Debug(stop);
         }
         let until = self.bus.clock.cycles_at(until_ns);
         loop {
@@ -712,6 +813,9 @@ impl Machine for Esp32s3 {
                         }
                         Err(exit) => return exit,
                     }
+                    if self.debug.pending.is_some() {
+                        break;
+                    }
                     if let Some(msg) = self.bus.flash.power_lost() {
                         return SliceExit::PowerLoss(msg.to_string());
                     }
@@ -745,7 +849,15 @@ impl Machine for Esp32s3 {
                     .filter(|&c| self.core_running[c])
                     .map(|c| self.cores[c].cycles_to_timer().max(1))
                     .fold(stop - self.bus.clock.cycles, u64::min);
-                let advance = if busy { q } else { idle_jump };
+                // A debugger stop ends the quantum where the cores got to.
+                let stopped = self.debug.pending.is_some();
+                let advance = if stopped {
+                    executed[0].max(executed[1])
+                } else if busy {
+                    q
+                } else {
+                    idle_jump
+                };
                 self.bus.clock.cycles += advance;
                 // Keep each core's CCOUNT in step with shared time (firing CCOMPARE timers).
                 for core in 0..2 {
@@ -754,6 +866,12 @@ impl Machine for Esp32s3 {
                         self.cores[core].advance_ccount(idle);
                     }
                 }
+                if stopped {
+                    break;
+                }
+            }
+            if let Some(stop) = self.debug.pending.take() {
+                return SliceExit::Debug(stop);
             }
             for r in std::mem::take(&mut self.requests) {
                 match r {

@@ -1164,6 +1164,7 @@ fn state_label(s: &Status, dark: bool) -> (String, Color32) {
         RunState::Running => ("Running".into(), pick([0x5c, 0xc8, 0x6c], [0x1f, 0x8a, 0x34])),
         RunState::Idle => ("Idle".into(), pick([0x8c, 0xb8, 0x94], [0x4f, 0x7a, 0x57])),
         RunState::Paused => ("Paused".into(), pick([0xe8, 0xb0, 0x4a], [0xa8, 0x6b, 0x00])),
+        RunState::Debugger => ("Stopped in debugger".into(), pick([0xe8, 0xb0, 0x4a], [0xa8, 0x6b, 0x00])),
         RunState::LightSleep { wake_at_ns } => {
             (format!("Light sleep — {}", wake(*wake_at_ns)), pick([0x7a, 0xb4, 0xf0], [0x1d, 0x5f, 0xb0]))
         }
