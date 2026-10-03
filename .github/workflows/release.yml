@@ -109,13 +109,15 @@ jobs:
 
       # The simulator looks for ROM ELFs in rom/ next to its executable (src/firmware.rs,
       # rom_search_dirs): ship the three chips' ROMs so the release runs without PlatformIO.
+      # A relative download directory: on Windows $RUNNER_TEMP is D:\a\_temp, which tar reads
+      # as host "D" (host:path).
       - name: bundle ROM ELFs
         run: |
-          scripts/fetch-rom-elfs.sh "$RUNNER_TEMP/rom"
+          scripts/fetch-rom-elfs.sh rom-elfs
           release=$(sed -n 's/^RELEASE=//p' scripts/fetch-rom-elfs.sh)
           mkdir -p "dist/$PKG/rom"
           for chip in esp32c3_rev3 esp32s3_rev0 esp32c5_rev100; do
-            cp "$RUNNER_TEMP/rom/${chip}_rom.elf" "dist/$PKG/rom/"
+            cp "rom-elfs/${chip}_rom.elf" "dist/$PKG/rom/"
           done
           curl -fsSL -o "dist/$PKG/rom/LICENSE" \
             "https://raw.githubusercontent.com/espressif/esp-rom-elfs/$release/LICENSE"
