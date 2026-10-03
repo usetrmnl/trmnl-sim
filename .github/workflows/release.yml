@@ -1,0 +1,165 @@
+name: release
+
+# Push a tag matching the crate version to publish a release:
+#   git tag v0.1.0 && git push origin v0.1.0
+# A tag with a suffix (v0.2.0-rc.1) makes a prerelease.
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # The release profile keeps line tables (debug = 1) for local profiling; the published
+  # binaries don't need them.
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: tag matches Cargo.toml
+        id: check
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ] && [[ "$GITHUB_REF_NAME" != "v$version"-* ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the crate version $version"
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The headless build has no GUI toolkit to load: the one for CI runners.
+          - name: linux-x86_64-headless
+            os: ubuntu-latest
+            features: --no-default-features
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: macos-arm64
+            os: macos-latest
+          - name: windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      PKG: trmnl-sim-v${{ needs.version.outputs.version }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: build
+        run: |
+          cargo build --release --locked ${{ matrix.features }}
+          mkdir -p "dist/$PKG"
+          cp target/release/trmnl-sim$([ "$RUNNER_OS" = Windows ] && echo .exe) "dist/$PKG/"
+
+      # Stub: runs once the repository variable MACOS_SIGNING is "true" and these secrets exist:
+      #   MACOS_CERTIFICATE_P12      base64 of the "Developer ID Application" certificate (.p12)
+      #   MACOS_CERTIFICATE_PASSWORD its password
+      #   MACOS_SIGNING_IDENTITY     e.g. "Developer ID Application: Name (TEAMID)"
+      #   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarization (app-specific password)
+      # A bare executable can't have its notarization ticket stapled; Gatekeeper fetches it online.
+      - name: sign and notarize (macOS)
+        if: ${{ startsWith(matrix.os, 'macos') && vars.MACOS_SIGNING == 'true' }}
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          codesign --force --timestamp --options runtime --sign "$MACOS_SIGNING_IDENTITY" \
+            --keychain "$keychain" "dist/$PKG/trmnl-sim"
+          codesign --verify --strict --verbose=2 "dist/$PKG/trmnl-sim"
+
+          ditto -c -k "dist/$PKG/trmnl-sim" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+
+          security delete-keychain "$keychain"
+
+      # The simulator looks for ROM ELFs in rom/ next to its executable (src/firmware.rs,
+      # rom_search_dirs): ship the three chips' ROMs so the release runs without PlatformIO.
+      - name: bundle ROM ELFs
+        run: |
+          scripts/fetch-rom-elfs.sh "$RUNNER_TEMP/rom"
+          release=$(sed -n 's/^RELEASE=//p' scripts/fetch-rom-elfs.sh)
+          mkdir -p "dist/$PKG/rom"
+          for chip in esp32c3_rev3 esp32s3_rev0 esp32c5_rev100; do
+            cp "$RUNNER_TEMP/rom/${chip}_rom.elf" "dist/$PKG/rom/"
+          done
+          curl -fsSL -o "dist/$PKG/rom/LICENSE" \
+            "https://raw.githubusercontent.com/espressif/esp-rom-elfs/$release/LICENSE"
+          cp README.md "dist/$PKG/"
+
+      - name: smoke test
+        run: dist/$PKG/trmnl-sim --version
+
+      - name: package
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip "$PKG.zip" "$PKG" >/dev/null
+          else
+            tar -czf "$PKG.tar.gz" "$PKG"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: dist/${{ env.PKG }}.*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          prerelease=
+          [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=--prerelease
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --title "trmnl-sim $GITHUB_REF_NAME" --generate-notes $prerelease

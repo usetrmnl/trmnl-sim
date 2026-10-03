@@ -499,6 +499,16 @@ simulator (`--no-default-features`, no GUI), runs the suite and uploads logs, sc
 coverage. The firmware repository calls that workflow to test its PRs. Adjust the
 `usetrmnl/...` names if the repositories live elsewhere.
 
+### Releases
+
+[.github/workflows/release.yml](.github/workflows/release.yml) runs on a pushed `v*` tag
+that matches `Cargo.toml`'s version (`v0.1.0`; a suffix like `v0.2.0-rc.1` makes a
+prerelease). It builds Linux x86_64 (with the GUI, and headless for CI runners), macOS arm64
+(Apple silicon) and Windows x86_64, each archived with the C3, S3 and C5 ROM ELFs in `rom/`
+next to the executable, and publishes them with `SHA256SUMS.txt` as a GitHub release. macOS
+signing and notarization is a stub: it runs once the repository variable `MACOS_SIGNING` is
+`true` and the secrets the workflow lists are set.
+
 ## Architecture
 
 ```
