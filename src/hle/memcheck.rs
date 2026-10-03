@@ -108,10 +108,10 @@ fn heap_free(c: &mut HleCtx) -> Flow {
     if heap == 0 || p == 0 {
         return Flow::Continue;
     }
-    if let Some(mc) = c.mem.memcheck()
-        && let Some(i) = mc.releasing.iter().position(|&r| r == p)
-    {
-        mc.releasing.swap_remove(i);
+    // A block leaving the quarantine: really free it. It stays in `releasing` until the free
+    // returns (release_all), since an interrupt taken before the free's first instruction
+    // runs this hook again when the task resumes.
+    if c.mem.memcheck().is_some_and(|mc| mc.releasing.contains(&p)) {
         return Flow::Continue;
     }
     let site = site(c);
@@ -202,7 +202,18 @@ fn release_all(c: &mut HleCtx, mut blocks: Vec<(u32, u32)>, ret: Option<u32>) ->
     let Some(mc) = c.mem.memcheck() else { return Flow::Return(ret) };
     mc.releasing.push(q);
     let free = mc.bindings.free;
-    Flow::Call { func: free, args: vec![h, q], then: Box::new(move |c, _| release_all(c, blocks, ret)) }
+    Flow::Call {
+        func: free,
+        args: vec![h, q],
+        then: Box::new(move |c, _| {
+            if let Some(mc) = c.mem.memcheck()
+                && let Some(i) = mc.releasing.iter().position(|&r| r == q)
+            {
+                mc.releasing.swap_remove(i);
+            }
+            release_all(c, blocks, ret)
+        }),
+    }
 }
 
 /// static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB, ...): the TCB is filled in.
