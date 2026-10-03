@@ -579,21 +579,23 @@ impl Memcheck {
         Free::Ok { extent }
     }
 
-    /// Hold a freed block back from the allocator. Returns the (heap, ptr) to really free
-    /// now: an older block leaving the quarantine, the block itself if too big, or none.
-    pub fn quarantine(&mut self, heap: u32, ptr: u32, extent: u32) -> Option<(u32, u32)> {
+    /// Hold a freed block back from the allocator. Returns the (heap, ptr)s to really free
+    /// now: the older blocks leaving the quarantine to keep it within its budget (one isn't
+    /// always enough: a block can be bigger than the oldest one), or the block itself if too big.
+    pub fn quarantine(&mut self, heap: u32, ptr: u32, extent: u32) -> Vec<(u32, u32)> {
         let r = region(ptr);
         if extent > QUARANTINE_BYTES[r] / 4 {
-            return Some((heap, ptr));
+            return vec![(heap, ptr)];
         }
         self.quarantine[r].push_back((heap, ptr, extent));
         self.quarantine_bytes[r] += extent;
-        if self.quarantine_bytes[r] <= QUARANTINE_BYTES[r] {
-            return None;
+        let mut leaving = Vec::new();
+        while self.quarantine_bytes[r] > QUARANTINE_BYTES[r] {
+            let Some((h, p, e)) = self.quarantine[r].pop_front() else { break };
+            self.quarantine_bytes[r] -= e;
+            leaving.push((h, p));
         }
-        let (h, p, e) = self.quarantine[r].pop_front()?;
-        self.quarantine_bytes[r] -= e;
-        Some((h, p))
+        leaving
     }
 
     /// Attribute a live block to another allocation site (realloc's rather than the
@@ -1118,12 +1120,28 @@ mod tests {
     fn quarantine_delays_reuse_within_budget() {
         let mut m = mc();
         let cap = QUARANTINE_BYTES[0];
-        assert_eq!(m.quarantine(1, HEAP, cap), Some((1, HEAP)), "too big to hold");
+        assert_eq!(m.quarantine(1, HEAP, cap), vec![(1, HEAP)], "too big to hold");
         let n = cap / 1024;
         for i in 0..n {
-            assert_eq!(m.quarantine(1, HEAP + i * 1024, 1024), None);
+            assert_eq!(m.quarantine(1, HEAP + i * 1024, 1024), vec![]);
         }
-        assert_eq!(m.quarantine(1, HEAP + n * 1024, 1024), Some((1, HEAP)), "the oldest leaves");
+        assert_eq!(m.quarantine(1, HEAP + n * 1024, 1024), vec![(1, HEAP)], "the oldest leaves");
+        assert_eq!(m.quarantine_bytes[0], cap);
+    }
+
+    #[test]
+    fn quarantine_stays_within_budget_for_bigger_blocks() {
+        let mut m = mc();
+        let cap = QUARANTINE_BYTES[0];
+        let n = cap / 64;
+        for i in 0..n {
+            assert_eq!(m.quarantine(1, HEAP + i * 64, 64), vec![]);
+        }
+        // A bigger block than the oldest: as many leave as it takes, not just one.
+        let big = cap / 4;
+        let leaving = m.quarantine(1, HEAP + cap, big);
+        assert_eq!(leaving.len() as u32, big / 64);
+        assert_eq!(leaving[0], (1, HEAP), "the oldest first");
         assert_eq!(m.quarantine_bytes[0], cap);
     }
 

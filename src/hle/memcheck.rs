@@ -118,15 +118,11 @@ fn heap_free(c: &mut HleCtx) -> Flow {
     let now = c.env.now_ns();
     let Some(mc) = c.mem.memcheck() else { return Flow::Continue };
     match mc.on_free(p, &site, c.syms, now) {
-        Free::Ok { extent } => match mc.quarantine(heap, p, extent) {
-            None => Flow::Return(None),
-            Some((h, q)) => {
-                // Free the block leaving the quarantine instead.
-                c.cpu.set_arg(0, h);
-                c.cpu.set_arg(1, q);
-                Flow::Continue
-            }
-        },
+        Free::Ok { extent } => {
+            // Free the blocks leaving the quarantine instead.
+            let leaving = mc.quarantine(heap, p, extent);
+            release_all(c, leaving, None)
+        }
         Free::Bad(v) => {
             // Keep the allocator's state intact: the bad free doesn't happen.
             raise(c, *v);
@@ -195,14 +191,18 @@ fn release(c: &mut HleCtx, heap: u32, p: u32, site: &Site, ret: u32) -> Flow {
     let now = c.env.now_ns();
     let Some(mc) = c.mem.memcheck() else { return Flow::Return(Some(ret)) };
     let Free::Ok { extent } = mc.on_free(p, site, c.syms, now) else { return Flow::Return(Some(ret)) };
-    match mc.quarantine(heap, p, extent) {
-        None => Flow::Return(Some(ret)),
-        Some((h, q)) => {
-            mc.releasing.push(q);
-            let free = mc.bindings.free;
-            Flow::Call { func: free, args: vec![h, q], then: Box::new(move |_, _| Flow::Return(Some(ret))) }
-        }
-    }
+    let leaving = mc.quarantine(heap, p, extent);
+    release_all(c, leaving, Some(ret))
+}
+
+/// Really free `blocks` (leaving the quarantine) one after another through the allocator,
+/// then return `ret`.
+fn release_all(c: &mut HleCtx, mut blocks: Vec<(u32, u32)>, ret: Option<u32>) -> Flow {
+    let Some((h, q)) = blocks.pop() else { return Flow::Return(ret) };
+    let Some(mc) = c.mem.memcheck() else { return Flow::Return(ret) };
+    mc.releasing.push(q);
+    let free = mc.bindings.free;
+    Flow::Call { func: free, args: vec![h, q], then: Box::new(move |c, _| release_all(c, blocks, ret)) }
 }
 
 /// static void prvAddNewTaskToReadyList(TCB_t *pxNewTCB, ...): the TCB is filled in.
