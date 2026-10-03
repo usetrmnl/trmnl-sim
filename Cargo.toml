@@ -3,7 +3,7 @@ members = ["crates/*"]
 
 [package]
 name = "trmnl-sim"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [features]
@@ -35,7 +35,10 @@ num-traits = "0.2"
 sha2 = "0.10"
 tempfile = "3.27"
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
-gimli = { version = "0.34", default-features = false, features = ["read", "std"] }
+gimli = { version = "0.34", default-features = false, features = [
+    "read",
+    "std",
+] }
 cpp_demangle = "0.5"
 
 [profile.dev]
