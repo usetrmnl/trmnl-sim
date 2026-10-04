@@ -264,9 +264,10 @@ struct Window {
 pub struct Memcheck {
     pub mode: Mode,
     pub bindings: Bindings,
-    /// Blocks leaving the quarantine through a free the simulator started: the free hook
-    /// lets these through.
-    pub releasing: Vec<u32>,
+    /// Blocks leaving the quarantine through a free the simulator started, with the task
+    /// running it: the free hook lets these through (for that task only: the block is back in
+    /// the allocator before the free returns, and another task can get it and free it).
+    pub releasing: Vec<(u32, Option<u32>)>,
     windows: Vec<Window>,
     shadow: Vec<u8>,
     /// Allocator code, whose accesses to headers and free blocks are fine: sorted (start, end).
