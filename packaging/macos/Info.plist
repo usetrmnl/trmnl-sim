@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The TRMNL Simulator.app bundle's Info.plist; .github/workflows/release.yml fills in
+     @VERSION@ from Cargo.toml. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>TRMNL Simulator</string>
+	<key>CFBundleDisplayName</key>
+	<string>TRMNL Simulator</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.usetrmnl.trmnl-sim</string>
+	<key>CFBundleExecutable</key>
+	<string>trmnl-sim</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

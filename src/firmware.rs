@@ -462,12 +462,14 @@ pub fn parse_image(flash: &[u8], off: usize) -> Result<(u32, Segments)> {
 
 /// Directories searched for ROM ELFs, in order: the simulator checkout's `rom/` (where
 /// `scripts/fetch-rom-elfs.sh` puts Espressif's esp-rom-elfs release), `rom/` next to the
-/// executable, the user cache (`$XDG_CACHE_HOME` or `~/.cache`, `trmnl-sim/rom-elfs`), then
-/// PlatformIO's `tool-esp-rom-elfs` packages (any version).
+/// executable (a release archive) or in a macOS app bundle's `Contents/Resources`, the user
+/// cache (`$XDG_CACHE_HOME` or `~/.cache`, `trmnl-sim/rom-elfs`), then PlatformIO's
+/// `tool-esp-rom-elfs` packages (any version).
 pub fn rom_search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("rom")];
     if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         dirs.push(exe_dir.join("rom"));
+        dirs.push(exe_dir.join("../Resources/rom"));
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let cache =

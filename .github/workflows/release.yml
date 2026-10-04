@@ -70,13 +70,45 @@ jobs:
           mkdir -p "dist/$PKG"
           cp target/release/trmnl-sim$([ "$RUNNER_OS" = Windows ] && echo .exe) "dist/$PKG/"
 
-      # Stub: runs once the repository variable MACOS_SIGNING is "true" and these secrets exist:
+      # The simulator looks for ROM ELFs in rom/ next to its executable (src/firmware.rs,
+      # rom_search_dirs): ship the three chips' ROMs so the release runs without PlatformIO.
+      # A relative download directory: on Windows $RUNNER_TEMP is D:\a\_temp, which tar reads
+      # as host "D" (host:path).
+      - name: bundle ROM ELFs
+        run: |
+          scripts/fetch-rom-elfs.sh rom-elfs
+          release=$(sed -n 's/^RELEASE=//p' scripts/fetch-rom-elfs.sh)
+          mkdir -p "dist/$PKG/rom"
+          for chip in esp32c3_rev3 esp32s3_rev0 esp32c5_rev100; do
+            cp "rom-elfs/${chip}_rom.elf" "dist/$PKG/rom/"
+          done
+          curl -fsSL -o "dist/$PKG/rom/LICENSE" \
+            "https://raw.githubusercontent.com/espressif/esp-rom-elfs/$release/LICENSE"
+          cp README.md "dist/$PKG/"
+
+      # Gatekeeper only fully trusts an app: a bare executable is rejected as "not an app" when
+      # opened from a download, and can't carry a stapled notarization ticket. The ROM ELFs go
+      # in Contents/Resources (codesign treats everything in Contents/MacOS as code), which the
+      # simulator also searches.
+      - name: app bundle (macOS)
+        if: ${{ startsWith(matrix.os, 'macos') }}
+        run: |
+          app="dist/$PKG/TRMNL Simulator.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          mv "dist/$PKG/trmnl-sim" "$app/Contents/MacOS/"
+          mv "dist/$PKG/rom" "$app/Contents/Resources/"
+          cp packaging/macos/AppIcon.icns "$app/Contents/Resources/"
+          sed "s/@VERSION@/${{ needs.version.outputs.version }}/g" packaging/macos/Info.plist \
+            > "$app/Contents/Info.plist"
+          plutil -lint "$app/Contents/Info.plist"
+          echo "APP=$app" >> "$GITHUB_ENV"
+
+      # Runs when the repository variable MACOS_SIGNING is "true", with these secrets:
       #   MACOS_CERTIFICATE_P12      base64 of the "Developer ID Application" certificate (.p12)
       #   MACOS_CERTIFICATE_PASSWORD its password
       #   MACOS_SIGNING_IDENTITY     e.g. "Developer ID Application: Name (TEAMID)"
       #   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarization (app-specific password)
-      # A bare executable can't have its notarization ticket stapled; Gatekeeper fetches it online.
-      - name: sign and notarize (macOS)
+      - name: sign, notarize and staple (macOS)
         if: ${{ startsWith(matrix.os, 'macos') && vars.MACOS_SIGNING == 'true' }}
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -98,39 +130,40 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
           codesign --force --timestamp --options runtime --sign "$MACOS_SIGNING_IDENTITY" \
-            --keychain "$keychain" "dist/$PKG/trmnl-sim"
-          codesign --verify --strict --verbose=2 "dist/$PKG/trmnl-sim"
+            --keychain "$keychain" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
 
-          ditto -c -k "dist/$PKG/trmnl-sim" "$RUNNER_TEMP/notarize.zip"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+          xcrun stapler staple "$APP"
+          spctl -a -vv "$APP"
 
           security delete-keychain "$keychain"
 
-      # The simulator looks for ROM ELFs in rom/ next to its executable (src/firmware.rs,
-      # rom_search_dirs): ship the three chips' ROMs so the release runs without PlatformIO.
-      # A relative download directory: on Windows $RUNNER_TEMP is D:\a\_temp, which tar reads
-      # as host "D" (host:path).
-      - name: bundle ROM ELFs
-        run: |
-          scripts/fetch-rom-elfs.sh rom-elfs
-          release=$(sed -n 's/^RELEASE=//p' scripts/fetch-rom-elfs.sh)
-          mkdir -p "dist/$PKG/rom"
-          for chip in esp32c3_rev3 esp32s3_rev0 esp32c5_rev100; do
-            cp "rom-elfs/${chip}_rom.elf" "dist/$PKG/rom/"
-          done
-          curl -fsSL -o "dist/$PKG/rom/LICENSE" \
-            "https://raw.githubusercontent.com/espressif/esp-rom-elfs/$release/LICENSE"
-          cp README.md "dist/$PKG/"
+      # Without a certificate: an ad-hoc signature seals the bundle (the linker's covers only
+      # the executable), so it runs after "Open Anyway".
+      - name: ad-hoc sign (macOS)
+        if: ${{ startsWith(matrix.os, 'macos') && vars.MACOS_SIGNING != 'true' }}
+        run: codesign --force --sign - "$APP"
 
       - name: smoke test
-        run: dist/$PKG/trmnl-sim --version
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            "$APP/Contents/MacOS/trmnl-sim" --version
+          else
+            "dist/$PKG/trmnl-sim" --version
+          fi
 
+      # ditto keeps the app's signature and stapled ticket intact (extended attributes,
+      # symlinks); Archive Utility unpacks it on a double click.
       - name: package
         run: |
           cd dist
           if [ "$RUNNER_OS" = Windows ]; then
             7z a -tzip "$PKG.zip" "$PKG" >/dev/null
+          elif [ "$RUNNER_OS" = macOS ]; then
+            ditto -c -k --keepParent "$PKG" "$PKG.zip"
           else
             tar -czf "$PKG.tar.gz" "$PKG"
           fi

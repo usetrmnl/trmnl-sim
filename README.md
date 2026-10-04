@@ -503,11 +503,15 @@ coverage. The firmware repository calls that workflow to test its PRs. Adjust th
 
 [.github/workflows/release.yml](.github/workflows/release.yml) runs on a pushed `v*` tag
 that matches `Cargo.toml`'s version (`v0.1.0`; a suffix like `v0.2.0-rc.1` makes a
-prerelease). It builds Linux x86_64 (with the GUI, and headless for CI runners), macOS arm64
-(Apple silicon) and Windows x86_64, each archived with the C3, S3 and C5 ROM ELFs in `rom/`
-next to the executable, and publishes them with `SHA256SUMS.txt` as a GitHub release. macOS
-signing and notarization is a stub: it runs once the repository variable `MACOS_SIGNING` is
-`true` and the secrets the workflow lists are set.
+prerelease). It builds Linux x86_64 (with the GUI, and headless for CI runners) and Windows
+x86_64, each archived with the C3, S3 and C5 ROM ELFs in `rom/` next to the executable, and
+macOS arm64 (Apple silicon) as `TRMNL Simulator.app` (the ROM ELFs in `Contents/Resources/rom`;
+from a terminal, run `TRMNL Simulator.app/Contents/MacOS/trmnl-sim`), and publishes them with
+`SHA256SUMS.txt` as a GitHub release. With the repository variable `MACOS_SIGNING` set to
+`true` and the secrets the workflow lists, the app is signed with a Developer ID, notarized
+and stapled; without them it is signed ad hoc. The app's icon,
+[packaging/macos/AppIcon.icns](packaging/macos/AppIcon.icns), is rendered from the window
+icon's SVG by `scripts/make-icns.sh`.
 
 ## Architecture
 
