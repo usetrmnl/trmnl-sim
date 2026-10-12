@@ -130,7 +130,8 @@ const CROP: [Param; 4] = [
     query("w", Ty::Integer, "crop: width (all four of x, y, w, h or none)"),
     query("h", Ty::Integer, "crop: height"),
 ];
-const STATES: &[&str] = &["running", "paused", "idle", "light_sleep", "deep_sleep", "halted"];
+/// The run states `/status` reports and `/wait` accepts.
+pub const STATES: &[&str] = &["running", "paused", "debugger", "idle", "light_sleep", "deep_sleep", "halted"];
 const CONNECTION: Param = body("connection", Ty::Integer, "token from bluetooth_connect").required();
 const PREF_KEY: [Param; 3] = [
     body("partition", Ty::String, "NVS partition label, e.g. \"nvs\"").required(),
@@ -312,6 +313,22 @@ mod tests {
             assert!(e.raw_body.is_none() || e.params.iter().all(|p| matches!(p.loc, Loc::Path | Loc::Query)));
             assert_eq!(find(&e.method, &e.fill_path("x")).map(|f| f.tool), Some(e.tool));
         }
+    }
+
+    #[test]
+    fn wait_offers_every_reported_state() {
+        use sim_api::RunState;
+        let states = [
+            RunState::Running,
+            RunState::Paused,
+            RunState::Debugger,
+            RunState::Idle,
+            RunState::LightSleep { wake_at_ns: None },
+            RunState::DeepSleep { wake_at_ns: None },
+            RunState::Halted(String::new()),
+        ];
+        let names: Vec<&str> = states.iter().map(crate::state_name).collect();
+        assert_eq!(names, STATES);
     }
 
     /// Every row reaches its handler (no "no route" answer), so every MCP tool works.

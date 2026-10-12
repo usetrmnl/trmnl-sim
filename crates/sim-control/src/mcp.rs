@@ -326,7 +326,7 @@ mod tests {
         let tools = v["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), ENDPOINTS.len());
         let wait = tools.iter().find(|t| t["name"] == "wait").unwrap();
-        assert_eq!(wait["inputSchema"]["properties"]["state"]["enum"][4], "deep_sleep");
+        assert_eq!(wait["inputSchema"]["properties"]["state"]["enum"], json!(crate::endpoints::STATES));
         let (_, v) = rpc(&h, None, json!({"jsonrpc": "2.0", "id": 9, "method": "resources/list"}));
         assert_eq!(v["error"]["code"], -32601);
     }

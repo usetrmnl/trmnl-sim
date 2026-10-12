@@ -574,7 +574,7 @@ impl WaitSpec {
         };
         let state = v["state"].as_str().map(str::to_string);
         if let Some(s) = &state
-            && !["running", "paused", "debugger", "idle", "light_sleep", "deep_sleep", "halted"].contains(&s.as_str())
+            && !endpoints::STATES.contains(&s.as_str())
         {
             return Err(format!("unknown state {s}"));
         }
