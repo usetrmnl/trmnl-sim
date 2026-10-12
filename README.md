@@ -200,12 +200,27 @@ waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 | `--scale Z` | Initial display zoom (0 = fit) |
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
-| `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`) |
+| `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`, `enterprise`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start (repeatable, merged) |
 
 The default networks are **TRMNL-Sim** (any password) and **Neighbors WiFi** (`hunter2hunter2`);
 **TRMNL-Sim-5G** (channel 36) is seen only by 5 GHz radios (the C5 and the X's modem, which
 then does all HTTP). Networks taking any password reject `fail`, to test a failed join.
+
+**WPA2-Enterprise.** `"enterprise": {"username": "alice", "password": "s3cret"}` makes a
+network 802.1X: it scans as `WIFI_AUTH_WPA2_ENTERPRISE` (ESP-AT `ecn` 5 on the X's modem),
+and its server accepts only those EAP credentials (`null` or left out: anything but `fail`;
+`"enterprise": true` accepts any). The firmware's `esp_wifi_sta_wpa2_ent_*` (IDF 4.4) or
+`esp_eap_client_*` (IDF 5) configuration is checked at the join: the inner username (the
+identity if none is set) and password must match, an identity must be set, and the station
+must have 802.1X enabled. Rejected credentials disconnect with `802_1X_AUTH_FAILED` (23); an
+802.1X station and a PSK or open network don't match (`NO_AP_FOUND`, 201), either way round.
+The X's modem can't join one (`+CWJAP:4`); the firmware uses the S3's own radio for those.
+
+```sh
+curl -X POST 127.0.0.1:7878/wifi -d '{"networks": [{"ssid": "Corp",
+  "enterprise": {"username": "alice", "password": "s3cret"}}, {"ssid": "TRMNL-Sim"}]}'
+```
 
 ### Bluetooth
 
