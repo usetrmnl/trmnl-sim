@@ -286,7 +286,11 @@ impl Board for TrmnlX {
                     password: n.password.clone(),
                     rssi: n.rssi,
                     channel: n.channel,
-                    ecn: if n.open { 0 } else { 3 },
+                    ecn: match (n.open, &n.enterprise) {
+                        (_, Some(_)) => 5,
+                        (true, None) => 0,
+                        (false, None) => 3,
+                    },
                     bssid: [0x02, 0x5e, 0x51, 0x00, if five { 0x05 } else { 0x00 }, *i],
                 }
             })

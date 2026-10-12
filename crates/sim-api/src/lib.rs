@@ -142,15 +142,43 @@ pub struct WifiNetwork {
     pub password: Option<String>,
     pub rssi: i8,
     pub channel: u8,
-    /// No encryption (otherwise WPA2-PSK).
+    /// No encryption (otherwise WPA2-PSK, or WPA2-Enterprise with `enterprise`).
     pub open: bool,
     /// Whether joining it actually gets you online.
     pub internet: bool,
+    /// WPA2-Enterprise (802.1X/EAP) instead of a pre-shared key: the credentials its
+    /// RADIUS server accepts. `password` is then unused.
+    pub enterprise: Option<Enterprise>,
 }
 
 impl WifiNetwork {
     pub fn new(ssid: &str) -> Self {
-        WifiNetwork { ssid: ssid.into(), password: None, rssi: -54, channel: 6, open: false, internet: true }
+        WifiNetwork {
+            ssid: ssid.into(),
+            password: None,
+            rssi: -54,
+            channel: 6,
+            open: false,
+            internet: true,
+            enterprise: None,
+        }
+    }
+}
+
+/// The EAP credentials a WPA2-Enterprise network accepts (the inner, phase 2 ones a
+/// PEAP/TTLS server checks; the outer identity may be anonymous).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Enterprise {
+    /// None: any username is accepted, except [`FAIL_PASSWORD`].
+    pub username: Option<String>,
+    /// None: any password is accepted, except [`FAIL_PASSWORD`].
+    pub password: Option<String>,
+}
+
+impl Enterprise {
+    /// Whether the server accepts this username and password.
+    pub fn accepts(&self, username: &str, password: &str) -> bool {
+        password_accepted(self.username.as_deref(), username) && password_accepted(self.password.as_deref(), password)
     }
 }
 
@@ -827,5 +855,17 @@ mod tests {
         assert!(!password_accepted(None, FAIL_PASSWORD));
         assert!(password_accepted(Some("fail"), "fail"));
         assert!(!password_accepted(Some("secret"), "wrong"));
+    }
+
+    #[test]
+    fn enterprise_credentials() {
+        let any = Enterprise::default();
+        assert!(any.accepts("alice", "pw"));
+        assert!(!any.accepts("alice", FAIL_PASSWORD));
+        assert!(!any.accepts(FAIL_PASSWORD, "pw"));
+        let alice = Enterprise { username: Some("alice".into()), password: Some("s3cret".into()) };
+        assert!(alice.accepts("alice", "s3cret"));
+        assert!(!alice.accepts("bob", "s3cret"));
+        assert!(!alice.accepts("alice", "wrong"));
     }
 }
