@@ -270,6 +270,19 @@ impl MemBus for C3Bus {
     }
 
     #[inline(always)]
+    fn fetch32(&mut self, addr: u32) -> BusResult<u32> {
+        // One lookup unless the four bytes cross a 64 KB MMU page (or a region's end).
+        if addr & 0xffff <= 0xfffc
+            && let Some((m, o)) = self.mem(addr, 4)
+        {
+            return Ok(u32::from_le_bytes([m[o], m[o + 1], m[o + 2], m[o + 3]]));
+        }
+        let lo = self.fetch16(addr)? as u32;
+        let hi = self.fetch16(addr.wrapping_add(2))? as u32;
+        Ok(lo | (hi << 16))
+    }
+
+    #[inline(always)]
     fn read8(&mut self, addr: u32) -> BusResult<u8> {
         self.check(addr, 1, false);
         if let Some((m, o)) = self.mem(addr, 1) {

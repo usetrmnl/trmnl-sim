@@ -216,22 +216,23 @@ impl Rv32 {
     #[inline(always)]
     pub fn step<B: MemBus>(&mut self, bus: &mut B) -> Step {
         let pc = self.pc;
-        let lo = match bus.fetch16(pc) {
-            Ok(v) => v as u32,
-            Err(_) => return Step::Trap(Trap::new(cause::INSN_ACCESS, pc)),
+        // A 16-bit instruction is valid next to unmapped memory, so a failed 4-byte fetch
+        // falls back to fetching the halves.
+        let insn = match bus.fetch32(pc) {
+            Ok(v) => v,
+            Err(_) => match bus.fetch16(pc) {
+                Ok(v) if v & 3 != 3 => v as u32,
+                Ok(_) => return Step::Trap(Trap::new(cause::INSN_ACCESS, pc)),
+                Err(_) => return Step::Trap(Trap::new(cause::INSN_ACCESS, pc)),
+            },
         };
         bus.tick();
-        if lo & 3 != 3 {
-            return match self.exec_c(bus, lo) {
+        if insn & 3 != 3 {
+            return match self.exec_c(bus, insn & 0xffff) {
                 Ok(s) => s,
                 Err(t) => Step::Trap(t),
             };
         }
-        let hi = match bus.fetch16(pc.wrapping_add(2)) {
-            Ok(v) => v as u32,
-            Err(_) => return Step::Trap(Trap::new(cause::INSN_ACCESS, pc)),
-        };
-        let insn = lo | (hi << 16);
         match self.exec32(bus, insn) {
             Ok(s) => s,
             Err(t) => Step::Trap(t),
@@ -804,6 +805,49 @@ mod tests {
         // exceptions enter at mtvec[31:6]
         c.take_trap(cause::ILLEGAL, 0, c.pc);
         assert_eq!(c.pc, 0x4080_0000);
+    }
+
+    #[test]
+    fn a_16_bit_instruction_runs_at_the_end_of_memory_and_a_32_bit_one_traps() {
+        // Two bytes of memory at 0x1000, holding `half`.
+        struct Edge(u16);
+        impl MemBus for Edge {
+            fn fetch16(&mut self, a: u32) -> crate::arch::BusResult<u16> {
+                if a == 0x1000 { Ok(self.0) } else { Err(crate::arch::BusFault) }
+            }
+            fn read8(&mut self, _: u32) -> crate::arch::BusResult<u8> {
+                Ok(0)
+            }
+            fn read16(&mut self, _: u32) -> crate::arch::BusResult<u16> {
+                Ok(0)
+            }
+            fn read32(&mut self, _: u32) -> crate::arch::BusResult<u32> {
+                Ok(0)
+            }
+            fn write8(&mut self, _: u32, _: u8) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn write16(&mut self, _: u32, _: u16) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn write32(&mut self, _: u32, _: u32) -> crate::arch::BusResult<()> {
+                Ok(())
+            }
+            fn cycles(&self) -> u64 {
+                0
+            }
+            fn tick(&mut self) {}
+        }
+        let mut c = Rv32::new();
+        c.pc = 0x1000;
+        assert!(matches!(c.step(&mut Edge(0x0001)), Step::Ok)); // c.nop
+        assert_eq!(c.pc, 0x1002);
+        c.pc = 0x1000;
+        let trap = match c.step(&mut Edge(0x0013)) {
+            Step::Trap(t) => t, // low half of addi
+            _ => panic!("a 32-bit instruction running past the end of memory must trap"),
+        };
+        assert_eq!((trap.cause, trap.tval), (cause::INSN_ACCESS, 0x1000));
     }
 
     #[test]
