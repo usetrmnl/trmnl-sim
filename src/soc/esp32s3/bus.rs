@@ -249,6 +249,19 @@ impl MemBus for S3Bus {
     }
 
     #[inline(always)]
+    fn fetch32(&mut self, addr: u32) -> BusResult<u32> {
+        // One lookup unless the four bytes cross a 64 KB MMU page (or a region's end).
+        if addr & 0xffff <= 0xfffc
+            && let Some((m, o)) = self.mem(addr, 4)
+        {
+            return Ok(u32::from_le_bytes([m[o], m[o + 1], m[o + 2], m[o + 3]]));
+        }
+        let lo = self.fetch16(addr)? as u32;
+        let hi = self.fetch16(addr.wrapping_add(2))? as u32;
+        Ok(lo | (hi << 16))
+    }
+
+    #[inline(always)]
     fn read8(&mut self, addr: u32) -> BusResult<u8> {
         self.check(addr, 1, false);
         if let Some((m, o)) = self.mem(addr, 1) {
@@ -346,5 +359,22 @@ impl MemBus for S3Bus {
         if self.core == 0 {
             self.clock.cycles += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_instruction_across_two_flash_pages_reads_both_pages() {
+        let mut flash = vec![0u8; 0x4_0000];
+        flash[0x2_FFFE..0x3_0000].copy_from_slice(&[0x11, 0x22]); // end of physical page 2
+        flash[0x1_0000..0x1_0002].copy_from_slice(&[0x33, 0x44]); // start of physical page 1
+        let mut bus =
+            S3Bus::new(vec![0; ROM_SIZE].into(), SpiFlash::new(flash, None), Box::new(super::super::NullBoard));
+        bus.mmu[0] = 2; // IBUS 0x4200_0000
+        bus.mmu[1] = 1; // IBUS 0x4201_0000
+        assert_eq!(bus.fetch32(0x4200_FFFE).ok(), Some(0x4433_2211));
     }
 }
