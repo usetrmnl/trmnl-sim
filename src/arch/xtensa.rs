@@ -158,7 +158,7 @@ pub mod ps {
 pub const SYNTH_CALL_PC: u32 = 0x7F0F_FF00;
 pub const SYNTH_RET_PC: u32 = 0x7F0F_FF10;
 const SYNTH_COOKIE: u32 = 0x5EC0_CA11;
-const DCACHE_SIZE: usize = 1 << 10;
+const DCACHE_SIZE: usize = 1 << 13;
 
 // ------------------------------------------------------------------------------------------------
 // Step results
