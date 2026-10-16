@@ -35,8 +35,7 @@ jobs:
   # The firmware's integration tests (its spec/ suite, one job per env) on this commit of the
   # simulator.
   integration:
-    needs: unit
-    uses: usetrmnl/trmnl-firmware/.github/workflows/integration.yml@integration-sim-ref
+    uses: usetrmnl/trmnl-firmware/.github/workflows/integration.yml@main
     with:
       sim_repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       sim_ref: ${{ github.event.pull_request.head.sha || github.sha }}
