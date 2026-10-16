@@ -5,13 +5,6 @@ on:
     branches: ["main"]
   pull_request:
   workflow_dispatch:
-    inputs:
-      firmware_repo:
-        description: Firmware repository to run the integration tests on
-        default: usetrmnl/trmnl-firmware
-      firmware_ref:
-        description: Branch, tag or SHA of the firmware
-        default: main
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,13 +32,11 @@ jobs:
       - name: unit tests
         run: cargo test --workspace --no-default-features
 
-  # The integration tests (trmnl-spec) on this commit of the simulator: its CI workflow builds
-  # the firmware and the headless simulator and runs the suite.
+  # The firmware's integration tests (its spec/ suite, one job per env) on this commit of the
+  # simulator.
   integration:
     needs: unit
-    uses: usetrmnl/trmnl-spec/.github/workflows/ci.yml@main
+    uses: usetrmnl/trmnl-firmware/.github/workflows/integration.yml@integration-sim-ref
     with:
       sim_repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       sim_ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      firmware_repo: ${{ inputs.firmware_repo || 'usetrmnl/trmnl-firmware' }}
-      firmware_ref: ${{ inputs.firmware_ref || 'main' }}
