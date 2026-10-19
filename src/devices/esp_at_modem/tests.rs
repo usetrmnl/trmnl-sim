@@ -473,6 +473,12 @@ fn cwjap_failures() {
     assert!(r.contains("+CWJAP:2\r\n\r\nFAIL\r\n") && !r.contains("WIFI GOT IP"), "{r}");
     assert_eq!(h.m.connected_ssid(), None);
 
+    // WPA2-Enterprise only: AT+CWJAP's PSK association fails.
+    h.flush();
+    h.cmd("AT+CWJAP=\"Corp\",\"anything\"");
+    let r = h.wait_for("FAIL", 20000).unwrap();
+    assert!(r.contains("+CWJAP:4") && !r.contains("WIFI GOT IP"), "{r}");
+
     // Unknown SSID.
     assert!(!h.connect("Nope", "x", ""));
     // Busy while joining.

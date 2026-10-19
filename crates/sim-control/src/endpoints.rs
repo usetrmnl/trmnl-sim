@@ -165,7 +165,7 @@ pub static ENDPOINTS: &[Endpoint] = &[
     ep(Method::Post, "/wifi", "wifi", "Change the WiFi environment: networks in or out of range, the access points, whether a captive portal client is attached. Give at least one.")
         .params(&[
             body("available", Ty::Boolean, "networks in range"),
-            body("networks", Ty::Array, "access points replacing the current ones: [{\"ssid\", \"password\" (null = any but \"fail\"), \"rssi\", \"channel\" (1-14 or 32-177), \"open\", \"internet\"}]; only ssid is required"),
+            body("networks", Ty::Array, "access points replacing the current ones: [{\"ssid\", \"password\" (null = any but \"fail\"), \"rssi\", \"channel\" (1-14 or 32-177), \"open\", \"internet\", \"enterprise\": true or {\"username\", \"password\"} (WPA2-Enterprise; null = any but \"fail\")}]; only ssid is required"),
             body("portal_client", Ty::Boolean, "false lets an unattended captive portal run ahead in turbo"),
         ]),
     ep(Method::Post, "/battery", "battery", "Set the battery voltage.")

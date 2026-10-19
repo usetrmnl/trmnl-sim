@@ -40,6 +40,9 @@ const EV_AP_STADISCONNECTED: u32 = 15;
 // wifi_err_reason_t
 const REASON_ASSOC_LEAVE: u8 = 8;
 const REASON_HANDSHAKE_TIMEOUT: u8 = 15;
+/// The 802.11 reason an AP deauthenticates with when its RADIUS server rejects the EAP
+/// exchange (wifi_err_reason_t WIFI_REASON_802_1X_AUTH_FAILED, the same in IDF 4.4 and 5).
+const REASON_802_1X_AUTH_FAILED: u8 = 23;
 const REASON_BEACON_TIMEOUT: u8 = 200;
 const REASON_NO_AP_FOUND: u8 = 201;
 
@@ -79,10 +82,28 @@ pub struct SimAp {
     pub password: Option<String>,
     pub rssi: i8,
     pub channel: u8,
-    /// wifi_auth_mode_t (0 open, 3 WPA2-PSK)
+    /// wifi_auth_mode_t (0 open, 3 WPA2-PSK, 5 WPA2-Enterprise)
     pub authmode: u32,
     /// Whether associating actually gets you online.
     pub internet: bool,
+    /// The EAP credentials a WPA2-Enterprise AP's server accepts (`password` is unused).
+    pub enterprise: Option<sim_api::Enterprise>,
+}
+
+/// wifi_auth_mode_t WIFI_AUTH_WPA2_ENTERPRISE (WIFI_AUTH_ENTERPRISE in IDF 5; same value).
+const AUTH_WPA2_ENTERPRISE: u32 = 5;
+
+/// The station's WPA2-Enterprise configuration, set through `esp_wifi_sta_wpa2_ent_*`
+/// (IDF 4.4) or `esp_eap_client_*` / `esp_wifi_sta_enterprise_*` (IDF 5). In the real
+/// driver it lives in the supplicant, apart from `wifi_config_t`, until cleared.
+#[derive(Clone, Debug, Default)]
+struct Eap {
+    enabled: bool,
+    /// Outer (phase 1) identity; may be anonymous.
+    identity: Option<String>,
+    /// Inner (phase 2) username; the supplicant falls back to the identity.
+    username: Option<String>,
+    password: Option<String>,
 }
 
 struct PendingEvent {
@@ -126,6 +147,7 @@ pub struct WifiState {
     /// unattended portal can run ahead of wall-clock time in turbo mode.
     portal_client_away: bool,
     scan_results: Vec<SimAp>,
+    eap: Eap,
     pub stats: WifiStats,
 }
 
@@ -140,7 +162,15 @@ impl WifiState {
         WifiState {
             available: true,
             networks: vec![
-                SimAp { ssid: "TRMNL-Sim".into(), password: None, rssi: -54, channel: 6, authmode: 3, internet: true },
+                SimAp {
+                    ssid: "TRMNL-Sim".into(),
+                    password: None,
+                    rssi: -54,
+                    channel: 6,
+                    authmode: 3,
+                    internet: true,
+                    enterprise: None,
+                },
                 SimAp {
                     ssid: "Neighbors WiFi".into(),
                     password: Some("hunter2hunter2".into()),
@@ -148,6 +178,7 @@ impl WifiState {
                     channel: 11,
                     authmode: 3,
                     internet: true,
+                    enterprise: None,
                 },
             ],
             dual_band: false,
@@ -173,6 +204,7 @@ impl WifiState {
             ap_client_associated: false,
             portal_client_away: false,
             scan_results: Vec::new(),
+            eap: Eap::default(),
             stats: WifiStats::default(),
         }
     }
@@ -204,6 +236,7 @@ impl WifiState {
                 channel: 36,
                 authmode: 3,
                 internet: true,
+                enterprise: None,
             });
         }
     }
@@ -344,6 +377,24 @@ impl WifiState {
             if self.available { self.networks.iter().position(|a| a.ssid == ssid && self.visible(a)) } else { None };
         self.connecting = true;
         match found {
+            Some(i) if self.networks[i].enterprise.is_some() => {
+                let ap = self.networks[i].clone();
+                match self.eap_outcome(&ap) {
+                    // EAP (PEAP/TTLS through the AP to its RADIUS server) takes a few round trips
+                    // more than a PSK handshake.
+                    Ok(()) => self.post(now + 900 * MS, EV_STA_CONNECTED, self.connected_event(&ap, i)),
+                    Err(reason) => {
+                        let d = self.disconnected_event(Some(&ap), reason);
+                        self.post(now + 2500 * MS, EV_STA_DISCONNECTED, d);
+                    }
+                }
+            }
+            Some(_) if self.eap.enabled => {
+                // An 802.1X station finds no AP offering its key management (PSK or open
+                // only): the firmware disables WPA2-Enterprise before every other join.
+                let d = self.disconnected_event(None, REASON_NO_AP_FOUND);
+                self.post(now + 2500 * MS, EV_STA_DISCONNECTED, d);
+            }
             Some(i) => {
                 let ap = self.networks[i].clone();
                 if !sim_api::password_accepted(ap.password.as_deref(), &pw) {
@@ -358,6 +409,23 @@ impl WifiState {
                 self.post(now + 2500 * MS, EV_STA_DISCONNECTED, d);
             }
         }
+    }
+
+    /// Whether joining WPA2-Enterprise `ap` succeeds with the station's EAP configuration;
+    /// otherwise the disconnect reason.
+    fn eap_outcome(&self, ap: &SimAp) -> Result<(), u8> {
+        let Some(server) = &ap.enterprise else { return Ok(()) };
+        if !self.eap.enabled {
+            // A WPA2-PSK station finds no AP offering its key management (802.1X only).
+            return Err(REASON_NO_AP_FOUND);
+        }
+        let Some(identity) = self.eap.identity.as_deref() else {
+            // No EAP-Response/Identity: the authenticator gives up.
+            return Err(REASON_802_1X_AUTH_FAILED);
+        };
+        let username = self.eap.username.as_deref().unwrap_or(identity);
+        let password = self.eap.password.as_deref().unwrap_or("");
+        if server.accepts(username, password) { Ok(()) } else { Err(REASON_802_1X_AUTH_FAILED) }
     }
 
     /// Called when the front-end toggles the access point.
@@ -382,12 +450,22 @@ impl WifiState {
                 password: n.password.clone(),
                 rssi: n.rssi,
                 channel: n.channel,
-                authmode: if n.open { 0 } else { 3 },
+                authmode: match (n.open, &n.enterprise) {
+                    (_, Some(_)) => AUTH_WPA2_ENTERPRISE,
+                    (true, None) => 0,
+                    (false, None) => 3,
+                },
                 internet: n.internet,
+                enterprise: n.enterprise.clone(),
             })
             .collect();
         if let Some(ap) = current {
-            let same = |a: &SimAp| a.ssid == ap.ssid && a.password == ap.password && a.authmode == ap.authmode;
+            let same = |a: &SimAp| {
+                a.ssid == ap.ssid
+                    && a.password == ap.password
+                    && a.authmode == ap.authmode
+                    && a.enterprise == ap.enterprise
+            };
             self.connected = self.networks.iter().position(same);
             if self.connected.is_none() {
                 let d = self.disconnected_event(Some(&ap), REASON_BEACON_TIMEOUT);
@@ -522,6 +600,24 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols) {
         // buffer only needs a reference when the driver queues the frame; we copy it now.
         ("esp_wifi_internal_tx_by_ref", internal_tx),
         ("esp_wifi_internal_free_rx_buffer", free_rx_buffer),
+        // WPA2-Enterprise: IDF 4.4's API, and IDF 5's (whose esp_wifi_sta_wpa2_ent_* are
+        // wrappers around esp_eap_client_*, so a call reaches only one hook).
+        ("esp_wifi_sta_wpa2_ent_enable", eap_enable),
+        ("esp_wifi_sta_enterprise_enable", eap_enable),
+        ("esp_wifi_sta_wpa2_ent_disable", eap_disable),
+        ("esp_wifi_sta_enterprise_disable", eap_disable),
+        ("esp_wifi_sta_wpa2_ent_set_identity", eap_set_identity),
+        ("esp_eap_client_set_identity", eap_set_identity),
+        ("esp_wifi_sta_wpa2_ent_clear_identity", eap_clear_identity),
+        ("esp_eap_client_clear_identity", eap_clear_identity),
+        ("esp_wifi_sta_wpa2_ent_set_username", eap_set_username),
+        ("esp_eap_client_set_username", eap_set_username),
+        ("esp_wifi_sta_wpa2_ent_clear_username", eap_clear_username),
+        ("esp_eap_client_clear_username", eap_clear_username),
+        ("esp_wifi_sta_wpa2_ent_set_password", eap_set_password),
+        ("esp_eap_client_set_password", eap_set_password),
+        ("esp_wifi_sta_wpa2_ent_clear_password", eap_clear_password),
+        ("esp_eap_client_clear_password", eap_clear_password),
     ];
     for (name, f) in real {
         hooks.install(syms, name, *f);
@@ -774,7 +870,12 @@ fn connect(c: &mut HleCtx) -> Flow {
     }
     if w.connected.is_none() && !w.connecting {
         let ssid = w.sta_ssid();
-        c.env.console(&format!("wifi: connecting to \"{ssid}\""));
+        let eap = match (&w.eap.enabled, w.eap.username.as_ref().or(w.eap.identity.as_ref())) {
+            (true, Some(user)) => format!(" (WPA2-Enterprise as \"{user}\")"),
+            (true, None) => " (WPA2-Enterprise, no identity)".into(),
+            (false, _) => String::new(),
+        };
+        c.env.console(&format!("wifi: connecting to \"{ssid}\"{eap}"));
         w.start_connect(now);
     }
     Flow::Return(Some(ESP_OK))
@@ -903,6 +1004,66 @@ fn free_rx_buffer(c: &mut HleCtx) -> Flow {
     Flow::Call { func: sym(c, "free"), args: vec![eb], then: Box::new(|_, _| Flow::Return(None)) }
 }
 
+// ---- WPA2-Enterprise ----------------------------------------------------------------------------
+
+fn eap_enable(c: &mut HleCtx) -> Flow {
+    c.state.wifi.eap.enabled = true;
+    Flow::Return(Some(ESP_OK))
+}
+
+fn eap_disable(c: &mut HleCtx) -> Flow {
+    c.state.wifi.eap.enabled = false;
+    Flow::Return(Some(ESP_OK))
+}
+
+/// `(const unsigned char *value, int len)`; like the supplicant, 1..=128 bytes (the IDF 5
+/// password setter takes up to 128 too).
+fn eap_value(c: &mut HleCtx) -> Result<String, u32> {
+    let (p, len) = (c.cpu.arg(0), c.cpu.arg(1) as i32);
+    if p == 0 || !(1..=128).contains(&len) {
+        return Err(ESP_ERR_INVALID_ARG);
+    }
+    let bytes = c.mem.read_bytes(p, len as usize).ok_or(ESP_ERR_INVALID_ARG)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn eap_set(c: &mut HleCtx, field: fn(&mut Eap) -> &mut Option<String>) -> Flow {
+    match eap_value(c) {
+        Ok(v) => {
+            *field(&mut c.state.wifi.eap) = Some(v);
+            Flow::Return(Some(ESP_OK))
+        }
+        Err(e) => Flow::Return(Some(e)),
+    }
+}
+
+fn eap_set_identity(c: &mut HleCtx) -> Flow {
+    eap_set(c, |e| &mut e.identity)
+}
+
+fn eap_set_username(c: &mut HleCtx) -> Flow {
+    eap_set(c, |e| &mut e.username)
+}
+
+fn eap_set_password(c: &mut HleCtx) -> Flow {
+    eap_set(c, |e| &mut e.password)
+}
+
+fn eap_clear_identity(c: &mut HleCtx) -> Flow {
+    c.state.wifi.eap.identity = None;
+    Flow::Return(None)
+}
+
+fn eap_clear_username(c: &mut HleCtx) -> Flow {
+    c.state.wifi.eap.username = None;
+    Flow::Return(None)
+}
+
+fn eap_clear_password(c: &mut HleCtx) -> Flow {
+    c.state.wifi.eap.password = None;
+    Flow::Return(None)
+}
+
 // ---- the driver task -------------------------------------------------------------------------------
 
 fn back_to_loop(c: &mut HleCtx, _ret: u32) -> Flow {
@@ -987,5 +1148,85 @@ fn deliver_frame(c: &mut HleCtx, cb: u32, frame: Vec<u8>) -> Flow {
             c.state.wifi.stats.rx_frames += 1;
             Flow::Call { func: cb, args: vec![buf, len, buf], then: Box::new(back_to_loop) }
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn corp(enterprise: sim_api::Enterprise) -> WifiState {
+        let mut w = WifiState::new([2, 0, 0, 0, 0, 1]);
+        let mut n = sim_api::WifiNetwork::new("Corp");
+        n.enterprise = Some(enterprise);
+        w.set_networks(&[n, sim_api::WifiNetwork::new("Home")], 0);
+        w
+    }
+
+    fn eap(identity: Option<&str>, username: Option<&str>, password: Option<&str>) -> Eap {
+        Eap {
+            enabled: true,
+            identity: identity.map(Into::into),
+            username: username.map(Into::into),
+            password: password.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn enterprise_aps_scan_as_wpa2_enterprise() {
+        let w = corp(sim_api::Enterprise::default());
+        assert_eq!(w.networks[0].authmode, AUTH_WPA2_ENTERPRISE);
+        assert_eq!(w.ap_record(&w.networks[0], 0)[48], AUTH_WPA2_ENTERPRISE as u8);
+        assert_eq!(w.networks[1].authmode, 3);
+    }
+
+    #[test]
+    fn eap_credentials_decide_the_join() {
+        let alice = sim_api::Enterprise { username: Some("alice".into()), password: Some("s3cret".into()) };
+        let mut w = corp(alice);
+        let ap = w.networks[0].clone();
+        // Not configured for EAP: a PSK station.
+        assert_eq!(w.eap_outcome(&ap), Err(REASON_NO_AP_FOUND));
+        w.eap = eap(Some("alice"), None, Some("s3cret"));
+        assert_eq!(w.eap_outcome(&ap), Ok(()), "username falls back to the identity");
+        w.eap = eap(Some("anonymous"), Some("alice"), Some("s3cret"));
+        assert_eq!(w.eap_outcome(&ap), Ok(()));
+        w.eap = eap(Some("alice"), None, Some("wrong"));
+        assert_eq!(w.eap_outcome(&ap), Err(REASON_802_1X_AUTH_FAILED));
+        w.eap = eap(Some("bob"), None, Some("s3cret"));
+        assert_eq!(w.eap_outcome(&ap), Err(REASON_802_1X_AUTH_FAILED));
+        w.eap = eap(None, Some("alice"), Some("s3cret"));
+        assert_eq!(w.eap_outcome(&ap), Err(REASON_802_1X_AUTH_FAILED), "no identity");
+
+        let any = corp(sim_api::Enterprise::default()).networks[0].clone();
+        w.eap = eap(Some("anyone"), None, Some("x"));
+        assert_eq!(w.eap_outcome(&any), Ok(()));
+        w.eap = eap(Some("anyone"), None, Some(sim_api::FAIL_PASSWORD));
+        assert_eq!(w.eap_outcome(&any), Err(REASON_802_1X_AUTH_FAILED));
+    }
+
+    #[test]
+    fn join_posts_the_outcome() {
+        let mut w = corp(sim_api::Enterprise::default());
+        w.sta_config[..4].copy_from_slice(b"Corp");
+        w.eap = eap(Some("alice"), None, Some(sim_api::FAIL_PASSWORD));
+        w.start_connect(0);
+        let e = w.take_due_event(10_000 * MS).unwrap();
+        assert_eq!((e.id, e.data[39]), (EV_STA_DISCONNECTED, REASON_802_1X_AUTH_FAILED));
+
+        w.eap.password = Some("ok".into());
+        w.start_connect(0);
+        assert_eq!(w.take_due_event(10_000 * MS).unwrap().id, EV_STA_CONNECTED);
+        assert_eq!(w.connected, Some(0));
+
+        // Still in 802.1X mode, a PSK network can't be joined.
+        w.connected = None;
+        w.sta_config[..4].copy_from_slice(b"Home");
+        w.start_connect(0);
+        let e = w.take_due_event(10_000 * MS).unwrap();
+        assert_eq!((e.id, e.data[39]), (EV_STA_DISCONNECTED, REASON_NO_AP_FOUND));
+        w.eap.enabled = false;
+        w.start_connect(0);
+        assert_eq!(w.take_due_event(10_000 * MS).unwrap().id, EV_STA_CONNECTED);
     }
 }
