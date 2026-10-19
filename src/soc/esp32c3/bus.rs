@@ -217,8 +217,7 @@ impl C3Bus {
     }
 
     /// Also the debugger's watchpoints, which the run loop looks at the same way.
-    #[cold]
-    #[inline(never)]
+    #[inline(always)]
     fn check_shadow(&mut self, addr: u32, len: u32, write: bool) {
         if let Some(mc) = self.mc.as_deref_mut()
             && mc.access(addr, len, write)
@@ -363,5 +362,26 @@ impl MemBus for C3Bus {
     #[inline(always)]
     fn tick(&mut self) {
         self.clock.cycles += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_load_from_unallocated_heap_is_a_memcheck_violation() {
+        let mut bus = C3Bus::new(
+            vec![0; ROM_SIZE].into(),
+            SpiFlash::new(vec![0; 0x1_0000], None),
+            Box::new(super::super::NullBoard),
+        );
+        let mut mc = Memcheck::new(crate::memcheck::Mode::Halt, &[(SRAM_D_BASE, SRAM_SIZE as u32, None)]);
+        mc.register_heap(SRAM_D_BASE + 0x1000, 0x100);
+        bus.mc = Some(Box::new(mc));
+        bus.irq_dirty = false;
+        bus.read32(SRAM_D_BASE + 0x1000).unwrap();
+        assert!(bus.mc.as_ref().is_some_and(|mc| mc.pending.is_some()));
+        assert!(bus.irq_dirty);
     }
 }
