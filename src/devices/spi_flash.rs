@@ -99,7 +99,7 @@ impl SpiFlash {
     pub fn flush(&mut self) -> std::io::Result<()> {
         if self.dirty {
             if let Some(p) = &self.backing {
-                std::fs::write(p, &self.data)?;
+                write_atomically(p, &self.data)?;
             }
             self.dirty = false;
         }
@@ -109,20 +109,11 @@ impl SpiFlash {
     /// Commit a host-side edit before publishing it to the guest. On failure the live
     /// image and previous backing file remain intact. This bypasses guest flash faults.
     pub fn replace_image(&mut self, data: Vec<u8>) -> std::io::Result<()> {
-        use std::io::Write;
         if data.len() != self.data.len() {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "flash size changed"));
         }
         if let Some(path) = &self.backing {
-            let path = if path.exists() { path.canonicalize()? } else { path.clone() };
-            let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-            let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-            if let Ok(meta) = std::fs::metadata(&path) {
-                temp.as_file().set_permissions(meta.permissions())?;
-            }
-            temp.write_all(&data)?;
-            temp.as_file().sync_all()?;
-            temp.persist(&path).map_err(|e| e.error)?;
+            write_atomically(path, &data)?;
         }
         self.data = data;
         self.dirty = false;
@@ -245,6 +236,22 @@ impl SpiFlash {
     }
 }
 
+/// Write through a renamed temp file, so a reader of `path` sees the old image or the new one,
+/// never a truncated one.
+fn write_atomically(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = if path.exists() { path.canonicalize()? } else { path.to_path_buf() };
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    if let Ok(meta) = std::fs::metadata(&path) {
+        temp.as_file().set_permissions(meta.permissions())?;
+    }
+    temp.write_all(data)?;
+    temp.as_file().sync_all()?;
+    temp.persist(&path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +269,32 @@ mod tests {
         assert_eq!(failed.data, vec![255; 4096]);
         assert!(flash.replace_image(vec![0; 4]).is_err());
         assert_eq!(std::fs::read(path).unwrap(), vec![7; 4096]);
+    }
+
+    #[test]
+    fn a_reader_never_sees_a_partly_written_backing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flash.bin");
+        let mut flash = SpiFlash::new(vec![255; 4 << 20], Some(path.clone()));
+        flash.dirty = true;
+        flash.flush().unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader = {
+            let (path, done) = (path.clone(), done.clone());
+            std::thread::spawn(move || {
+                let mut short = 0;
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    short += (std::fs::read(&path).map_or(0, |d| d.len()) != 4 << 20) as u32;
+                }
+                short
+            })
+        };
+        for _ in 0..50 {
+            flash.dirty = true;
+            flash.flush().unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(reader.join().unwrap(), 0);
     }
 
     fn flash() -> SpiFlash {
