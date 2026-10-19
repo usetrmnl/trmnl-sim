@@ -283,6 +283,8 @@ fn describe_restore(sp: &SavePoint) -> String {
     }
 }
 
+const PACED_SLICE_MIN_NS: u64 = 1_000_000;
+
 pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) -> RunOutcome {
     let started = Instant::now();
     let mut turbo = opts.turbo;
@@ -695,7 +697,12 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 for t in [release_at, press_at, touch_release_at.map(|t| t.0)].into_iter().flatten() {
                     target = target.min(t.max(now_v + 1));
                 }
-                if target <= now_v {
+                // Wait for a whole slice of wall time: an idle guest otherwise runs microsecond slices
+                // flat out, and each one wakes it from WFI.
+                let behind_wall = (now_v + PACED_SLICE_MIN_NS).saturating_sub(wall_target);
+                if realtime && behind_wall > 0 {
+                    std::thread::sleep(Duration::from_nanos(behind_wall));
+                } else if target <= now_v {
                     std::thread::sleep(Duration::from_micros(500));
                 } else {
                     let exit = m.run_slice(target);
