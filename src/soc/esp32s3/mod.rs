@@ -69,6 +69,8 @@ pub struct Esp32s3 {
     /// Flash offset of the app booted last (to report a boot from the other OTA slot).
     boot_offset: Option<u32>,
     trace: Vec<String>,
+    /// Send esp_lcd i80 color transfers natively (hle::lcd) instead of through the IDF driver.
+    hle_lcd: bool,
     pending_halt: Option<String>,
     recent_resets: Vec<u64>,
     syms: Symbols,
@@ -153,6 +155,9 @@ impl HleEnv for Env<'_> {
     }
     fn request(&mut self, r: MachineRequest) {
         self.requests.push(r);
+    }
+    fn lcd_transfer(&mut self, data: &[u8]) {
+        self.board.lcd_transfer(self.now, data);
     }
 }
 
@@ -242,6 +247,7 @@ impl Esp32s3 {
             active_app: None,
             boot_offset: None,
             trace: trace.to_vec(),
+            hle_lcd: true,
             pending_halt: None,
             recent_resets: Vec::new(),
             hooks: Hooks::default(),
@@ -335,6 +341,10 @@ impl Esp32s3 {
         self.hle.wifi.set_net_config(cfg);
     }
 
+    pub fn set_hle_lcd(&mut self, on: bool) {
+        self.hle_lcd = on;
+    }
+
     pub fn set_portal_port(&mut self, port: u16) {
         self.hle.wifi.portal_forward = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     }
@@ -378,6 +388,9 @@ impl Esp32s3 {
         syms.merge(&self.apps[i].1);
         let mut hooks = Hooks::default();
         hle::idf::install(&mut hooks, &syms);
+        if self.hle_lcd {
+            hle::lcd::install(&mut hooks, &syms);
+        }
         if let Some(mc) = self.bus.mc.as_deref_mut() {
             hle::memcheck::install(&mut hooks, &syms, mc);
         }
