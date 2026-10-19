@@ -123,6 +123,9 @@ impl HleEnv for Env<'_> {
     fn request(&mut self, r: MachineRequest) {
         self.requests.push(r);
     }
+    fn lcd_transfer(&mut self, data: &[u8]) {
+        self.board.lcd_transfer(self.now, data);
+    }
 }
 
 impl Esp32c3 {

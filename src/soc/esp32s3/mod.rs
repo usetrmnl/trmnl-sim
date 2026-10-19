@@ -59,6 +59,11 @@ pub struct Esp32s3 {
     core_running: [bool; 2],
     /// Core executed WAITI and sleeps until an interrupt is deliverable.
     parked: [bool; 2],
+    /// The ROM's ets_delay_us, which a core sleeps through instead of spinning.
+    delay_us_entry: Option<u32>,
+    /// Cycle each ets_delay_us in progress ends at, by core and stack pointer (an interrupt
+    /// handler's own delay is a separate entry).
+    delay_deadlines: HashMap<(usize, u32), u64>,
     pub bus: S3Bus,
     rom_sections: Vec<(u32, Vec<u8>)>,
     rom_syms: Symbols,
@@ -69,6 +74,8 @@ pub struct Esp32s3 {
     /// Flash offset of the app booted last (to report a boot from the other OTA slot).
     boot_offset: Option<u32>,
     trace: Vec<String>,
+    /// Send esp_lcd i80 color transfers natively (hle::lcd) instead of through the IDF driver.
+    hle_lcd: bool,
     pending_halt: Option<String>,
     recent_resets: Vec<u64>,
     syms: Symbols,
@@ -154,6 +161,9 @@ impl HleEnv for Env<'_> {
     fn request(&mut self, r: MachineRequest) {
         self.requests.push(r);
     }
+    fn lcd_transfer(&mut self, data: &[u8]) {
+        self.board.lcd_transfer(self.now, data);
+    }
 }
 
 impl Esp32s3 {
@@ -233,6 +243,8 @@ impl Esp32s3 {
             cores: [new_core(PRID[0]), new_core(PRID[1])],
             core_running: [false; 2],
             parked: [false; 2],
+            delay_us_entry: rom_syms.addr("ets_delay_us"),
+            delay_deadlines: HashMap::new(),
             bus: S3Bus::new(rom, flash, board),
             rom_sections,
             syms: rom_syms.clone(),
@@ -242,6 +254,7 @@ impl Esp32s3 {
             active_app: None,
             boot_offset: None,
             trace: trace.to_vec(),
+            hle_lcd: true,
             pending_halt: None,
             recent_resets: Vec::new(),
             hooks: Hooks::default(),
@@ -335,6 +348,10 @@ impl Esp32s3 {
         self.hle.wifi.set_net_config(cfg);
     }
 
+    pub fn set_hle_lcd(&mut self, on: bool) {
+        self.hle_lcd = on;
+    }
+
     pub fn set_portal_port(&mut self, port: u16) {
         self.hle.wifi.portal_forward = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     }
@@ -378,6 +395,9 @@ impl Esp32s3 {
         syms.merge(&self.apps[i].1);
         let mut hooks = Hooks::default();
         hle::idf::install(&mut hooks, &syms);
+        if self.hle_lcd {
+            hle::lcd::install(&mut hooks, &syms);
+        }
         if let Some(mc) = self.bus.mc.as_deref_mut() {
             hle::memcheck::install(&mut hooks, &syms, mc);
         }
@@ -418,6 +438,7 @@ impl Esp32s3 {
         self.cores = [new_core(PRID[0]), new_core(PRID[1])];
         self.core_running = [true, false];
         self.parked = [false; 2];
+        self.delay_deadlines.clear();
         let stub = self.bus.p.store_get(0x6000_8000 + 0xC8); // RTC_CNTL_STORE6: wake stub entry
         if self.bus.p.reset_reason == ResetReason::DeepSleep && stub != 0 && self.bus.peek32(stub).is_some() {
             self.in_wake_stub = true;
@@ -586,6 +607,11 @@ impl Esp32s3 {
         self.service();
     }
 
+    /// Has an ets_delay_us that `core` sleeps in reached its deadline?
+    fn delay_over(&self, core: usize) -> bool {
+        self.delay_deadlines.iter().any(|(&(c, _), &d)| c == core && self.bus.clock.cycles >= d)
+    }
+
     /// Run one core for up to `n` instructions. Returns the number executed and
     /// whether it is still busy (false once it waits for an interrupt).
     fn run_core(&mut self, core: usize, n: u64) -> Result<(u64, bool), SliceExit> {
@@ -593,6 +619,23 @@ impl Esp32s3 {
         let mut done = 0;
         while done < n {
             let pc = self.cores[core].pc();
+            // Sleep through ets_delay_us as WAITI would, unless an interrupt is due: it then runs
+            // as on the chip and returns here, and the delay goes on to the same deadline.
+            if Some(pc) == self.delay_us_entry && !self.cores[core].irq_pending() {
+                let key = (core, self.cores[core].sp());
+                let us = self.cores[core].arg(0) as u64;
+                let now = self.bus.clock.cycles;
+                let deadline = *self
+                    .delay_deadlines
+                    .entry(key)
+                    .or_insert_with(|| self.bus.clock.cycles_at(self.bus.now_ns() + us * 1000));
+                if now < deadline {
+                    return Ok((done, false));
+                }
+                self.delay_deadlines.remove(&key);
+                self.cores[core].return_from_hook(None);
+                continue;
+            }
             if self.hooks.maybe(pc) {
                 if let Some(stop) = self.debug.check(core, pc) {
                     self.debug.pending = Some(stop);
@@ -800,7 +843,7 @@ impl Machine for Esp32s3 {
                         continue;
                     }
                     if self.parked[core] {
-                        if !self.cores[core].irq_pending() {
+                        if !self.cores[core].irq_pending() && !self.delay_over(core) {
                             continue;
                         }
                         self.parked[core] = false;
@@ -848,6 +891,7 @@ impl Machine for Esp32s3 {
                 let idle_jump = (0..2)
                     .filter(|&c| self.core_running[c])
                     .map(|c| self.cores[c].cycles_to_timer().max(1))
+                    .chain(self.delay_deadlines.values().map(|&d| d.saturating_sub(self.bus.clock.cycles).max(1)))
                     .fold(stop - self.bus.clock.cycles, u64::min);
                 // A debugger stop ends the quantum where the cores got to.
                 let stopped = self.debug.pending.is_some();

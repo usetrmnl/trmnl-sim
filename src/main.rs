@@ -116,6 +116,10 @@ struct Cli {
     /// recorded ELF SHA-256 picks the file.
     #[arg(long, value_name = "DIR")]
     elf_dir: Vec<PathBuf>,
+    /// Run the IDF driver for esp_lcd i80 color transfers instead of sending the bytes
+    /// natively (much slower; for debugging the display path).
+    #[arg(long)]
+    no_hle_lcd: bool,
     /// Log calls to these firmware functions (comma separated symbol names).
     #[arg(long, value_delimiter = ',')]
     trace: Vec<String>,
@@ -332,6 +336,7 @@ fn main() -> Result<()> {
     let mut machine: Box<dyn soc::Machine> = match fw.chip_id {
         firmware::CHIP_ESP32S3 => {
             let mut m = soc::esp32s3::Esp32s3::new(&rom, flash, board, apps, elf_search, &cli.trace)?;
+            m.set_hle_lcd(!cli.no_hle_lcd);
             if let Some(mac) = cli.mac {
                 m.set_mac(mac);
             }

@@ -8,6 +8,7 @@
 
 pub mod bluetooth;
 pub mod idf;
+pub mod lcd;
 pub mod memcheck;
 pub mod wifi;
 
@@ -39,6 +40,8 @@ pub trait HleEnv {
     fn console(&mut self, msg: &str);
     /// Request the machine to perform a system-level action after this hook.
     fn request(&mut self, r: MachineRequest);
+    /// Bytes the LCD peripheral sends out on its data lines.
+    fn lcd_transfer(&mut self, data: &[u8]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +91,7 @@ pub struct HleState {
     pub wifi: wifi::WifiState,
     pub bluetooth: bluetooth::BluetoothState,
     pub sleep: SleepConfig,
+    pub lcd: lcd::LcdState,
     /// Where the second core should start (ESP32 dual-core ROM API).
     pub appcpu_boot_addr: Option<u32>,
     /// A simulator-initiated guest call returned to the boot trampoline.
@@ -100,6 +104,7 @@ impl HleState {
             wifi: wifi::WifiState::new(mac),
             bluetooth: bluetooth::BluetoothState::new(mac),
             sleep: SleepConfig::default(),
+            lcd: lcd::LcdState::default(),
             appcpu_boot_addr: None,
             wake_stub_returned: false,
         }
@@ -109,6 +114,7 @@ impl HleState {
         self.wifi.reset();
         self.bluetooth.reset();
         self.sleep = SleepConfig::default();
+        self.lcd = lcd::LcdState::default();
         self.appcpu_boot_addr = None;
         self.wake_stub_returned = false;
     }
