@@ -112,6 +112,7 @@ fn sleep_enable_ext0(c: &mut HleCtx) -> Flow {
 /// nonzero if the sleep was rejected. We always sleep.
 fn rtc_sleep_start(c: &mut HleCtx) -> Flow {
     let wakeup_opt = c.cpu.arg(0);
+    c.state.wifi.light_sleep_begins(c.env.now_ns());
     c.env.request(MachineRequest::RtcSleep { wakeup_opt });
     Flow::Return(Some(0))
 }
@@ -128,6 +129,7 @@ fn deep_sleep_start(c: &mut HleCtx) -> Flow {
 
 fn light_sleep_start(c: &mut HleCtx) -> Flow {
     let s = c.state.sleep.clone();
+    c.state.wifi.light_sleep_begins(c.env.now_ns());
     c.env.request(MachineRequest::LightSleep { timer_ns: s.timer_us.map(|us| us * 1000), gpio: s.light_gpio });
     Flow::Return(Some(0))
 }

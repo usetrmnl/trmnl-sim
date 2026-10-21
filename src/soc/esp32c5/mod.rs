@@ -569,6 +569,7 @@ impl Machine for Esp32c5 {
                 let button_low = gpio && self.bus.board.gpio_in(now).0 & all != all;
                 if wake_at.is_some_and(|t| now >= t) || button_low {
                     self.light_sleep = None;
+                    self.hle.wifi.light_sleep_ends(now);
                     // PMU_GPIO_WAKEUP_EN / PMU_LP_TIMER_WAKEUP_EN
                     self.bus.p.wakeup_cause = if button_low { 1 << 2 } else { 1 << 4 };
                 } else {
