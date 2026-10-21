@@ -71,6 +71,14 @@ impl WifiAbi {
 }
 const MS: u64 = 1_000_000;
 
+/// Light sleep, with no beacon heard, that costs the station its AP (WIFI_REASON_BEACON_TIMEOUT).
+/// Not the IDF's awake beacon timeout (esp_wifi_set_inactive_time, 6 s): a TRMNL BWRY keeps its
+/// AP through a 16 s refresh. Longer than any one busy wait in bb_epaper (35 s for color panels),
+/// well short of the TRMNL OG's 60-refresh screen wipe (~150 s), which loses it.
+const LIGHT_SLEEP_LOSES_AP_NS: u64 = 36_000 * MS;
+/// Awake this long, the radio hears a beacon (sent every 100 TU = 102.4 ms).
+const HEARS_BEACON_NS: u64 = 103 * MS;
+
 /// An access point visible to the simulated device.
 #[derive(Clone, Debug)]
 pub struct SimAp {
@@ -126,6 +134,12 @@ pub struct WifiState {
     /// unattended portal can run ahead of wall-clock time in turbo mode.
     portal_client_away: bool,
     scan_results: Vec<SimAp>,
+    /// Light sleep turns the radio off: when the current one began...
+    asleep_since: Option<u64>,
+    /// ...when the last one ended...
+    awake_since: u64,
+    /// ...and the light sleep since the last beacon the station heard.
+    deaf_ns: u64,
     pub stats: WifiStats,
 }
 
@@ -173,6 +187,9 @@ impl WifiState {
             ap_client_associated: false,
             portal_client_away: false,
             scan_results: Vec::new(),
+            asleep_since: None,
+            awake_since: 0,
+            deaf_ns: 0,
             stats: WifiStats::default(),
         }
     }
@@ -364,10 +381,36 @@ impl WifiState {
     pub fn set_available(&mut self, on: bool, now: u64) {
         self.available = on;
         if !on && let Some(i) = self.connected.take() {
-            let ap = self.networks[i].clone();
-            let d = self.disconnected_event(Some(&ap), REASON_BEACON_TIMEOUT);
-            self.post(now + 100 * MS, EV_STA_DISCONNECTED, d);
-            self.net.reset();
+            self.beacon_lost(self.networks[i].clone(), now);
+        }
+    }
+
+    /// The station stops hearing its AP: it drops the association as the driver does
+    /// when the beacons stop.
+    fn beacon_lost(&mut self, ap: SimAp, now: u64) {
+        let d = self.disconnected_event(Some(&ap), REASON_BEACON_TIMEOUT);
+        self.post(now + 100 * MS, EV_STA_DISCONNECTED, d);
+        self.net.reset();
+    }
+
+    /// esp_light_sleep_start powers the radio down until the chip wakes.
+    pub fn light_sleep_begins(&mut self, now: u64) {
+        if now.saturating_sub(self.awake_since) >= HEARS_BEACON_NS {
+            self.deaf_ns = 0;
+        }
+        self.asleep_since = Some(now);
+    }
+
+    /// A station asleep for too long, with no awake window long enough to hear a beacon in
+    /// between (bb_epaper's busy wait wakes for microseconds every 20 ms), has lost its AP.
+    pub fn light_sleep_ends(&mut self, now: u64) {
+        let Some(since) = self.asleep_since.take() else { return };
+        self.deaf_ns += now.saturating_sub(since);
+        self.awake_since = now;
+        if self.deaf_ns > LIGHT_SLEEP_LOSES_AP_NS
+            && let Some(i) = self.connected.take()
+        {
+            self.beacon_lost(self.networks[i].clone(), now);
         }
     }
 
@@ -390,9 +433,7 @@ impl WifiState {
             let same = |a: &SimAp| a.ssid == ap.ssid && a.password == ap.password && a.authmode == ap.authmode;
             self.connected = self.networks.iter().position(same);
             if self.connected.is_none() {
-                let d = self.disconnected_event(Some(&ap), REASON_BEACON_TIMEOUT);
-                self.post(now + 100 * MS, EV_STA_DISCONNECTED, d);
-                self.net.reset();
+                self.beacon_lost(ap, now);
             }
         }
     }
@@ -444,6 +485,7 @@ impl WifiState {
                 self.connected = self.networks.iter().position(|a| a.ssid == ssid);
                 self.connecting = false;
                 self.net.reset();
+                self.deaf_ns = 0;
             }
             EV_STA_DISCONNECTED => {
                 self.connected = None;
@@ -987,5 +1029,86 @@ fn deliver_frame(c: &mut HleCtx, cb: u32, frame: Vec<u8>) -> Flow {
             c.state.wifi.stats.rx_frames += 1;
             Flow::Call { func: cb, args: vec![buf, len, buf], then: Box::new(back_to_loop) }
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn associated() -> WifiState {
+        let mut w = WifiState::new([0x02, 0, 0, 0, 0, 1]);
+        w.connected = Some(0);
+        w
+    }
+
+    /// bb_epaper's busy wait: 20 ms light sleeps with a few microseconds awake in between.
+    fn busy_wait(w: &mut WifiState, from: u64, for_ns: u64) -> u64 {
+        let mut t = from;
+        while t < from + for_ns {
+            w.light_sleep_begins(t);
+            t += 20 * MS;
+            w.light_sleep_ends(t);
+            t += 10_000;
+        }
+        t
+    }
+
+    fn beacon_timeouts(w: &WifiState) -> usize {
+        w.events.iter().filter(|e| e.id == EV_STA_DISCONNECTED && e.data[39] == REASON_BEACON_TIMEOUT).count()
+    }
+
+    #[test]
+    fn one_refresh_of_light_sleep_keeps_the_association() {
+        let mut w = associated();
+        busy_wait(&mut w, 0, 2500 * MS);
+        assert!(w.is_connected());
+        assert_eq!(beacon_timeouts(&w), 0);
+    }
+
+    #[test]
+    fn a_color_refresh_of_light_sleep_keeps_the_association() {
+        let mut w = associated();
+        busy_wait(&mut w, 0, 35_000 * MS);
+        assert!(w.is_connected());
+    }
+
+    #[test]
+    fn light_sleep_past_the_limit_drops_the_association() {
+        let mut w = associated();
+        let end = busy_wait(&mut w, 0, 37_000 * MS);
+        assert!(!w.is_connected());
+        assert_eq!(beacon_timeouts(&w), 1);
+        assert!(w.events[0].at_ns > LIGHT_SLEEP_LOSES_AP_NS && w.events[0].at_ns <= end + 100 * MS);
+    }
+
+    #[test]
+    fn waking_long_enough_to_hear_a_beacon_restarts_the_count() {
+        let mut w = associated();
+        let mut t = 0;
+        for _ in 0..60 {
+            t = busy_wait(&mut w, t, 2500 * MS) + HEARS_BEACON_NS;
+        }
+        assert!(w.is_connected());
+    }
+
+    #[test]
+    fn short_awake_windows_between_refreshes_do_not_restart_the_count() {
+        let mut w = associated();
+        let mut t = 0;
+        for _ in 0..15 {
+            t = busy_wait(&mut w, t, 2500 * MS) + 50 * MS;
+        }
+        assert!(!w.is_connected());
+    }
+
+    #[test]
+    fn reassociating_restarts_the_count() {
+        let mut w = associated();
+        let t = busy_wait(&mut w, 0, 30_000 * MS);
+        w.post(t, EV_STA_CONNECTED, w.connected_event(&w.networks[0].clone(), 0));
+        assert!(w.take_due_event(t).is_some());
+        busy_wait(&mut w, t, 30_000 * MS);
+        assert!(w.is_connected());
     }
 }

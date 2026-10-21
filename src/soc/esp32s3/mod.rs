@@ -822,6 +822,7 @@ impl Machine for Esp32s3 {
                 let wake_timer = opt & (1 << 3) != 0 && wake_at.is_some_and(|t| now >= t);
                 if wake_timer || wake_gpio {
                     self.light_sleep = None;
+                    self.hle.wifi.light_sleep_ends(now);
                     self.bus.p.wakeup_cause = if wake_gpio { 1 << 2 } else { 1 << 3 };
                 } else {
                     let target = wake_at.map_or(until, |t| until.min(self.bus.clock.cycles_at(t)));
