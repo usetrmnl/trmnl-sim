@@ -44,6 +44,10 @@ references where relevant.
   minimal changes that keep the other chips and boards behaving identically. A test that
   fails because the firmware is wrong is marked in trmnl-spec (`known_failure:`), never
   worked around in the simulator.
+- The control API and its MCP server (`/mcp`) are kept at feature parity by construction:
+  every endpoint is one row in `crates/sim-control/src/endpoints.rs` (its MCP tool and input
+  schema come from the row, its calls go through the HTTP router). A new or changed
+  endpoint updates that row's parameters and description too.
 - A change to the control API or the built-in behaviour the tests rely on needs the matching
   change in trmnl-spec's client library (`lib/trmnl_sim/`); commit each repository on its own.
 
