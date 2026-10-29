@@ -8,6 +8,31 @@ fn command(c: &mut Controller, opcode: u16, data: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn remote_version_read_completes_before_new_host_connection_callbacks() {
+    let mut c = Controller::new([0; 6]);
+    assert_eq!(command(&mut c, 0x041d, &[1, 0]), [4, 15, 4, 2, 1, 29, 4]);
+    command(&mut c, 0x200a, &[1]);
+    c.connect().unwrap();
+    c.pop_host_packet();
+    assert_eq!(command(&mut c, 0x041d, &[1, 0]), [4, 15, 4, 0, 1, 29, 4]);
+    assert_eq!(c.pop_host_packet().unwrap(), [4, 12, 8, 0, 1, 0, 6, 255, 255, 0, 0]);
+}
+
+#[test]
+fn newer_hosts_can_read_the_supported_commands_bitmap() {
+    let mut c = Controller::new([0; 6]);
+    let response = command(&mut c, 0x1002, &[]);
+    assert_eq!(&response[..7], &[4, 14, 68, 1, 2, 16, 0]);
+    assert_eq!(response.len(), 71);
+    let commands = &response[7..];
+    assert_eq!(commands[5], 0xc0); // Set Event Mask and Reset.
+    assert_eq!(commands[25], 0xe7); // Legacy LE advertising, buffer size and features.
+    assert_eq!(commands[26], 0x03); // Scan response data and advertising enable.
+    assert_eq!(commands[34], 0); // No resolving-list or data-length extensions.
+    assert_eq!(command(&mut c, 0x1002, &[0]).last(), Some(&0x12));
+}
+
+#[test]
 fn host_initialization_reports_real_limits_and_address_order() {
     let mut c = Controller::new([1, 2, 3, 4, 5, 6]);
     assert_eq!(command(&mut c, 0x0c03, &[]), [4, 14, 4, 1, 3, 12, 0]);

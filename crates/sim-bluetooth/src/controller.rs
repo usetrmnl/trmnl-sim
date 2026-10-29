@@ -109,12 +109,12 @@ impl Controller {
     fn command(&mut self, op: u16, p: &[u8], random: [u8; 8]) {
         // Lengths and result layouts follow ESP-IDF NimBLE's hci_common.h.
         let expected = match op {
-            0x0c03 | 0x1001 | 0x1003 | 0x1009 | 0x2002 | 0x2003 | 0x2007 | 0x2018 | 0x201c => 0,
+            0x0c03 | 0x1001 | 0x1002 | 0x1003 | 0x1009 | 0x2002 | 0x2003 | 0x2007 | 0x2018 | 0x201c => 0,
             0x0c01 | 0x0c63 | 0x2001 => 8,
             0x2006 => 15,
             0x2008 | 0x2009 => 32,
             0x200a => 1,
-            0x2016 => 2,
+            0x041d | 0x2016 => 2,
             0x0406 => 3,
             0x2013 => 14,
             _ => {
@@ -146,6 +146,24 @@ impl Controller {
             }
             // Report BLE 4.0 and no optional link features we don't emulate.
             0x1001 => result.extend_from_slice(&[6, 0, 0, 6, 0xff, 0xff, 0, 0]),
+            0x1002 => {
+                // HCI Supported Commands octets, as in NimBLE's ble_ll_hci_supp_cmd.c.
+                let mut commands = [0; 64];
+                for (octet, bits) in [
+                    (0, 0x20),
+                    (2, 0x80),
+                    (5, 0xc0),
+                    (14, 0x28),
+                    (15, 0x02),
+                    (25, 0xe7),
+                    (26, 0x03),
+                    (27, 0xa4),
+                    (28, 0x08),
+                ] {
+                    commands[octet] = bits;
+                }
+                result.extend_from_slice(&commands);
+            }
             0x1003 => result.extend_from_slice(&[0, 0, 0, 0, 0x60, 0, 0, 0]),
             0x1009 => result.extend(self.mac.iter().rev()),
             0x2002 => result.extend_from_slice(&[ACL_SIZE as u8, 0, 8]),
@@ -170,7 +188,7 @@ impl Controller {
                     self.advertising = p[0] == 1;
                 }
             }
-            0x0406 | 0x2016 | 0x2013 => {
+            0x0406 | 0x041d | 0x2016 | 0x2013 => {
                 let valid = self.connected && u16::from_le_bytes([p[0], p[1]]) == HANDLE;
                 self.event(15, &[if valid { 0 } else { 2 }, 1, op as u8, (op >> 8) as u8]);
                 if valid {
@@ -178,6 +196,7 @@ impl Controller {
                         0x0406 => {
                             let _ = self.disconnect(p[2]);
                         }
+                        0x041d => self.event(0x0c, &[0, 1, 0, 6, 0xff, 0xff, 0, 0]),
                         0x2016 => self.event(0x3e, &[4, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
                         _ => self.event(0x3e, &[3, 0, 1, 0, p[2], p[3], p[6], p[7], p[8], p[9]]),
                     }
