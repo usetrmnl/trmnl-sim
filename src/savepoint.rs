@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 
 pub const MAGIC: &[u8; 8] = b"TRMNLSAV";
 /// Bump on any change to what is written.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The firmware build a save point belongs to. Its flash holds that build's app images
 /// and HLE hooks are bound to that build's ELF, so it only restores onto the same build.

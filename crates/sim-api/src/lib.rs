@@ -203,6 +203,10 @@ pub struct Faults {
     /// (as when the battery is disconnected): its data memory is back to factory defaults
     /// and it reports ITPOR.
     pub gauge_reset: bool,
+    /// The TRMNL X fuel gauge (BQ27427) has learned this FullChargeCapacity (register value,
+    /// before the Design Energy Scale), once, when the fault is set, and keeps it until it is
+    /// reset; RemainingCapacity follows it. Seen in the field after charging (60,000+ mAh).
+    pub gauge_full_capacity: Option<u16>,
     /// The ESP32-C3's die temperature (°C) as its on-chip sensor reads it, instead of 25 °C
     /// (e.g. a board that overheats under load).
     pub chip_temp_c: Option<f32>,
@@ -300,6 +304,9 @@ impl Faults {
         }
         if self.gauge_reset {
             v.push("fuel gauge reset".into());
+        }
+        if let Some(c) = self.gauge_full_capacity {
+            v.push(format!("fuel gauge full capacity {c}"));
         }
         if let Some(t) = self.chip_temp_c {
             v.push(format!("chip at {t} °C"));

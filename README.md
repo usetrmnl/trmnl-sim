@@ -126,6 +126,7 @@ faults:
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: ERROR for AT commands starting with these |
 | Chip temperature | `{"chip_temp_c": 60}` | the on-chip sensor reads this instead of 25 °C |
 | Fuel gauge | `{"gauge_reset": true}` | X: the BQ27427 has a power-on reset (once) |
+| Fuel gauge capacity | `{"gauge_full_capacity": 9600}` | X: the BQ27427 has learned this FullChargeCapacity register value (once), kept until it resets |
 | Touch bar | `{"touch_bar": "reset"}` | X: the IQS323 resets (once); `"lockup"`, `"ati_error"` |
 
 `POST /faults` merges (`null` clears one) and `DELETE /faults` clears all. Faults are the
