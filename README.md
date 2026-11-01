@@ -53,7 +53,7 @@ Common to all devices:
 | Boot | The real mask ROM (from Espressif's ROM ELFs) and your 2nd-stage bootloader: partition table, OTA slot selection, SHA-256 check, flash MMU, deep-sleep wake stubs |
 | WiFi | A high-level model replaces the binary driver (scans, joins, soft-AP); lwIP, DHCP, DNS, TLS, AsyncTCP and the captive portal are the firmware's own |
 | Network | A user-mode router/NAT (`vnet`) to the internet, or `--offline`. The host is `10.0.2.2`; an NTP server at `10.0.2.123` gives the host's clock (offline, NTP names resolve to it) |
-| Sleep | Deep sleep (timer and GPIO wake, RTC memory, correct wake cause) and light sleep (the radio is off: over 36 s of it with no 103 ms awake in between loses the AP, as a long screen wipe does) |
+| Sleep | Deep sleep (timer and GPIO wake, RTC memory, correct wake cause) and light sleep (the radio is off: over 6 s of it with no 103 ms awake in between loses the AP, as a color refresh or a long screen wipe does) |
 | Persistence | Flash is a file, so credentials, API key and SPIFFS/LittleFS survive restarts; `--erase` gives a factory-fresh device |
 
 ## Requirements

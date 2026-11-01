@@ -71,11 +71,10 @@ impl WifiAbi {
 }
 const MS: u64 = 1_000_000;
 
-/// Light sleep, with no beacon heard, that costs the station its AP (WIFI_REASON_BEACON_TIMEOUT).
-/// Not the IDF's awake beacon timeout (esp_wifi_set_inactive_time, 6 s): a TRMNL BWRY keeps its
-/// AP through a 16 s refresh. Longer than any one busy wait in bb_epaper (35 s for color panels),
-/// well short of the TRMNL OG's 60-refresh screen wipe (~150 s), which loses it.
-const LIGHT_SLEEP_LOSES_AP_NS: u64 = 36_000 * MS;
+/// Light sleep, with no beacon heard, that costs the station its AP (WIFI_REASON_BEACON_TIMEOUT):
+/// the IDF's beacon timeout (esp_wifi_set_inactive_time, 6 s by default). On hardware a TRMNL BWRY
+/// lost its AP in one 16-20 s color refresh, and a TRMNL OG in its 60-refresh screen wipe.
+const LIGHT_SLEEP_LOSES_AP_NS: u64 = 6_000 * MS;
 /// Awake this long, the radio hears a beacon (sent every 100 TU = 102.4 ms).
 const HEARS_BEACON_NS: u64 = 103 * MS;
 
@@ -1067,16 +1066,17 @@ mod tests {
     }
 
     #[test]
-    fn a_color_refresh_of_light_sleep_keeps_the_association() {
+    fn a_color_refresh_of_light_sleep_drops_the_association() {
         let mut w = associated();
-        busy_wait(&mut w, 0, 35_000 * MS);
-        assert!(w.is_connected());
+        busy_wait(&mut w, 0, 16_000 * MS);
+        assert!(!w.is_connected());
+        assert_eq!(beacon_timeouts(&w), 1);
     }
 
     #[test]
     fn light_sleep_past_the_limit_drops_the_association() {
         let mut w = associated();
-        let end = busy_wait(&mut w, 0, 37_000 * MS);
+        let end = busy_wait(&mut w, 0, 7_000 * MS);
         assert!(!w.is_connected());
         assert_eq!(beacon_timeouts(&w), 1);
         assert!(w.events[0].at_ns > LIGHT_SLEEP_LOSES_AP_NS && w.events[0].at_ns <= end + 100 * MS);
@@ -1105,10 +1105,10 @@ mod tests {
     #[test]
     fn reassociating_restarts_the_count() {
         let mut w = associated();
-        let t = busy_wait(&mut w, 0, 30_000 * MS);
+        let t = busy_wait(&mut w, 0, 5_000 * MS);
         w.post(t, EV_STA_CONNECTED, w.connected_event(&w.networks[0].clone(), 0));
         assert!(w.take_due_event(t).is_some());
-        busy_wait(&mut w, t, 30_000 * MS);
+        busy_wait(&mut w, t, 5_000 * MS);
         assert!(w.is_connected());
     }
 }
