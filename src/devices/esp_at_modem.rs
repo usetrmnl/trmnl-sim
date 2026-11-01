@@ -979,6 +979,11 @@ impl EspAtModem {
     /// Strongest visible AP with this SSID; Err(ESP-AT CWJAP error code) otherwise.
     fn find_ap(&self, ssid: &str, pwd: &str) -> Result<ModemAp, u8> {
         let ap = self.visible_networks().filter(|a| a.ssid == ssid).max_by_key(|a| a.rssi).ok_or(3u8)?;
+        if ap.ecn == 5 {
+            // AT+CWJAP only does pre-shared keys: an 802.1X-only AP fails the association
+            // (the firmware joins those with the S3's own radio instead).
+            return Err(4);
+        }
         if sim_api::password_accepted(ap.password.as_deref(), pwd) { Ok(ap.clone()) } else { Err(2) }
     }
 
