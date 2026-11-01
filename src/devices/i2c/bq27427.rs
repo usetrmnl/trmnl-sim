@@ -118,6 +118,9 @@ pub struct Bq27427 {
     soh: u8,
     current_ma: Option<i16>,
     temp_dk: u16,
+    /// FullChargeCapacity the gauge has learned, in place of design capacity × SOH (None
+    /// until learned; a reset forgets it).
+    learned_full_capacity: Option<u16>,
     /// Number of commits of a data-memory block (tests / diagnostics).
     pub block_commits: u32,
 }
@@ -163,6 +166,7 @@ impl Bq27427 {
             soh: 100,
             current_ma: None,
             temp_dk: 2982,
+            learned_full_capacity: None,
             block_commits: 0,
         }
     }
@@ -216,6 +220,11 @@ impl Bq27427 {
 
     pub fn set_soh(&mut self, pct: u8) {
         self.soh = pct.min(100);
+    }
+
+    /// Impedance Track learns a FullChargeCapacity (register value), kept until a reset.
+    pub fn learn_full_capacity(&mut self, capacity: u16) {
+        self.learned_full_capacity = Some(capacity);
     }
 
     pub fn itpor(&self) -> bool {
@@ -287,7 +296,7 @@ impl Bq27427 {
     }
 
     fn full_capacity(&self) -> u16 {
-        (self.design_capacity() as u32 * self.soh as u32 / 100) as u16
+        self.learned_full_capacity.unwrap_or((self.design_capacity() as u32 * self.soh as u32 / 100) as u16)
     }
 
     fn remaining_capacity(&self) -> u16 {
@@ -427,6 +436,8 @@ impl I2cDevice for Bq27427 {
         w.bool(self.current_ma.is_some());
         w.u16(self.current_ma.unwrap_or(0) as u16);
         w.u16(self.temp_dk);
+        w.bool(self.learned_full_capacity.is_some());
+        w.u16(self.learned_full_capacity.unwrap_or(0));
         w.u32(self.block_commits);
     }
 
@@ -456,6 +467,9 @@ impl I2cDevice for Bq27427 {
         let current = r.u16()? as i16;
         self.current_ma = some.then_some(current);
         self.temp_dk = r.u16()?;
+        let learned = r.bool()?;
+        let capacity = r.u16()?;
+        self.learned_full_capacity = learned.then_some(capacity);
         self.block_commits = r.u32()?;
         Ok(())
     }
@@ -899,6 +913,20 @@ mod tests {
         lib.i2c_write_bytes(0, &[0x42, 0x00]); // exitConfig
         assert!(lib.current_polarity());
         assert_eq!(lib.flags() & FLAG_CFGUPMODE, 0);
+    }
+
+    #[test]
+    fn learned_full_capacity_is_kept_until_a_reset() {
+        let mut bus = I2cBus::new();
+        bus.add(Box::new(Bq27427::new(2)));
+        bq(&mut bus).set_battery(4200, false, 50);
+        bq(&mut bus).learn_full_capacity(9600);
+        let mut lib = Lib { bus: &mut bus, now: 0 };
+        assert_eq!(lib.read_word(CMD_FULL_CAPACITY), 9600);
+        assert_eq!(lib.read_word(CMD_REM_CAPACITY), 4800);
+        lib.i2c_write_bytes(0, &CTL_RESET.to_le_bytes());
+        // Back on factory data memory: 1340 mAh design capacity.
+        assert_eq!(lib.read_word(CMD_FULL_CAPACITY), 1340);
     }
 
     #[test]

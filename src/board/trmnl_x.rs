@@ -322,6 +322,11 @@ impl Board for TrmnlX {
         {
             bq.por();
         }
+        if let Some(capacity) = faults.gauge_full_capacity
+            && let Some(bq) = self.i2c.device_mut::<Bq27427>()
+        {
+            bq.learn_full_capacity(capacity);
+        }
         self.modem.set_net_faults(crate::faults::net_faults(&faults.net));
     }
 
