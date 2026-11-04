@@ -12,10 +12,11 @@ firmware was built with: the `-<env>` in the image's file name (`FW1.8.17-trmnl.
 
 - **Release firmware**: a device and a version from [the public list of
   releases](https://trmnl.com/api-docs#tag/flash-firmwares/GET/api/firmware/flash), which sets
-  the board. Start downloads the image and ELF to `trmnl-sim/firmware/<env>/` in your config
-  directory, once per version. That directory also holds the board's `sim-flash.bin`, so its
-  WiFi and API key carry over between versions, as on a reflashed device. Only builds published
-  with an ELF can run; the others are listed greyed out.
+  the board. Start downloads the image and ELF to `trmnl-sim/firmware/<env>/` in your cache
+  directory, once per version. The board's flash is `trmnl-sim/flash/<env>.bin` in your config
+  directory (unless `--flash` says otherwise), so its WiFi and API key carry over between
+  versions, as on a reflashed device, and survive clearing the cache. Only builds published with
+  an ELF can run; the others are listed greyed out.
 - **Custom firmware**: a local image (setting the board from its name where it can), the board,
   and hot reload.
 

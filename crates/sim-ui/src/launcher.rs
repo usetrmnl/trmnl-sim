@@ -26,6 +26,8 @@ pub struct BoardChoice {
 pub struct Launch {
     pub env: String,
     pub firmware: PathBuf,
+    /// `--flash`
+    pub flash: Option<PathBuf>,
     /// `--mac`
     pub mac: Option<[u8; 6]>,
     /// `--erase`
@@ -130,15 +132,16 @@ impl Launcher {
     }
 
     fn launch(&self) -> Option<Launch> {
-        let (env, firmware, hot_reload) = match self.tab {
-            Tab::Custom => (self.boards.get(self.board?)?.env.clone(), self.firmware.clone()?, self.hot_reload),
+        let (env, firmware, flash, hot_reload) = match self.tab {
+            Tab::Custom => (self.boards.get(self.board?)?.env.clone(), self.firmware.clone()?, None, self.hot_reload),
             Tab::Release => {
                 let (env, version) = self.selected_release()?;
                 // A release never changes, so there's nothing to reload.
-                (env.to_string(), ReleaseFiles::new(&firmware_root()?, env, &version.version).bin, false)
+                let files = ReleaseFiles::new(&firmware_root()?, env, &version.version);
+                (env.to_string(), files.bin, Some(release_flash(env)?), false)
             }
         };
-        Some(Launch { env, firmware, mac: parse_mac(&self.mac), erase: self.erase, hot_reload })
+        Some(Launch { env, firmware, flash, mac: parse_mac(&self.mac), erase: self.erase, hot_reload })
     }
 
     /// The chosen release, if it can run.
@@ -564,10 +567,30 @@ fn settings_path() -> Option<PathBuf> {
     Some(config_dir()?.join("preferences.json"))
 }
 
-/// Where downloaded releases are kept, with each board's flash image: not a cache, as that flash
-/// holds the device's WiFi and API key.
+/// The simulator's directory in the user's cache directory (`~/Library/Caches` on macOS,
+/// `%LOCALAPPDATA%` on Windows, else `$XDG_CACHE_HOME` or `~/.cache`).
+fn cache_dir() -> Option<PathBuf> {
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    let dir = if cfg!(target_os = "macos") {
+        home()?.join("Library/Caches")
+    } else if cfg!(windows) {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
+    } else {
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| Some(home()?.join(".cache")))?
+    };
+    Some(dir.join("trmnl-sim"))
+}
+
+/// Where downloaded releases are kept: they can be fetched again if the cache is cleared.
 fn firmware_root() -> Option<PathBuf> {
-    Some(config_dir()?.join("firmware"))
+    Some(cache_dir()?.join("firmware"))
+}
+
+/// The flash image of a board run from a release. One per board, not per version, so its WiFi and
+/// API key stay across versions, as on a device that is reflashed. That is the user's state, so
+/// it stays out of the cache with the downloads.
+fn release_flash(env: &str) -> Option<PathBuf> {
+    Some(config_dir()?.join("flash").join(format!("{env}.bin")))
 }
 
 /// The choices made last time (the launcher starts from them).
@@ -715,7 +738,13 @@ mod tests {
         assert_eq!(app.release_model.as_deref(), Some("trmnl"));
         assert_eq!(app.release_version.as_deref(), Some("FW1"));
         assert_eq!(app.selected_release().map(|(env, _)| env), Some("trmnl"));
-        assert_eq!(app.launch().map(|l| l.env).as_deref(), Some("trmnl"));
+        let launch = app.launch().unwrap();
+        assert_eq!(launch.env, "trmnl");
+        // The download is in the cache, the board's flash isn't.
+        assert_eq!(launch.firmware, firmware_root().unwrap().join("trmnl/FW1-trmnl.bin"));
+        assert_eq!(launch.flash, release_flash("trmnl"));
+        assert!(launch.firmware.starts_with(cache_dir().unwrap()));
+        assert!(!launch.flash.unwrap().starts_with(cache_dir().unwrap()));
     }
 
     #[test]
@@ -779,7 +808,7 @@ mod tests {
         }
     }
 
-    /// Against the real API and bucket, into `$HOME`'s config directory: the list loads, the
+    /// Against the real API and bucket, into `$HOME`'s cache directory: the list loads, the
     /// newest OG build with an ELF downloads on Start, and the launch points at it
     /// (`HOME=/some/dir cargo test -p sim-ui live_release -- --ignored`).
     #[test]

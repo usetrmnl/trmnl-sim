@@ -227,6 +227,7 @@ fn main() -> Result<()> {
             let Some(l) = sim_ui::launch(boards, cli.env.clone())? else { return Ok(()) };
             // What the launcher sets; the rest stays as given on the command line.
             cli.mac = l.mac.or(cli.mac);
+            cli.flash = cli.flash.take().or(l.flash);
             cli.erase |= l.erase;
             cli.hot_reload |= l.hot_reload;
             (l.env, l.firmware)

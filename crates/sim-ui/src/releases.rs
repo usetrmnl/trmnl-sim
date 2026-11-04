@@ -104,9 +104,8 @@ pub fn fetch_catalog() -> Result<Vec<Model>, String> {
     parse_catalog(&body)
 }
 
-/// Where a release lives locally. One directory per board, not per version: the flash image
-/// (`sim-flash.bin`, next to the firmware) stays with the board across versions, as on a device
-/// that is reflashed, and an OTA update to another downloaded version finds its ELF.
+/// Where a release lives locally. One directory per board, not per version, so an OTA update to
+/// another downloaded version of the board finds its ELF.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReleaseFiles {
     pub bin: PathBuf,
