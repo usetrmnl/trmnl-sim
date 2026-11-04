@@ -36,8 +36,8 @@ pub struct Launch {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Tab {
-    Release,
     #[default]
+    Release,
     Custom,
 }
 
@@ -576,19 +576,18 @@ fn load_last(app: &mut Launcher) {
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|d| serde_json::from_slice(&d).ok())
         .unwrap_or_default();
+    apply_last(app, &v);
+}
+
+fn apply_last(app: &mut Launcher, v: &Value) {
     app.board = v["env"].as_str().and_then(|e| app.boards.iter().position(|b| b.env == e));
     app.firmware = v["firmware"].as_str().map(PathBuf::from);
     app.mac = v["mac"].as_str().unwrap_or_default().to_string();
     app.hot_reload = v["hot_reload"].as_bool().unwrap_or(false);
     app.release_model = v["release_model"].as_str().map(Into::into);
     app.release_version = v["release_version"].as_str().map(Into::into);
-    // Someone who only ever ran their own builds keeps that tab; a new user has no build to pick.
-    app.tab = match v["tab"].as_str() {
-        Some("release") => Tab::Release,
-        Some(_) => Tab::Custom,
-        None if app.firmware.is_some() => Tab::Custom,
-        None => Tab::Release,
-    };
+    // Release unless the last start was from Custom.
+    app.tab = if v["tab"] == "custom" { Tab::Custom } else { Tab::Release };
 }
 
 /// Ask for the firmware (a release, or a local image and its board), the MAC and whether to
@@ -653,7 +652,7 @@ mod tests {
         let long = dir.join("merged_firmware.bin");
         std::fs::write(&long, b"").unwrap();
         std::fs::write(long.with_extension("elf"), b"").unwrap();
-        let app = Launcher { boards, board: Some(0), firmware: Some(long), ..Default::default() };
+        let app = Launcher { boards, tab: Tab::Custom, board: Some(0), firmware: Some(long), ..Default::default() };
         let mut h = egui_kittest::Harness::builder()
             .with_size(WINDOW_SIZE)
             .with_pixels_per_point(2.0)
@@ -668,6 +667,20 @@ mod tests {
         if let Ok(dir) = std::env::var("SIM_UI_RENDER_DIR") {
             h.render().expect("render").save(format!("{dir}/launcher.png")).expect("save");
         }
+    }
+
+    /// Release is the default, also for preferences saved before there were tabs.
+    #[test]
+    fn opens_on_release_unless_custom_was_last() {
+        let tab = |v: Value| {
+            let mut app = Launcher::default();
+            apply_last(&mut app, &v);
+            app.tab
+        };
+        assert_eq!(tab(Value::Null), Tab::Release);
+        assert_eq!(tab(json!({"firmware": "/fw/a.bin", "env": "trmnl"})), Tab::Release);
+        assert_eq!(tab(json!({"tab": "release"})), Tab::Release);
+        assert_eq!(tab(json!({"tab": "custom"})), Tab::Custom);
     }
 
     fn boards(envs: &[&str]) -> Vec<BoardChoice> {
