@@ -104,15 +104,18 @@ cargo build --release
 The GUI's left utility panel has tabs for **Server** (the built-in mock server),
 **Faults**, **NVS** and **BLE** (the mock Bluetooth controller's state, the decoded
 advertisement, and a manual central for raw ATT exchanges); a tab is marked `*` while
-something in it is live. Click the selected tab again to collapse the panel. **NVS**
+something in it is live. Click the selected tab again to collapse the panel. While the
+device's setup portal is up, a **Portal** tab appears and comes to the front, showing the
+firmware's own setup page in an embedded system webview (WKWebView on macOS, WebView2 on
+Windows; on Linux it links to your browser); it closes with the portal. **NVS**
 shows the firmware's saved values, grouped by partition and namespace. Search by key, type, or value, copy values, and refresh
 manually or automatically. Values are unmasked; blobs appear as hexadecimal bytes.
 While the firmware is in deep sleep, you can add, edit, or delete preferences. Changes
 are saved immediately without waking the device and take effect on its next wake.
 See [Preferences](#preferences) for the HTTP API and editing constraints.
 
-**A fresh device** (`--erase`) boots into WiFi setup. Its portal is at
-**http://127.0.0.1:8080/**: pick **TRMNL-Sim** (any password but `fail`) and a server. Use
+**A fresh device** (`--erase`) boots into WiFi setup. Its portal opens in the **Portal** tab
+and is also at **http://127.0.0.1:8080/**: pick **TRMNL-Sim** (any password but `fail`) and a server. Use
 `--mac D8:3B:DA:12:34:56` to run as your own device.
 
 ### Fault injection

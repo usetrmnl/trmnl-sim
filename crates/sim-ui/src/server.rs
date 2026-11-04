@@ -81,6 +81,11 @@ impl ServerPanel {
         self.mock.port().is_some()
     }
 
+    /// Whether the panel itself is, or is about to be, filling in the device's setup page.
+    pub fn onboarding(&self) -> bool {
+        self.onboard != Onboard::Idle
+    }
+
     /// Convert and add an image in the background (named after its file).
     pub fn add_file(&mut self, file_name: &str, bytes: Vec<u8>) {
         let name = mock_trmnl::name_from_file(&self.mock.state(), file_name);

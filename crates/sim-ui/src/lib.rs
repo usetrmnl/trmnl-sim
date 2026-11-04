@@ -8,6 +8,7 @@ mod console;
 mod device;
 mod faults;
 mod launcher;
+mod portal;
 mod preferences;
 mod releases;
 mod server;
@@ -109,6 +110,8 @@ enum LeftTab {
     Faults,
     Nvs,
     Bluetooth,
+    /// Only while the device's setup portal is up.
+    Portal,
 }
 
 impl LeftTab {
@@ -118,6 +121,7 @@ impl LeftTab {
             LeftTab::Bluetooth => "BLE",
             LeftTab::Faults => "Faults",
             LeftTab::Nvs => "NVS",
+            LeftTab::Portal => "Portal",
         }
     }
 
@@ -127,6 +131,7 @@ impl LeftTab {
             LeftTab::Bluetooth => "The mock Bluetooth controller: advertisement and a manual central",
             LeftTab::Faults => "Network, flash and hardware faults",
             LeftTab::Nvs => "Saved firmware preferences in live NVS flash",
+            LeftTab::Portal => "The device's WiFi setup page",
         }
     }
 }
@@ -202,6 +207,10 @@ struct SimApp {
     notice: Option<Notice>,
     server: Option<ServerPanel>,
     left_tab: Option<LeftTab>,
+    /// The setup page, while the device's portal is up.
+    portal: Option<portal::PortalView>,
+    /// The tab to go back to when the portal closes.
+    tab_before_portal: Option<LeftTab>,
 }
 
 impl SimApp {
@@ -238,6 +247,8 @@ impl SimApp {
             savepoint_reply: None,
             faults_pending: None,
             notice: None,
+            portal: None,
+            tab_before_portal: None,
         }
     }
 
@@ -267,19 +278,52 @@ impl SimApp {
     /// marks a tab with something live: the mock server running, the firmware advertising or
     /// a central connected, a fault on.
     fn left_tabs(&mut self, ui: &mut Ui) {
-        let tabs = [LeftTab::Server, LeftTab::Faults, LeftTab::Nvs, LeftTab::Bluetooth];
-        let has_server = self.server.is_some();
-        for tab in tabs.into_iter().filter(|&t| t != LeftTab::Server || has_server) {
+        let tabs = [LeftTab::Server, LeftTab::Faults, LeftTab::Nvs, LeftTab::Bluetooth, LeftTab::Portal];
+        let (has_server, has_portal) = (self.server.is_some(), self.portal.is_some());
+        let available = |t: &LeftTab| match t {
+            LeftTab::Server => has_server,
+            LeftTab::Portal => has_portal,
+            _ => true,
+        };
+        for tab in tabs.into_iter().filter(available) {
             let selected = self.left_tab == Some(tab);
             let starred = match tab {
                 LeftTab::Server => self.server.as_ref().is_some_and(|s| s.is_running()),
                 LeftTab::Bluetooth => self.status.bluetooth.advertising || self.status.bluetooth.connection.is_some(),
                 LeftTab::Faults => self.faults_on(),
-                LeftTab::Nvs => false,
+                LeftTab::Nvs | LeftTab::Portal => false,
             };
             let label = if starred { format!("{}*", tab.label()) } else { tab.label().to_string() };
             if ui.selectable_label(selected, label).on_hover_text(tab.hover()).clicked() {
                 self.left_tab = if selected { None } else { Some(tab) };
+            }
+        }
+    }
+
+    /// Follow the device's setup portal: its tab appears and comes to the front when the portal
+    /// starts, and goes back to the previous tab when it closes. That includes the firmware
+    /// stopping its access point to try a network, as a phone would lose it. The Server tab's
+    /// onboarding fills in the page by itself, so that stays in front.
+    fn sync_portal(&mut self) {
+        let url = self.status.portal_url.as_deref();
+        if self.portal.as_ref().map(|p| p.url()) == url {
+            return;
+        }
+        match url {
+            Some(url) => {
+                if self.portal.is_none() {
+                    self.tab_before_portal = self.left_tab;
+                    if !self.server.as_ref().is_some_and(|s| s.onboarding()) {
+                        self.left_tab = Some(LeftTab::Portal);
+                    }
+                }
+                self.portal = Some(portal::PortalView::new(url));
+            }
+            None => {
+                self.portal = None;
+                if self.left_tab == Some(LeftTab::Portal) {
+                    self.left_tab = self.tab_before_portal;
+                }
             }
         }
     }
@@ -978,7 +1022,7 @@ impl SimApp {
 }
 
 impl eframe::App for SimApp {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.status = self.h.status.lock().clone();
         let console_changed = self.console.poll();
@@ -996,6 +1040,7 @@ impl eframe::App for SimApp {
                 self.notice = Some(Notice { text, error, at: Instant::now() });
             }
         }
+        self.sync_portal();
 
         egui::Panel::bottom("status_bar").resizable(false).show(ui, |ui| {
             ui.add_space(3.0);
@@ -1035,11 +1080,21 @@ impl eframe::App for SimApp {
                     LeftTab::Bluetooth => self.bluetooth.ui(ui, &self.h, &self.status.bluetooth),
                     LeftTab::Faults => self.faults_tab(ui),
                     LeftTab::Nvs => self.preferences.ui(ui, &self.h),
+                    LeftTab::Portal => {
+                        if let Some(p) = &mut self.portal {
+                            p.ui(ui, frame);
+                        }
+                    }
                 }
             });
         }
         if self.left_tab != Some(LeftTab::Nvs) {
             self.preferences.hidden();
+        }
+        if self.left_tab != Some(LeftTab::Portal)
+            && let Some(p) = &mut self.portal
+        {
+            p.hidden();
         }
         egui::Panel::bottom("console").resizable(true).default_size(230.0).min_size(90.0).show_collapsible(
             ui,
@@ -1415,6 +1470,45 @@ mod render_tests {
         h.get_by_label("MTU rsp 512 · 03 00 02");
         h.get_by_label("Notification 0x002a · 1b 2a 00 01");
         save(&mut h, "bluetooth");
+    }
+
+    #[test]
+    fn portal_tab_follows_the_portal() {
+        use egui_kittest::kittest::Queryable;
+        let (mut h, ports) = harness(800, 480, BoardInfo::default(), false);
+        h.run_steps(3);
+        assert!(h.query_by_label("Portal").is_none());
+        h.get_by_label("NVS").click();
+        h.run_steps(3);
+
+        ports.status.lock().portal_url = Some("http://127.0.0.1:8080/".into());
+        h.run_steps(3);
+        h.get_by_label("Portal");
+        h.get_by_label("http://127.0.0.1:8080/");
+        assert!(h.state().left_tab == Some(LeftTab::Portal), "the portal's tab comes to the front");
+
+        ports.status.lock().portal_url = None;
+        h.run_steps(3);
+        assert!(h.query_by_label("Portal").is_none());
+        assert!(h.state().left_tab == Some(LeftTab::Nvs), "back to the tab it replaced");
+    }
+
+    #[test]
+    fn portal_tab_stays_behind_while_the_server_tab_onboards() {
+        use egui_kittest::kittest::Queryable;
+        let mock = mock_trmnl::MockServer::new(mock_trmnl::Panel::Og);
+        mock.start(0).unwrap();
+        let (mut h, ports) =
+            harness_with(800, 480, BoardInfo::default(), false, UiOptions { mock: Some(mock), ..Default::default() });
+        h.run_steps(3);
+        h.get_by_label("Onboard the device here…").click();
+        h.run_steps(3);
+
+        // Nothing listens there: the panel's background submit fails later, unnoticed by the test.
+        ports.status.lock().portal_url = Some("http://127.0.0.1:1/".into());
+        h.run_steps(3);
+        h.get_by_label("Portal");
+        assert!(h.state().left_tab == Some(LeftTab::Server));
     }
 
     #[test]
