@@ -227,6 +227,7 @@ fn main() -> Result<()> {
             let Some(l) = sim_ui::launch(boards, cli.env.clone())? else { return Ok(()) };
             // What the launcher sets; the rest stays as given on the command line.
             cli.mac = l.mac.or(cli.mac);
+            cli.flash = cli.flash.take().or(l.flash);
             cli.erase |= l.erase;
             cli.hot_reload |= l.hot_reload;
             (l.env, l.firmware)
@@ -483,4 +484,16 @@ fn save_png(frame: &sim_api::SharedFrame, path: &std::path::Path) -> Result<()> 
     let (w, h, ch, px) = frame.lock().viewer(None);
     std::fs::write(path, sim_control::encode_png_channels(w, h, ch, &px))?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod tests {
+    /// Each env the release list maps to is a board here, or a build the simulator doesn't have.
+    #[test]
+    fn release_models_map_to_boards() {
+        let envs: Vec<&str> = super::board_envs().into_iter().map(|(e, _)| e).collect();
+        for env in sim_ui::release_envs().filter(|e| *e != "TRMNL_X_E1003") {
+            assert!(envs.contains(&env), "{env} is not a board");
+        }
+    }
 }

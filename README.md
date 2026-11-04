@@ -8,10 +8,20 @@ locally or in GitHub Actions.
 
 You always say which image to run (`trmnl-sim <image>`). The board is the PlatformIO env the
 firmware was built with: the `-<env>` in the image's file name (`FW1.8.17-trmnl.bin`), else
-`--env`. Started without an image, the window asks for it (setting the board from its name
-where it can), and optionally the MAC, whether to erase the flash, and hot reload. It offers the last
-choice again, apart from erasing (kept in `trmnl-sim/preferences.json` in your config
-directory).
+`--env`. Started without an image, the window asks which firmware to run, on two tabs:
+
+- **Release firmware**: a device and a version from [the public list of
+  releases](https://trmnl.com/api-docs#tag/flash-firmwares/GET/api/firmware/flash), which sets
+  the board. Start downloads the image and ELF to `trmnl-sim/firmware/<env>/` in your cache
+  directory, once per version. The board's flash is `trmnl-sim/flash/<env>.bin` in your config
+  directory (unless `--flash` says otherwise), so its WiFi and API key carry over between
+  versions, as on a reflashed device, and survive clearing the cache. Only builds published with
+  an ELF can run; the others are listed greyed out.
+- **Custom firmware**: a local image (setting the board from its name where it can), the board,
+  and hot reload.
+
+Both also take the MAC and whether to erase the flash. The window offers the last choice again,
+apart from erasing (kept in `trmnl-sim/preferences.json` in your config directory).
 The firmware's post-build steps write the image and its ELF; envs without a merge step in
 the firmware's `platformio.ini` (e.g. `trmnl_test`, `local`, `WAVESHARE_397`) have none.
 

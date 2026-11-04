@@ -3579,6 +3579,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "sim-api",
+ "ureq",
 ]
 
 [[package]]

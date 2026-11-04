@@ -9,6 +9,7 @@ mod device;
 mod faults;
 mod launcher;
 mod preferences;
+mod releases;
 mod server;
 mod touch;
 
@@ -60,6 +61,7 @@ fn app_icon() -> egui::IconData {
 }
 
 pub use launcher::{BoardChoice, Launch, launch};
+pub use releases::release_envs;
 
 /// Ask for a merged firmware image with an open dialog, starting in `dir` (`None`: cancelled).
 fn pick_firmware(dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
