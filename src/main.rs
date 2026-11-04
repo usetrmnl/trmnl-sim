@@ -484,3 +484,15 @@ fn save_png(frame: &sim_api::SharedFrame, path: &std::path::Path) -> Result<()> 
     std::fs::write(path, sim_control::encode_png_channels(w, h, ch, &px))?;
     Ok(())
 }
+
+#[cfg(all(test, feature = "gui"))]
+mod tests {
+    /// Each env the release list maps to is a board here, or a build the simulator doesn't have.
+    #[test]
+    fn release_models_map_to_boards() {
+        let envs: Vec<&str> = super::board_envs().into_iter().map(|(e, _)| e).collect();
+        for env in sim_ui::release_envs().filter(|e| *e != "TRMNL_X_E1003") {
+            assert!(envs.contains(&env), "{env} is not a board");
+        }
+    }
+}
