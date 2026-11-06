@@ -37,6 +37,8 @@ pub(super) struct HttpJob {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub head_only: bool,
+    /// POST this body (AT+HTTPCPOST) instead of a GET or HEAD.
+    pub body: Option<Vec<u8>>,
     pub offline: bool,
     pub dns_overrides: Vec<(String, Ipv4Addr)>,
     pub host_ports: Vec<(u16, u16)>,
@@ -60,7 +62,11 @@ pub(super) fn spawn(job: HttpJob) -> Receiver<HttpMsg> {
         .spawn(move || {
             let res = run(&job, &tx);
             if let Err(e) = &res {
-                log::debug!("esp-at modem: GET {} failed: {e}", job.url);
+                log::debug!(
+                    "esp-at modem: {} {} failed: {e}",
+                    if job.body.is_some() { "POST" } else { "GET" },
+                    job.url
+                );
             }
             let _ = tx.send(HttpMsg::Done(res));
         })
@@ -104,7 +110,13 @@ fn run(job: &HttpJob, tx: &SyncSender<HttpMsg>) -> Result<(), String> {
     let resolver = SimResolver { overrides: job.dns_overrides.clone(), host_ports: job.host_ports.clone(), offline };
     let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
 
-    let resp = if job.head_only {
+    let resp = if let Some(body) = &job.body {
+        let mut r = agent.post(&job.url);
+        for (k, v) in &job.headers {
+            r = r.header(k, v);
+        }
+        r.send(&body[..])
+    } else if job.head_only {
         let mut r = agent.head(&job.url);
         for (k, v) in &job.headers {
             r = r.header(k, v);
