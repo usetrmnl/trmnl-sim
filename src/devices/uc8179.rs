@@ -471,8 +471,10 @@ impl Uc8179 {
             self.mosi_out = None;
         }
         if dc != self.dc && !cs && !self.dc && !self.read_bits.is_empty() {
-            // DC went high after a read command: start driving the response
-            self.read_pos = 0;
+            // DC went high after a read command: the first bit is on MOSI before the first clock,
+            // so a host that samples while SCK is high reads each byte whole
+            self.mosi_out = Some(self.read_bits[0]);
+            self.read_pos = 1;
         }
         let rising = sck && !self.sck;
         let falling = !sck && self.sck;
@@ -482,10 +484,12 @@ impl Uc8179 {
         if cs {
             return;
         }
-        if self.dc && !self.read_bits.is_empty() && self.read_pos < self.read_bits.len() {
-            // Read phase: shift one response bit out per clock pulse
+        if self.dc && !self.read_bits.is_empty() && self.read_pos <= self.read_bits.len() {
+            // Read phase, one clock per bit: each falling edge puts the next response bit out
             if falling {
-                self.mosi_out = Some(self.read_bits[self.read_pos]);
+                if let Some(&bit) = self.read_bits.get(self.read_pos) {
+                    self.mosi_out = Some(bit);
+                }
                 self.read_pos += 1;
             }
             return;
@@ -914,6 +918,38 @@ mod tests {
         p.spi_bytes(now, &[c]);
         p.set_pins(now, false, true, false, false, true); // DC high: data
         p.spi_bytes(now, data);
+    }
+
+    // Bit-bangs the REV command as get_panel_rev() does, sampling MOSI while SCK is high or after it falls.
+    fn read_rev(p: &mut Uc8179, sample_while_high: bool) -> [u8; 7] {
+        p.set_pins(0, false, false, false, false, true);
+        p.spi_bytes(0, &[0x70]);
+        p.set_pins(0, false, true, false, false, true);
+        let mut out = [0u8; 7];
+        for byte in out.iter_mut() {
+            for _ in 0..8 {
+                p.set_pins(0, false, true, true, false, true);
+                let high = p.mosi_out.unwrap_or(true);
+                p.set_pins(0, false, true, false, false, true);
+                let low = p.mosi_out.unwrap_or(true);
+                *byte = (*byte << 1) | (if sample_while_high { high } else { low }) as u8;
+            }
+        }
+        p.set_pins(0, true, true, false, false, true);
+        out
+    }
+
+    #[test]
+    fn rev_read_while_sck_is_high_returns_whole_bytes() {
+        let mut p = Uc8179::new(0xfeffff0c);
+        assert_eq!(read_rev(&mut p, true), [0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0x0c]);
+    }
+
+    #[test]
+    fn rev_read_after_sck_falls_shifts_each_byte_left_as_the_real_panel_does() {
+        // A desk OG answered FD FF FE 18 this way (2026-11-10)
+        let mut p = Uc8179::new(0xfeffff0c);
+        assert_eq!(read_rev(&mut p, false)[3..], [0xfd, 0xff, 0xfe, 0x18]);
     }
 
     #[test]
