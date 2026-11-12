@@ -664,6 +664,7 @@ impl Uc8179 {
         let invert = self.cdi[0] & 1 != 0; // DDX[0]: 1 => data bit 1 means white
         let frame_hz = match self.pll & 0x3f {
             0x06 => 50,
+            0x0f => 200,
             0x3c => 50,
             0x3a => 100,
             0x29 => 150,
@@ -837,8 +838,10 @@ impl Uc8179 {
         if self.color.is_some() {
             return self.update_color(now);
         }
-        let k = (self.k_black, self.k_white);
         let Some(r) = &mut self.refresh else { return };
+        // K_BLACK and K_WHITE are per 50 Hz frame; a faster frame moves particles less.
+        let per_frame = |k: f32| 1.0 - (1.0 - k).powf(r.frame_ns as f32 / (20 * MS) as f32);
+        let k = (per_frame(self.k_black), per_frame(self.k_white));
         let target = (((now.saturating_sub(r.start)) / r.frame_ns) as u32).min(r.total_frames);
         if target == r.frames_done {
             if target >= r.total_frames {
