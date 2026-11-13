@@ -417,6 +417,16 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                     st.docked = docked;
                     st.charging = charging;
                 }
+                Command::SetPose(pose) => {
+                    m.board().set_pose(pose);
+                    ports.console.lock().push_sim(&format!(
+                        "device turned to {} (rotation {:.0}°, tilt {:.0}°)",
+                        pose.name(),
+                        pose.rotation_deg,
+                        pose.tilt_deg
+                    ));
+                    ports.status.lock().pose = pose;
+                }
                 Command::SetRefreshFlashing(on) => {
                     m.board().set_refresh_flashing(on);
                     ports.console.lock().push_sim(if on { "refresh flashing on" } else { "refresh flashing off" });

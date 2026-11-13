@@ -1,12 +1,14 @@
 //! TRMNL X: ESP32-S3; 10.3" 1872×1404 parallel e-paper (LCD_CAM i80 bus + GPIO
 //! row control, TPS65185 PMIC); IQS323 capacitive touch bar; TCA9535 I/O
 //! expander (display power sequencing, charger status = the magnetic dock,
-//! modem straps); BQ27427 fuel gauge; ESP32-C5 ESP-AT modem on UART0 for 5 GHz.
+//! modem straps); BQ27427 fuel gauge; BMA530 accelerometer (the device's pose);
+//! ESP32-C5 ESP-AT modem on UART0 for 5 GHz.
 
-use sim_api::{BoardInfo, TouchZone};
+use sim_api::{BoardInfo, Pose, TouchZone};
 
 use super::Board;
 use crate::devices::esp_at_modem::{EspAtModem, ModemAp, ModemConfig};
+use crate::devices::i2c::bma530::Bma530;
 use crate::devices::i2c::bq27427::Bq27427;
 use crate::devices::i2c::iqs323::Iqs323;
 use crate::devices::i2c::tca9535::{Tca9535, pins};
@@ -38,6 +40,7 @@ pub struct TrmnlX {
     pub modem: EspAtModem,
     docked: bool,
     battery_mv: u32,
+    pose: Pose,
     modem_power: (bool, bool),
     last_now: u64,
 }
@@ -76,10 +79,11 @@ impl TrmnlX {
             modem,
             docked: false,
             battery_mv: 4000,
+            pose: Pose::default(),
             modem_power: (false, false),
             last_now: 0,
         };
-        b.apply_power_inputs();
+        b.apply_inputs();
         b
     }
 
@@ -92,6 +96,7 @@ impl TrmnlX {
         i2c.add(Box::new(Tps65185::new()));
         i2c.add(Box::new(Iqs323::new()));
         i2c.add(Box::new(Bq27427::new(1)));
+        i2c.add(Box::new(Bma530::new()));
         i2c
     }
 
@@ -107,13 +112,18 @@ impl TrmnlX {
         self.docked && self.battery_mv < 4150
     }
 
-    /// Dock/charger/battery state onto the expander and the gauge.
-    fn apply_power_inputs(&mut self) {
+    /// Host inputs onto the chips: dock/charger/battery on the expander and the gauge,
+    /// the pose on the accelerometer.
+    fn apply_inputs(&mut self) {
         let (docked, charging, mv) = (self.docked, self.charging_now(), self.battery_mv);
         self.tca().set_charger(docked, charging);
         let soc = (mv.saturating_sub(3000) as f32 / 12.0).clamp(0.0, 100.0) as u8;
         if let Some(bq) = self.i2c.device_mut::<Bq27427>() {
             bq.set_battery(mv as u16, charging, soc);
+        }
+        let pose = self.pose;
+        if let Some(bma) = self.i2c.device_mut::<Bma530>() {
+            bma.pose = pose;
         }
     }
 
@@ -238,6 +248,7 @@ impl Board for TrmnlX {
             has_dock: true,
             has_5ghz: true,
             has_fuel_gauge: true,
+            has_accelerometer: true,
             ..Default::default()
         }
     }
@@ -268,7 +279,12 @@ impl Board for TrmnlX {
 
     fn set_docked(&mut self, docked: bool) {
         self.docked = docked;
-        self.apply_power_inputs();
+        self.apply_inputs();
+    }
+
+    fn set_pose(&mut self, pose: Pose) {
+        self.pose = pose;
+        self.apply_inputs();
     }
 
     /// The modem (dual band) sees every access point; each band's get BSSIDs numbered like
@@ -331,7 +347,7 @@ impl Board for TrmnlX {
 
     fn set_battery_mv(&mut self, mv: u32) {
         self.battery_mv = mv;
-        self.apply_power_inputs();
+        self.apply_inputs();
     }
 
     fn diagnostics(&mut self, now: u64) -> String {
@@ -377,7 +393,7 @@ impl Board for TrmnlX {
         if powered {
             r.section(|r| self.i2c.restore_state(r))?;
         }
-        self.apply_power_inputs();
+        self.apply_inputs();
         Ok(())
     }
 }

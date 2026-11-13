@@ -12,6 +12,7 @@
 //! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift; `"down": bool` holds / lifts instead | |
 //! | POST   | `/gesture`             | `{"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | |
 //! | POST   | `/dock`                | `{"docked": true}`                             | |
+//! | POST   | `/orientation`         | `{"orientation": "portrait_upright"\|"flat"\|...}` or `{"rotation": 90, "tilt": 15}` | |
 //! | POST   | `/reset`               |                                                | |
 //! | POST   | `/power-cycle`         |                                                | |
 //! | POST   | `/wake`                |                                                | |
@@ -229,6 +230,31 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             h.send(Command::SetDocked(docked));
             ok()
         }
+        (Method::Post, "/orientation") => {
+            let b = body_json(body)?;
+            let mut pose = match b.get("orientation") {
+                Some(name) => name
+                    .as_str()
+                    .and_then(sim_api::Pose::named)
+                    .ok_or_else(|| format!("orientation must be one of {}", sim_api::Pose::NAMES.join(", ")))?,
+                None => h.status.lock().pose,
+            };
+            let (rotation, tilt) = (b["rotation"].as_f64(), b["tilt"].as_f64());
+            if b.get("orientation").is_none() && rotation.is_none() && tilt.is_none() {
+                return Err("need {\"orientation\": name} and/or {\"rotation\": deg, \"tilt\": deg}".into());
+            }
+            if let Some(r) = rotation {
+                pose.rotation_deg = r as f32;
+            }
+            if let Some(t) = tilt {
+                if !(-90.0..=90.0).contains(&t) {
+                    return Err("tilt must be within -90..90 degrees".into());
+                }
+                pose.tilt_deg = t as f32;
+            }
+            h.send(Command::SetPose(pose));
+            ok()
+        }
         (Method::Post, "/reset") => {
             h.send(Command::Reset);
             ok()
@@ -417,8 +443,14 @@ fn status_json(h: &SimHandle) -> Value {
             "has_dock": st.board.has_dock,
             "has_5ghz": st.board.has_5ghz,
             "has_refresh_flashing": st.board.has_refresh_flashing,
+            "has_accelerometer": st.board.has_accelerometer,
         },
         "docked": st.docked,
+        "orientation": {
+            "name": st.pose.name(),
+            "rotation": st.pose.rotation_deg,
+            "tilt": st.pose.tilt_deg,
+        },
         "charging": st.charging,
         "touching": st.touching.map(|z| z.name()),
         "battery_mv": st.battery_mv,

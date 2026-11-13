@@ -353,6 +353,30 @@ mod tests {
     }
 
     #[test]
+    fn orientation_takes_a_name_or_angles() {
+        use sim_api::{Command, Pose};
+        let (h, p) = sim_api::channel(Arc::new(Frame::new(4, 2).into()));
+        let pose = |p: &sim_api::SimPorts| match p.commands.try_recv() {
+            Ok(Command::SetPose(pose)) => pose,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(call_tool(&h, None, "orientation", json!({"orientation": "portrait_upright"}))["isError"], false);
+        assert_eq!(pose(&p), Pose::named("portrait_upright").unwrap());
+        // Angles alone keep the current pose's other angle (the status still says default).
+        assert_eq!(call_tool(&h, None, "orientation", json!({"rotation": 200}))["isError"], false);
+        assert_eq!(pose(&p), Pose { rotation_deg: 200.0, ..Pose::default() });
+        assert_eq!(call_tool(&h, None, "orientation", json!({"orientation": "flat", "tilt": 70}))["isError"], false);
+        assert_eq!(pose(&p), Pose { rotation_deg: 0.0, tilt_deg: 70.0 });
+        assert_eq!(call_tool(&h, None, "orientation", json!({"orientation": "sideways"}))["isError"], true);
+        assert_eq!(call_tool(&h, None, "orientation", json!({"tilt": 120}))["isError"], true);
+        assert_eq!(call_tool(&h, None, "orientation", json!({}))["isError"], true);
+        assert_eq!(
+            call_tool(&h, None, "status", json!({}))["structuredContent"]["orientation"]["name"],
+            "landscape_right"
+        );
+    }
+
+    #[test]
     fn screenshots_are_images_and_compare_takes_base64() {
         let (h, _p) = sim_api::channel(Arc::new(Frame::new(4, 2).into()));
         let r = call_tool(&h, None, "screenshot", json!({"x": 0, "y": 0, "w": 2, "h": 2}));

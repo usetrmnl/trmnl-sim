@@ -198,6 +198,7 @@ struct SimApp {
     docked_pending: Option<Pending<bool>>,
     button: ButtonState,
     battery_pending: Option<Pending<u32>>,
+    pose_pending: Option<Pending<sim_api::Pose>>,
     turbo_pending: Option<Pending<bool>>,
     wifi_pending: Option<Pending<bool>>,
     pause_pending: Option<Pending<bool>>,
@@ -241,6 +242,7 @@ impl SimApp {
             docked_pending: None,
             button: ButtonState::default(),
             battery_pending: None,
+            pose_pending: None,
             turbo_pending: None,
             wifi_pending: None,
             pause_pending: None,
@@ -608,6 +610,38 @@ impl SimApp {
         });
     }
 
+    /// How the device is held, for its accelerometer: the firmware's four orientations,
+    /// lying flat, and the exact angles.
+    fn orientation(&mut self, ui: &mut Ui) {
+        section(ui, "Orientation");
+        let before = Pending::resolve(&mut self.pose_pending, self.status.pose);
+        let mut pose = before;
+        ui.horizontal_wrapped(|ui| {
+            for (label, name) in [
+                ("Landscape", "landscape_right"),
+                ("Portrait", "portrait_upright"),
+                ("Landscape 180°", "landscape_left"),
+                ("Portrait 180°", "portrait_upside_down"),
+                ("Flat", "flat"),
+            ] {
+                if ui.selectable_label(pose.name() == name, label).on_hover_text(name).clicked()
+                    && let Some(p) = sim_api::Pose::named(name)
+                {
+                    pose = p;
+                }
+            }
+        });
+        ui.spacing_mut().slider_width = (ui.available_width() - 110.0).max(60.0);
+        ui.add(egui::Slider::new(&mut pose.rotation_deg, 0.0..=359.0).step_by(1.0).suffix("°").text("rotation"))
+            .on_hover_text("Turn in the device's plane (0 = landscape as shipped)");
+        ui.add(egui::Slider::new(&mut pose.tilt_deg, 0.0..=90.0).step_by(1.0).suffix("°").text("tilt"))
+            .on_hover_text("Lean back from upright (90 = lying on its back)");
+        if pose != before {
+            self.send(Command::SetPose(pose));
+            Pending::set(&mut self.pose_pending, pose);
+        }
+    }
+
     fn controls(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -671,6 +705,10 @@ impl SimApp {
                     }
                 });
                 ui.weak("Click = tap, hold = finger down, shift-click latches. Keys: left/down/right arrows or 1/2/3.");
+            }
+
+            if board.has_accelerometer {
+                self.orientation(ui);
             }
 
             section(ui, "Emulation");

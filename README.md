@@ -133,7 +133,7 @@ faults:
 | Internet down | `{"net": {"offline": true}}` | only the host is reachable, like `--offline` |
 | Cut connections | `{"net": {"tcp_cut": {"after_bytes": 20000, "stall": false, "port": 8080}}}` | new TCP connections get a RST (or stall) after N bytes towards the device |
 | Power loss | `{"power_loss": {"partition": "nvs", "op": "program", "nth": 3, "cut": "torn"}}` | one-shot power cut at the `nth` flash `op` (`any`, `program`, `erase`) in a partition or `range`; `cut`: `before`, `torn` (half written) or `after` |
-| I2C device absent | `{"i2c_absent": [85]}` | NACKs everything (X: `0x55` gauge, `0x44` touch bar, `0x20` expander, `0x68` PMIC) |
+| I2C device absent | `{"i2c_absent": [85]}` | NACKs everything (X: `0x55` gauge, `0x44` touch bar, `0x20` expander, `0x68` PMIC, `0x18` accelerometer) |
 | Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held; X: the PMIC never reports power good |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands |
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: ERROR for AT commands starting with these |
@@ -175,6 +175,14 @@ console (`[sim] log I: src/bl.cpp [701]: …`) for tests to wait on.
 
 **A factory-fresh TRMNL X** (`--erase`) flashes its modem (about 13 s of virtual time), then
 waits in shipment mode until docked (`POST /dock`) and restarts into setup.
+
+**The TRMNL X's pose** feeds its BMA530 accelerometer (I2C `0x18`): it stands in landscape,
+leaning back 15°, until `POST /orientation` (or the window's Orientation controls) turns it
+to one of the firmware's orientations (`portrait_upright`, `landscape_left`,
+`portrait_upside_down`, `landscape_right`), lays it `flat`, or sets `rotation`/`tilt` in
+degrees. The reading follows the firmware's mounting of the chip (45° to the panel edges), so
+rotation 90 is the pose the firmware draws at bb_epaper rotation 90. The pose is a host
+setting like the WiFi environment: restoring a save point keeps the current one.
 
 ## Command line
 
@@ -399,6 +407,7 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 | `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap (`"down": true/false`: hold / lift a finger) |
 | `POST /gesture {"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | TRMNL X slide (slide mode only) |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
+| `POST /orientation {"orientation": "portrait_upright"}` | TRMNL X pose: a named orientation or `flat`, or `{"rotation": deg, "tilt": deg}` |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
 | `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points; `{"portal_client": false}` lets an unattended portal run ahead in turbo |
 | `POST /battery {"mv": N}` | |
@@ -582,8 +591,8 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 ├─ board/              what's wired to the pins (spi_epd.rs: OG, BWRY and SPI-panel BYOD boards;
 │                      trmnl_x.rs; parallel_byod.rs: PaperS3, T5 Pro); Board trait
 ├─ devices/            e-paper controllers (UC8179/UC81xx, SSD16xx, dual-CS, parallel), SPI NOR flash,
-│                      ESP-AT modem, I2C chips (TCA9535, TPS65185, IQS323, BQ27427, BQ27220, AXP2101,
-│                      M5Stack PY32 and M5IOE1)
+│                      ESP-AT modem, I2C chips (TCA9535, TPS65185, IQS323, BQ27427, BMA530, BQ27220,
+│                      AXP2101, M5Stack PY32 and M5IOE1)
 ├─ coverage/           executed-instruction bitmaps, DWARF line mapping, lcov output
 ├─ hle/                ESP-IDF function replacements by ELF symbol (WiFi driver, sleep,
 │                      ADC), ISA-neutral; hooks can call back into guest code or wrap it
@@ -622,8 +631,8 @@ found this way.
   only verifies; no WiFi 6 details or BLE.
 - WiFi is modelled at the IDF driver API, not 802.11: signal, roaming and power save are canned.
 - TRMNL OG: nothing on the I2C bus. No USB data or serial input on any device.
-- TRMNL X: no accelerometer; the modem does station
-  mode and HTTP GET only.
+- TRMNL X: the accelerometer gives raw samples only (no orientation engine or INT1); the
+  modem does station mode and HTTP GET only.
 - Timing counts instructions (1 per cycle), not cycles; flash operations are instant.
 - The e-paper model is exact in pixels but approximate in grays and ghosting; the 4-color
   refresh is a fixed frame sequence.

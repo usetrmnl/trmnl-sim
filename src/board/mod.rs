@@ -70,6 +70,8 @@ pub trait Board: Send {
         false
     }
     fn set_docked(&mut self, _docked: bool) {}
+    /// How the device is held, for boards with an accelerometer.
+    fn set_pose(&mut self, _pose: sim_api::Pose) {}
     /// The access points in range / all of them in or out of range, for radios on the board
     /// (the TRMNL X's ESP32-C5 modem); the SoC's own radio is simulated by its WiFi HLE.
     fn set_wifi_networks(&mut self, _networks: &[sim_api::WifiNetwork]) {}

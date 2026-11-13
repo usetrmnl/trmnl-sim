@@ -46,6 +46,7 @@ fn main() -> anyhow::Result<()> {
                 has_dock: true,
                 has_5ghz: true,
                 has_fuel_gauge: true,
+                has_accelerometer: true,
                 ..Default::default()
             }
         } else {
@@ -57,6 +58,7 @@ fn main() -> anyhow::Result<()> {
                 has_5ghz: false,
                 has_refresh_flashing: false,
                 has_fuel_gauge: false,
+                has_accelerometer: false,
             }
         };
     }
@@ -258,6 +260,10 @@ impl Fake {
                 } else if let Some(s) = self.button_since.take() {
                     self.sim(&format!("button held {:.2} s (virtual)", (self.t - s) as f64 / 1e9));
                 }
+            }
+            Command::SetPose(pose) => {
+                self.p.status.lock().pose = pose;
+                self.sim(&format!("device turned to {}", pose.name()));
             }
             Command::SetBatteryMv(mv) => {
                 self.p.status.lock().battery_mv = mv;
