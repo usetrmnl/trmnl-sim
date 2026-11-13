@@ -182,9 +182,9 @@ to one of the firmware's orientations (`portrait_upright`, `landscape_left`,
 `portrait_upside_down`, `landscape_right`), lays it `flat`, or sets `rotation`/`tilt` in
 degrees. The reading follows the firmware's mounting of the chip (45° to the panel edges), so
 rotation 90 is the pose the firmware draws at bb_epaper rotation 90. The window draws the
-device turned to the nearest quarter (the dock stays below it), so content the firmware
-rotated for the pose reads upright. The pose is a host
-setting like the WiFi environment: restoring a save point keeps the current one.
+device turned to the nearest quarter, so content the firmware rotated for the pose reads
+upright. The pose is a host setting like the WiFi environment: restoring a save point keeps
+the current one.
 
 ## Command line
 

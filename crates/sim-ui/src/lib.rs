@@ -800,8 +800,8 @@ impl SimApp {
         let ctx = ui.ctx().clone();
         let avail = ui.available_size();
         let scr = self.screen.size();
-        let geom = Geometry::new(scr, board.has_touchbar, board.has_dock);
-        // Held another way round, the device is drawn turned (its dock stays below it).
+        let geom = Geometry::new(scr, board.has_touchbar);
+        // Held another way round, the device is drawn turned.
         let turn = if board.has_accelerometer {
             Turn(Pending::resolve(&mut self.pose_pending, self.status.pose).quarter_turns())
         } else {
@@ -835,7 +835,7 @@ impl SimApp {
         let body = geom.body(scr) * zoom;
         let snap_v = |v: Vec2| (v * ppp).round() / ppp;
         let local = Rect::from_min_size(Pos2::ZERO, snap_v(body));
-        let dev = turn.size(local.size()) + Vec2::new(0.0, geom.dock * zoom + caption);
+        let dev = turn.size(local.size()) + Vec2::new(0.0, caption);
         let below_w = if below { BELOW_W } else { 0.0 };
         let group = Vec2::new(dev.x.max(below_w), dev.y + gap + below_h);
         let content = group + Vec2::splat(2.0 * PAD);
@@ -877,12 +877,7 @@ impl SimApp {
                     zones[i] = self.zone_vis(i, resp.hovered());
                 }
             }
-            let look = Look {
-                white_bezel: self.white_bezel,
-                docked: board.has_dock && self.status.docked,
-                zones,
-                accent: ui.visuals().selection.bg_fill,
-            };
+            let look = Look { white_bezel: self.white_bezel, zones, accent: ui.visuals().selection.bg_fill };
             self.screen.paint(&turned, body_rect, zoom, &geom, &look);
 
             if below {

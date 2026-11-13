@@ -98,7 +98,7 @@ impl Screen {
         true
     }
 
-    /// Paint the device. `body` is the device body (bezel incl. chin; excludes the dock), in
+    /// Paint the device. `body` is the device body (bezel incl. chin), in
     /// `painter`'s unturned frame.
     pub fn paint(&self, painter: &Turned, body: Rect, zoom: f32, geom: &Geometry, look: &Look) {
         let ppp = painter.painter.ctx().pixels_per_point();
@@ -106,11 +106,6 @@ impl Screen {
         let border = geom.border * zoom;
         let radius = (border * if geom.touchbar { 0.8 } else { 0.55 }).clamp(3.0, 40.0);
         let white = look.white_bezel;
-
-        // The dock stays on the table under the device, whichever way it is turned.
-        if look.docked && geom.dock > 0.0 {
-            paint_dock(painter.painter, painter.map.rect(body), geom.dock * zoom, white);
-        }
 
         // Soft drop shadow.
         let shadow = Shadow {
@@ -169,7 +164,6 @@ pub enum ZoneVis {
 
 pub struct Look {
     pub white_bezel: bool,
-    pub docked: bool,
     pub zones: [ZoneVis; 3],
     pub accent: Color32,
 }
@@ -180,20 +174,17 @@ pub struct Geometry {
     pub border: f32,
     /// Extra bezel below the screen (on the TRMNL X it holds the touch bar).
     pub chin: f32,
-    /// Space reserved below the body for the dock.
-    pub dock: f32,
     pub touchbar: bool,
 }
 
 impl Geometry {
-    pub fn new(scr: Vec2, touchbar: bool, has_dock: bool) -> Self {
+    pub fn new(scr: Vec2, touchbar: bool) -> Self {
         let border = if touchbar { scr.x * 0.018 } else { scr.x * BEZEL_RATIO };
         // Measured on product photos: below the screen, the body is about 13% of the screen
         // height on the OG/BWRY and 12% on the X, against a thinner bezel elsewhere.
         let bottom = scr.y * if touchbar { CHIN_RATIO_X } else { CHIN_RATIO };
         let chin = (bottom - border).max(0.0);
-        let dock = if has_dock { scr.y * 0.05 } else { 0.0 };
-        Geometry { border, chin, dock, touchbar }
+        Geometry { border, chin, touchbar }
     }
 
     /// Body (bezel + chin) size at zoom 1.
@@ -201,9 +192,9 @@ impl Geometry {
         Vec2::new(scr.x + 2.0 * self.border, scr.y + 2.0 * self.border + self.chin)
     }
 
-    /// Body (turned) plus the dock allowance below it, at zoom 1.
+    /// Body as turned, at zoom 1.
     pub fn total(&self, scr: Vec2, turn: Turn) -> Vec2 {
-        turn.size(self.body(scr)) + Vec2::new(0.0, self.dock)
+        turn.size(self.body(scr))
     }
 
     pub fn screen_rect(&self, body: Rect, zoom: f32, scr: Vec2) -> Rect {
@@ -224,41 +215,6 @@ impl Geometry {
             Rect::from_min_size(Pos2::new(x0, strip.min.y), Vec2::new(strip.width() / 3.0, h))
         })
     }
-}
-
-fn paint_dock(painter: &egui::Painter, body: Rect, dock_h: f32, white: bool) {
-    let (fill, edge, top) = if white {
-        (Color32::from_rgb(0xdc, 0xda, 0xd3), Color32::from_rgb(0xb9, 0xb7, 0xb0), Color32::from_rgb(0xee, 0xed, 0xe8))
-    } else {
-        (Color32::from_rgb(0x30, 0x30, 0x33), Color32::from_rgb(0x48, 0x48, 0x4c), Color32::from_rgb(0x3e, 0x3e, 0x42))
-    };
-    let w = body.width() * 0.78;
-    let base = Rect::from_min_max(
-        Pos2::new(body.center().x - w / 2.0, body.max.y - dock_h * 0.9),
-        Pos2::new(body.center().x + w / 2.0, body.max.y + dock_h),
-    );
-    let r = (dock_h * 0.35).clamp(2.0, 24.0);
-    painter.add(
-        Shadow {
-            offset: [0, (dock_h * 0.2).clamp(1.0, 8.0) as i8],
-            blur: (dock_h * 0.8).clamp(4.0, 30.0) as u8,
-            spread: 0,
-            color: Color32::from_black_alpha(60),
-        }
-        .as_shape(base, r),
-    );
-    painter.rect_filled(base, r, fill);
-    painter.rect_stroke(base, r, Stroke::new(1.0, edge), StrokeKind::Inside);
-    // Top highlight where the device rests.
-    painter.line_segment(
-        [Pos2::new(base.min.x + r, body.max.y + 1.0), Pos2::new(base.max.x - r, body.max.y + 1.0)],
-        Stroke::new(1.0, top),
-    );
-    // Charging LED on the front of the dock.
-    let led = Pos2::new(base.max.x - r - dock_h * 0.4, body.max.y + dock_h * 0.5);
-    let lr = (dock_h * 0.09).clamp(1.5, 4.0);
-    painter.circle_filled(led, lr * 2.2, Color32::from_rgba_unmultiplied(0x3c, 0xd0, 0x6a, 40));
-    painter.circle_filled(led, lr, Color32::from_rgb(0x3c, 0xd0, 0x6a));
 }
 
 fn paint_touchbar(painter: &Turned, zones: &[Rect; 3], vis: &[ZoneVis; 3], white: bool, accent: Color32) {
