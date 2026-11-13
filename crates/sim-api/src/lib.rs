@@ -175,8 +175,12 @@ impl Pose {
         if self.tilt_deg.abs() > 52.0 {
             return "flat";
         }
-        let r = self.rotation_deg.rem_euclid(360.0);
-        Self::NAMES[((r + 45.0) / 90.0) as usize % 4]
+        Self::NAMES[self.quarter_turns() as usize]
+    }
+
+    /// The rotation to the nearest quarter turn, 0..=3 (the firmware's quadrants).
+    pub fn quarter_turns(&self) -> u8 {
+        ((self.rotation_deg.rem_euclid(360.0) + 45.0) / 90.0) as u8 % 4
     }
 }
 

@@ -1,6 +1,11 @@
-//! The e-paper texture and the TRMNL OG-style device drawing.
+//! The e-paper texture and the TRMNL OG-style device drawing, turned to how the device is
+//! held (`Turn`).
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, TextureFilter, TextureHandle, TextureOptions, Vec2};
+use egui::epaint::{Mesh, Shadow, Vertex};
+use egui::{
+    Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, TextureFilter, TextureHandle, TextureId, TextureOptions,
+    Vec2,
+};
 use sim_api::SharedFrame;
 
 /// Paper and ink colours used to render darkness 0..=255.
@@ -93,26 +98,28 @@ impl Screen {
         true
     }
 
-    /// Paint the device. `body` is the device body (bezel incl. chin; excludes the dock).
-    pub fn paint(&self, painter: &egui::Painter, body: Rect, zoom: f32, geom: &Geometry, look: &Look) {
-        let ppp = painter.ctx().pixels_per_point();
+    /// Paint the device. `body` is the device body (bezel incl. chin; excludes the dock), in
+    /// `painter`'s unturned frame.
+    pub fn paint(&self, painter: &Turned, body: Rect, zoom: f32, geom: &Geometry, look: &Look) {
+        let ppp = painter.painter.ctx().pixels_per_point();
         let snap = |p: Pos2| Pos2::new((p.x * ppp).round() / ppp, (p.y * ppp).round() / ppp);
         let border = geom.border * zoom;
         let radius = (border * if geom.touchbar { 0.8 } else { 0.55 }).clamp(3.0, 40.0);
         let white = look.white_bezel;
 
+        // The dock stays on the table under the device, whichever way it is turned.
         if look.docked && geom.dock > 0.0 {
-            paint_dock(painter, body, geom.dock * zoom, white);
+            paint_dock(painter.painter, painter.map.rect(body), geom.dock * zoom, white);
         }
 
         // Soft drop shadow.
-        let shadow = egui::epaint::Shadow {
+        let shadow = Shadow {
             offset: [0, (border * 0.25).clamp(2.0, 12.0) as i8],
             blur: (border * 0.9).clamp(6.0, 40.0) as u8,
             spread: 0,
             color: Color32::from_black_alpha(if white { 50 } else { 80 }),
         };
-        painter.add(shadow.as_shape(body, radius));
+        painter.shadow(shadow, body, radius);
 
         let (fill, edge, lip) = if white {
             (
@@ -136,9 +143,7 @@ impl Screen {
         let lip_w = (border * 0.12).clamp(1.0, 3.0);
         painter.rect_filled(screen.expand(lip_w), CornerRadius::same(1), lip);
         match &self.tex {
-            Some(t) => {
-                painter.image(t.id(), screen, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-            }
+            Some(t) => painter.image(t.id(), screen),
             None => {
                 painter.rect_filled(screen, 0.0, Color32::from_rgb(PAPER[0], PAPER[1], PAPER[2]));
             }
@@ -196,9 +201,9 @@ impl Geometry {
         Vec2::new(scr.x + 2.0 * self.border, scr.y + 2.0 * self.border + self.chin)
     }
 
-    /// Body plus the dock allowance, at zoom 1.
-    pub fn total(&self, scr: Vec2) -> Vec2 {
-        self.body(scr) + Vec2::new(0.0, self.dock)
+    /// Body (turned) plus the dock allowance below it, at zoom 1.
+    pub fn total(&self, scr: Vec2, turn: Turn) -> Vec2 {
+        turn.size(self.body(scr)) + Vec2::new(0.0, self.dock)
     }
 
     pub fn screen_rect(&self, body: Rect, zoom: f32, scr: Vec2) -> Rect {
@@ -234,7 +239,7 @@ fn paint_dock(painter: &egui::Painter, body: Rect, dock_h: f32, white: bool) {
     );
     let r = (dock_h * 0.35).clamp(2.0, 24.0);
     painter.add(
-        egui::epaint::Shadow {
+        Shadow {
             offset: [0, (dock_h * 0.2).clamp(1.0, 8.0) as i8],
             blur: (dock_h * 0.8).clamp(4.0, 30.0) as u8,
             spread: 0,
@@ -256,7 +261,7 @@ fn paint_dock(painter: &egui::Painter, body: Rect, dock_h: f32, white: bool) {
     painter.circle_filled(led, lr, Color32::from_rgb(0x3c, 0xd0, 0x6a));
 }
 
-fn paint_touchbar(painter: &egui::Painter, zones: &[Rect; 3], vis: &[ZoneVis; 3], white: bool, accent: Color32) {
+fn paint_touchbar(painter: &Turned, zones: &[Rect; 3], vis: &[ZoneVis; 3], white: bool, accent: Color32) {
     let strip = zones[0].union(zones[2]);
     let r = strip.height() / 2.0;
     let (base, edge, mark) = if white {
@@ -308,4 +313,145 @@ fn paint_touchbar(painter: &egui::Painter, zones: &[Rect; 3], vis: &[ZoneVis; 3]
         }
     }
     painter.rect_stroke(strip, r, Stroke::new(1.0, edge), StrokeKind::Inside);
+}
+
+/// How far the device drawing is turned clockwise, in quarter turns (0..=3). The firmware
+/// draws for the way the device is held (FastEPD `setRotation(90)` puts logical x along
+/// the panel's -y, i.e. content turned a quarter counter-clockwise in panel memory), so
+/// turning the drawing by the pose's quarter turns shows that content upright.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Turn(pub u8);
+
+impl Turn {
+    /// The size `v` takes up once turned.
+    pub fn size(self, v: Vec2) -> Vec2 {
+        if self.0 % 2 == 1 { Vec2::new(v.y, v.x) } else { v }
+    }
+}
+
+/// Takes the unturned frame `local` to its turned place at `out_min`.
+#[derive(Clone, Copy, Debug)]
+pub struct TurnMap {
+    pub turn: Turn,
+    pub local: Rect,
+    pub out_min: Pos2,
+}
+
+impl TurnMap {
+    /// Where `p` (in `local`) ends up.
+    pub fn pos(&self, p: Pos2) -> Pos2 {
+        let (u, v) = (p.x - self.local.min.x, p.y - self.local.min.y);
+        let (w, h) = (self.local.width(), self.local.height());
+        let d = match self.turn.0 % 4 {
+            0 => Vec2::new(u, v),
+            1 => Vec2::new(h - v, u),
+            2 => Vec2::new(w - u, h - v),
+            _ => Vec2::new(v, w - u),
+        };
+        self.out_min + d
+    }
+
+    pub fn rect(&self, r: Rect) -> Rect {
+        Rect::from_two_pos(self.pos(r.min), self.pos(r.max))
+    }
+
+    /// Corner radii follow their corners round.
+    fn corners(&self, c: impl Into<CornerRadius>) -> CornerRadius {
+        let mut c = c.into();
+        for _ in 0..self.turn.0 % 4 {
+            c = CornerRadius { nw: c.sw, ne: c.nw, se: c.ne, sw: c.se };
+        }
+        c
+    }
+}
+
+/// A painter that draws in a `TurnMap`'s unturned frame. Every shape the device drawing uses
+/// stays axis-aligned under a quarter turn.
+pub struct Turned<'a> {
+    pub painter: &'a egui::Painter,
+    pub map: TurnMap,
+}
+
+impl Turned<'_> {
+    fn rect(&self, r: Rect) -> Rect {
+        self.map.rect(r)
+    }
+
+    fn pos(&self, p: Pos2) -> Pos2 {
+        self.map.pos(p)
+    }
+
+    fn corners(&self, c: impl Into<CornerRadius>) -> CornerRadius {
+        self.map.corners(c)
+    }
+
+    pub fn rect_filled(&self, r: Rect, c: impl Into<CornerRadius>, fill: Color32) {
+        self.painter.rect_filled(self.rect(r), self.corners(c), fill);
+    }
+
+    pub fn rect_stroke(&self, r: Rect, c: impl Into<CornerRadius>, stroke: Stroke, kind: StrokeKind) {
+        self.painter.rect_stroke(self.rect(r), self.corners(c), stroke, kind);
+    }
+
+    pub fn line_segment(&self, [a, b]: [Pos2; 2], stroke: Stroke) {
+        self.painter.line_segment([self.pos(a), self.pos(b)], stroke);
+    }
+
+    pub fn circle_filled(&self, c: Pos2, radius: f32, fill: Color32) {
+        self.painter.circle_filled(self.pos(c), radius, fill);
+    }
+
+    /// Only the shadow's shape turns: it still falls downwards, the way the room is lit.
+    pub fn shadow(&self, shadow: Shadow, r: Rect, c: impl Into<CornerRadius>) {
+        self.painter.add(shadow.as_shape(self.rect(r), self.corners(c)));
+    }
+
+    /// The whole texture on `r`, turned with the device.
+    pub fn image(&self, tex: TextureId, r: Rect) {
+        let mut mesh = Mesh::with_texture(tex);
+        let corners = [
+            (r.left_top(), [0.0, 0.0]),
+            (r.right_top(), [1.0, 0.0]),
+            (r.right_bottom(), [1.0, 1.0]),
+            (r.left_bottom(), [0.0, 1.0]),
+        ];
+        for (p, [u, v]) in corners {
+            mesh.vertices.push(Vertex { pos: self.pos(p), uv: Pos2::new(u, v), color: Color32::WHITE });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        self.painter.add(mesh);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_turned(turn: u8, f: impl FnOnce(&TurnMap)) {
+        let local = Rect::from_min_size(Pos2::ZERO, Vec2::new(40.0, 30.0));
+        f(&TurnMap { turn: Turn(turn), local, out_min: Pos2::new(100.0, 200.0) });
+    }
+
+    #[test]
+    fn quarter_turns_are_clockwise_and_stay_in_the_turned_box() {
+        // The chin (bottom edge of the unturned body) ends up on the left after a clockwise turn.
+        let chin = Rect::from_min_max(Pos2::new(0.0, 25.0), Pos2::new(40.0, 30.0));
+        let want = [
+            Rect::from_min_max(Pos2::new(100.0, 225.0), Pos2::new(140.0, 230.0)),
+            Rect::from_min_max(Pos2::new(100.0, 200.0), Pos2::new(105.0, 240.0)),
+            Rect::from_min_max(Pos2::new(100.0, 200.0), Pos2::new(140.0, 205.0)),
+            Rect::from_min_max(Pos2::new(125.0, 200.0), Pos2::new(130.0, 240.0)),
+        ];
+        for (q, want) in want.into_iter().enumerate() {
+            with_turned(q as u8, |t| assert_eq!(t.rect(chin), want, "turn {q}"));
+        }
+        assert_eq!(Turn(1).size(Vec2::new(40.0, 30.0)), Vec2::new(30.0, 40.0));
+        with_turned(1, |t| {
+            // Top-left goes to top-right; the rounded north-west corner becomes north-east.
+            assert_eq!(t.pos(Pos2::ZERO), Pos2::new(130.0, 200.0));
+            let c = t.corners(CornerRadius { nw: 9, ..CornerRadius::ZERO });
+            assert_eq!(c, CornerRadius { ne: 9, ..CornerRadius::ZERO });
+        });
+    }
 }

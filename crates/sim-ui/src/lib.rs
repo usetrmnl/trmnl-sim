@@ -25,7 +25,7 @@ use egui::{
 use sim_api::{BoardInfo, Command, RunState, SavePointInfo, SavePointSource, SimHandle, Status};
 
 use console::ConsoleView;
-use device::{Geometry, Look, Screen, ZoneVis};
+use device::{Geometry, Look, Screen, Turn, TurnMap, Turned, ZoneVis};
 use server::ServerPanel;
 use touch::{TouchInput, ZONES};
 
@@ -801,7 +801,13 @@ impl SimApp {
         let avail = ui.available_size();
         let scr = self.screen.size();
         let geom = Geometry::new(scr, board.has_touchbar, board.has_dock);
-        let total_unit = geom.total(scr);
+        // Held another way round, the device is drawn turned (its dock stays below it).
+        let turn = if board.has_accelerometer {
+            Turn(Pending::resolve(&mut self.pose_pending, self.status.pose).quarter_turns())
+        } else {
+            Turn(0)
+        };
+        let total_unit = geom.total(scr, turn);
         let below = board.has_button || board.has_touchbar;
         let (below_h, gap) = if below { (BELOW_H, GAP) } else { (0.0, 0.0) };
         let caption = if board.name.is_empty() { 0.0 } else { CAPTION };
@@ -827,7 +833,9 @@ impl SimApp {
         self.screen.update(&ctx, nearest);
 
         let body = geom.body(scr) * zoom;
-        let dev = total_unit * zoom + Vec2::new(0.0, caption);
+        let snap_v = |v: Vec2| (v * ppp).round() / ppp;
+        let local = Rect::from_min_size(Pos2::ZERO, snap_v(body));
+        let dev = turn.size(local.size()) + Vec2::new(0.0, geom.dock * zoom + caption);
         let below_w = if below { BELOW_W } else { 0.0 };
         let group = Vec2::new(dev.x.max(below_w), dev.y + gap + below_h);
         let content = group + Vec2::splat(2.0 * PAD);
@@ -848,11 +856,14 @@ impl SimApp {
                     ui.visuals().weak_text_color(),
                 );
             }
-            let body_rect = Rect::from_min_size(Pos2::new(snap(left), snap(top + caption)), body);
+            let painter = ui.painter().clone();
+            let map = TurnMap { turn, local, out_min: Pos2::new(snap(left), snap(top + caption)) };
+            let turned = Turned { painter: &painter, map };
+            let body_rect = Rect::from_min_size(Pos2::ZERO, body);
 
             let mut zones = [ZoneVis::Idle; 3];
             if board.has_touchbar {
-                let rects = geom.zone_rects(body_rect, zoom, scr);
+                let rects = geom.zone_rects(body_rect, zoom, scr).map(|r| map.rect(r));
                 let shift = ui.input(|i| i.modifiers.shift);
                 for (i, r) in rects.iter().enumerate() {
                     let resp = ui
@@ -872,7 +883,7 @@ impl SimApp {
                 zones,
                 accent: ui.visuals().selection.bg_fill,
             };
-            self.screen.paint(ui.painter(), body_rect, zoom, &geom, &look);
+            self.screen.paint(&turned, body_rect, zoom, &geom, &look);
 
             if below {
                 let row = Rect::from_min_size(
@@ -1596,5 +1607,24 @@ mod render_tests {
         save(&mut h, "x_touch_left");
         let cmds: Vec<String> = ports.commands.try_iter().map(|c| format!("{c:?}")).collect();
         assert!(cmds.iter().any(|c| c == &format!("{:?}", Command::TouchDown(TouchZone::Left))), "{cmds:?}");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_x_turned() {
+        let board = BoardInfo {
+            name: "TRMNL X".into(),
+            has_touchbar: true,
+            has_dock: true,
+            has_5ghz: true,
+            has_accelerometer: true,
+            ..Default::default()
+        };
+        let (mut h, ports) = harness(1872, 1404, board, true);
+        for name in ["portrait_upright", "landscape_left", "portrait_upside_down"] {
+            ports.status.lock().pose = sim_api::Pose::named(name).unwrap();
+            h.run_steps(3);
+            save(&mut h, &format!("x_{name}"));
+        }
     }
 }
