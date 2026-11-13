@@ -129,6 +129,59 @@ pub struct BoardInfo {
     pub has_refresh_flashing: bool,
     /// A fuel gauge on I2C (TRMNL X: BQ27427 at 0x55) that `Faults::i2c_absent` can remove.
     pub has_fuel_gauge: bool,
+    /// An accelerometer (TRMNL X: BMA530 at 0x18) that reads the device's [`Pose`].
+    pub has_accelerometer: bool,
+}
+
+/// How the device is held, for its accelerometer (`Command::SetPose`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pose {
+    /// Turn of the device in its own plane, in degrees: 0 is landscape as shipped, and
+    /// 90/180/270 are the poses the TRMNL X firmware draws at bb_epaper rotation
+    /// 90/180/270 (portrait_upright, landscape_left, portrait_upside_down).
+    pub rotation_deg: f32,
+    /// Lean back from standing upright, in degrees: 90 is lying flat on its back.
+    pub tilt_deg: f32,
+}
+
+impl Default for Pose {
+    /// Standing in landscape on its stand.
+    fn default() -> Self {
+        Pose { rotation_deg: 0.0, tilt_deg: 15.0 }
+    }
+}
+
+impl Pose {
+    /// Named poses, by the firmware's orientation names (accelerometer.cpp
+    /// `bma530_orientation_to_string`), plus `flat`.
+    pub const NAMES: &[&str] =
+        &["landscape_right", "portrait_upright", "landscape_left", "portrait_upside_down", "flat"];
+
+    pub fn named(name: &str) -> Option<Self> {
+        let rotation_deg = match name {
+            "landscape_right" => 0.0,
+            "portrait_upright" => 90.0,
+            "landscape_left" => 180.0,
+            "portrait_upside_down" => 270.0,
+            "flat" => return Some(Pose { rotation_deg: 0.0, tilt_deg: 90.0 }),
+            _ => return None,
+        };
+        Some(Pose { rotation_deg, ..Pose::default() })
+    }
+
+    /// The firmware's name for the pose's quadrant, or `flat` when it lies too flat for
+    /// the firmware to trust the rotation (tilt past ~52°, its BMA530 theta threshold).
+    pub fn name(&self) -> &'static str {
+        if self.tilt_deg.abs() > 52.0 {
+            return "flat";
+        }
+        Self::NAMES[self.quarter_turns() as usize]
+    }
+
+    /// The rotation to the nearest quarter turn, 0..=3 (the firmware's quadrants).
+    pub fn quarter_turns(&self) -> u8 {
+        ((self.rotation_deg.rem_euclid(360.0) + 45.0) / 90.0) as u8 % 4
+    }
 }
 
 // ---- faults -------------------------------------------------------------------------------------
@@ -559,6 +612,8 @@ pub enum Command {
     SetDocked(bool),
     /// Battery voltage in millivolts.
     SetBatteryMv(u32),
+    /// Turn or tilt the device (what its accelerometer reads).
+    SetPose(Pose),
     /// Show the black/white flashes of a (4-color) panel refresh (true, the default), or
     /// keep the old image until the new one appears (false). Refresh timing is unchanged.
     SetRefreshFlashing(bool),
@@ -664,6 +719,8 @@ pub struct Status {
     /// All touch bar zones currently held (bit 0 left, 1 center, 2 right).
     pub touch_mask: u8,
     pub docked: bool,
+    /// How the device is held (boards with an accelerometer).
+    pub pose: Pose,
     /// The battery is being charged (docked and not full).
     pub charging: bool,
     /// Number of completed `Command::Touch` taps.
@@ -708,6 +765,7 @@ impl Default for Status {
             touching: None,
             touch_mask: 0,
             docked: false,
+            pose: Pose::default(),
             charging: false,
             touches_done: 0,
             wifi_available: true,
@@ -832,6 +890,21 @@ pub fn channel(frame: SharedFrame) -> (SimHandle, SimPorts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pose_names_follow_the_firmware_quadrants() {
+        for &name in Pose::NAMES {
+            assert_eq!(Pose::named(name).unwrap().name(), name);
+        }
+        let at = |rotation_deg, tilt_deg| Pose { rotation_deg, tilt_deg }.name();
+        assert_eq!(at(-30.0, 0.0), "landscape_right");
+        assert_eq!(at(44.0, 0.0), "landscape_right");
+        assert_eq!(at(46.0, 0.0), "portrait_upright");
+        assert_eq!(at(359.0, 0.0), "landscape_right");
+        assert_eq!(at(180.0, 50.0), "landscape_left");
+        assert_eq!(at(180.0, 55.0), "flat");
+        assert_eq!(Pose::named("sideways"), None);
+    }
 
     #[test]
     fn env_from_file_names() {

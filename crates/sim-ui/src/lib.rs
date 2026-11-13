@@ -25,7 +25,7 @@ use egui::{
 use sim_api::{BoardInfo, Command, RunState, SavePointInfo, SavePointSource, SimHandle, Status};
 
 use console::ConsoleView;
-use device::{Geometry, Look, Screen, ZoneVis};
+use device::{Geometry, Look, Screen, Turn, TurnMap, Turned, ZoneVis};
 use server::ServerPanel;
 use touch::{TouchInput, ZONES};
 
@@ -198,6 +198,7 @@ struct SimApp {
     docked_pending: Option<Pending<bool>>,
     button: ButtonState,
     battery_pending: Option<Pending<u32>>,
+    pose_pending: Option<Pending<sim_api::Pose>>,
     turbo_pending: Option<Pending<bool>>,
     wifi_pending: Option<Pending<bool>>,
     pause_pending: Option<Pending<bool>>,
@@ -241,6 +242,7 @@ impl SimApp {
             docked_pending: None,
             button: ButtonState::default(),
             battery_pending: None,
+            pose_pending: None,
             turbo_pending: None,
             wifi_pending: None,
             pause_pending: None,
@@ -608,6 +610,38 @@ impl SimApp {
         });
     }
 
+    /// How the device is held, for its accelerometer: the firmware's four orientations,
+    /// lying flat, and the exact angles.
+    fn orientation(&mut self, ui: &mut Ui) {
+        section(ui, "Orientation");
+        let before = Pending::resolve(&mut self.pose_pending, self.status.pose);
+        let mut pose = before;
+        ui.horizontal_wrapped(|ui| {
+            for (label, name) in [
+                ("Landscape", "landscape_right"),
+                ("Portrait", "portrait_upright"),
+                ("Landscape 180°", "landscape_left"),
+                ("Portrait 180°", "portrait_upside_down"),
+                ("Flat", "flat"),
+            ] {
+                if ui.selectable_label(pose.name() == name, label).on_hover_text(name).clicked()
+                    && let Some(p) = sim_api::Pose::named(name)
+                {
+                    pose = p;
+                }
+            }
+        });
+        ui.spacing_mut().slider_width = (ui.available_width() - 110.0).max(60.0);
+        ui.add(egui::Slider::new(&mut pose.rotation_deg, 0.0..=359.0).step_by(1.0).suffix("°").text("rotation"))
+            .on_hover_text("Turn in the device's plane (0 = landscape as shipped)");
+        ui.add(egui::Slider::new(&mut pose.tilt_deg, 0.0..=90.0).step_by(1.0).suffix("°").text("tilt"))
+            .on_hover_text("Lean back from upright (90 = lying on its back)");
+        if pose != before {
+            self.send(Command::SetPose(pose));
+            Pending::set(&mut self.pose_pending, pose);
+        }
+    }
+
     fn controls(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -671,6 +705,10 @@ impl SimApp {
                     }
                 });
                 ui.weak("Click = tap, hold = finger down, shift-click latches. Keys: left/down/right arrows or 1/2/3.");
+            }
+
+            if board.has_accelerometer {
+                self.orientation(ui);
             }
 
             section(ui, "Emulation");
@@ -762,8 +800,14 @@ impl SimApp {
         let ctx = ui.ctx().clone();
         let avail = ui.available_size();
         let scr = self.screen.size();
-        let geom = Geometry::new(scr, board.has_touchbar, board.has_dock);
-        let total_unit = geom.total(scr);
+        let geom = Geometry::new(scr, board.has_touchbar);
+        // Held another way round, the device is drawn turned.
+        let turn = if board.has_accelerometer {
+            Turn(Pending::resolve(&mut self.pose_pending, self.status.pose).quarter_turns())
+        } else {
+            Turn(0)
+        };
+        let total_unit = geom.total(scr, turn);
         let below = board.has_button || board.has_touchbar;
         let (below_h, gap) = if below { (BELOW_H, GAP) } else { (0.0, 0.0) };
         let caption = if board.name.is_empty() { 0.0 } else { CAPTION };
@@ -789,7 +833,9 @@ impl SimApp {
         self.screen.update(&ctx, nearest);
 
         let body = geom.body(scr) * zoom;
-        let dev = total_unit * zoom + Vec2::new(0.0, caption);
+        let snap_v = |v: Vec2| (v * ppp).round() / ppp;
+        let local = Rect::from_min_size(Pos2::ZERO, snap_v(body));
+        let dev = turn.size(local.size()) + Vec2::new(0.0, caption);
         let below_w = if below { BELOW_W } else { 0.0 };
         let group = Vec2::new(dev.x.max(below_w), dev.y + gap + below_h);
         let content = group + Vec2::splat(2.0 * PAD);
@@ -810,11 +856,14 @@ impl SimApp {
                     ui.visuals().weak_text_color(),
                 );
             }
-            let body_rect = Rect::from_min_size(Pos2::new(snap(left), snap(top + caption)), body);
+            let painter = ui.painter().clone();
+            let map = TurnMap { turn, local, out_min: Pos2::new(snap(left), snap(top + caption)) };
+            let turned = Turned { painter: &painter, map };
+            let body_rect = Rect::from_min_size(Pos2::ZERO, body);
 
             let mut zones = [ZoneVis::Idle; 3];
             if board.has_touchbar {
-                let rects = geom.zone_rects(body_rect, zoom, scr);
+                let rects = geom.zone_rects(body_rect, zoom, scr).map(|r| map.rect(r));
                 let shift = ui.input(|i| i.modifiers.shift);
                 for (i, r) in rects.iter().enumerate() {
                     let resp = ui
@@ -828,13 +877,8 @@ impl SimApp {
                     zones[i] = self.zone_vis(i, resp.hovered());
                 }
             }
-            let look = Look {
-                white_bezel: self.white_bezel,
-                docked: board.has_dock && self.status.docked,
-                zones,
-                accent: ui.visuals().selection.bg_fill,
-            };
-            self.screen.paint(ui.painter(), body_rect, zoom, &geom, &look);
+            let look = Look { white_bezel: self.white_bezel, zones, accent: ui.visuals().selection.bg_fill };
+            self.screen.paint(&turned, body_rect, zoom, &geom, &look);
 
             if below {
                 let row = Rect::from_min_size(
@@ -1558,5 +1602,24 @@ mod render_tests {
         save(&mut h, "x_touch_left");
         let cmds: Vec<String> = ports.commands.try_iter().map(|c| format!("{c:?}")).collect();
         assert!(cmds.iter().any(|c| c == &format!("{:?}", Command::TouchDown(TouchZone::Left))), "{cmds:?}");
+    }
+
+    #[test]
+    #[ignore]
+    fn render_x_turned() {
+        let board = BoardInfo {
+            name: "TRMNL X".into(),
+            has_touchbar: true,
+            has_dock: true,
+            has_5ghz: true,
+            has_accelerometer: true,
+            ..Default::default()
+        };
+        let (mut h, ports) = harness(1872, 1404, board, true);
+        for name in ["portrait_upright", "landscape_left", "portrait_upside_down"] {
+            ports.status.lock().pose = sim_api::Pose::named(name).unwrap();
+            h.run_steps(3);
+            save(&mut h, &format!("x_{name}"));
+        }
     }
 }

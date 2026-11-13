@@ -19,6 +19,7 @@ use std::any::Any;
 use crate::savepoint::{StateReader, StateWriter};
 
 pub mod axp2101;
+pub mod bma530;
 pub mod bq27220;
 pub mod bq27427;
 pub mod env_sensors;

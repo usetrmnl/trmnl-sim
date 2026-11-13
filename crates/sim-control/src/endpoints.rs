@@ -159,6 +159,12 @@ pub static ENDPOINTS: &[Endpoint] = &[
         .params(&[body("gesture", Ty::Enum(&["swipe_next", "swipe_back", "flick_next", "flick_back"]), "the slide").required()]),
     ep(Method::Post, "/dock", "dock", "Put the TRMNL X on (docked: true) or off its magnetic dock.")
         .params(&[body("docked", Ty::Boolean, "on the dock").required()]),
+    ep(Method::Post, "/orientation", "orientation", "TRMNL X: turn or tilt the device (what its BMA530 accelerometer reads). Give a named orientation, or rotation and/or tilt in degrees (the other keeps its current value).")
+        .params(&[
+            body("orientation", Ty::Enum(sim_api::Pose::NAMES), "named pose: the firmware's orientation names, or flat (lying on its back)"),
+            body("rotation", Ty::Number, "turn in the device's plane in degrees: 0 landscape as shipped, 90 portrait_upright, 180 landscape_left, 270 portrait_upside_down"),
+            body("tilt", Ty::Number, "lean back from upright in degrees (default 15, on its stand); past ~52 the firmware treats it as flat"),
+        ]),
     ep(Method::Post, "/reset", "reset", "Reset the chip (as the reset line does)."),
     ep(Method::Post, "/power-cycle", "power_cycle", "Remove and restore power."),
     ep(Method::Post, "/wake", "wake", "Wake the device from deep or light sleep now."),

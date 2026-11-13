@@ -8,6 +8,8 @@ use crate::{Pending, SimApp, section};
 
 /// BQ27427 fuel gauge (TRMNL X).
 const FUEL_GAUGE: u8 = 0x55;
+/// BMA530 accelerometer (TRMNL X).
+const ACCELEROMETER: u8 = 0x18;
 
 impl SimApp {
     /// Whether any fault is on, including ones only the control API sets (the tab is starred).
@@ -30,13 +32,11 @@ impl SimApp {
             panel(ui, &mut f, &board);
             if board.has_fuel_gauge {
                 section(ui, "Fuel gauge");
-                let mut absent = f.i2c_absent.contains(&FUEL_GAUGE);
-                if ui.checkbox(&mut absent, "Absent").on_hover_text("The BQ27427 NACKs every I2C transfer").changed() {
-                    f.i2c_absent.retain(|&a| a != FUEL_GAUGE);
-                    if absent {
-                        f.i2c_absent.push(FUEL_GAUGE);
-                    }
-                }
+                absent_chip(ui, &mut f, FUEL_GAUGE, "The BQ27427 NACKs every I2C transfer");
+            }
+            if board.has_accelerometer {
+                section(ui, "Accelerometer");
+                absent_chip(ui, &mut f, ACCELEROMETER, "The BMA530 NACKs every I2C transfer");
             }
             if board.has_5ghz {
                 section(ui, "Modem");
@@ -122,4 +122,15 @@ fn panel(ui: &mut Ui, f: &mut Faults, board: &BoardInfo) {
         ("BUSY stuck", "The panel controller holds BUSY low forever")
     };
     ui.checkbox(&mut f.panel_busy_stuck, label).on_hover_text(hover);
+}
+
+/// An "Absent" checkbox for the I2C chip at `addr` (`Faults::i2c_absent`).
+fn absent_chip(ui: &mut Ui, f: &mut Faults, addr: u8, hover: &str) {
+    let mut absent = f.i2c_absent.contains(&addr);
+    if ui.checkbox(&mut absent, "Absent").on_hover_text(hover).changed() {
+        f.i2c_absent.retain(|&a| a != addr);
+        if absent {
+            f.i2c_absent.push(addr);
+        }
+    }
 }
