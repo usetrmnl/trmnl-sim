@@ -487,7 +487,6 @@ impl Esp32c5 {
         self.bus.p.wakeup_cause = wake;
         // Keep the RTC time running across resets.
         let now = self.bus.now_ns();
-        self.bus.p.rtc_ticks_base = self.bus.rtc_ticks(now);
         let cycles = self.bus.clock.cycles;
         self.bus.clock = bus::Clock::new(bus::XTAL_HZ);
         self.bus.clock.cycles = cycles;
