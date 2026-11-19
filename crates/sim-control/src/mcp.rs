@@ -394,6 +394,22 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_frame_puts_the_screen_inside_the_device_frame() {
+        let (h, _p) = sim_api::channel(Arc::new(Frame::new(800, 480).into()));
+        let size = |r: &Value| {
+            let png = B64.decode(r["content"][0]["data"].as_str().unwrap()).unwrap();
+            let info = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().clone();
+            (info.width, info.height, info.color_type)
+        };
+        assert_eq!(size(&call_tool(&h, None, "screenshot", json!({}))), (800, 480, png::ColorType::Grayscale));
+        let framed = call_tool(&h, None, "screenshot", json!({"frame": "white"}));
+        assert_eq!(size(&framed), (848, 566, png::ColorType::Rgba));
+        assert_eq!(call_tool(&h, None, "screenshot", json!({"frame": "red"}))["isError"], true);
+        let cropped = call_tool(&h, None, "screenshot", json!({"frame": "black", "x": 0, "y": 0, "w": 2, "h": 2}));
+        assert_eq!(cropped["isError"], true);
+    }
+
+    #[test]
     fn mock_paths_and_queries_round_trip() {
         let (h, _p) = sim_api::channel(Arc::new(Frame::new(4, 2).into()));
         let m = mock_trmnl::MockServer::new(mock_trmnl::Panel::Og);

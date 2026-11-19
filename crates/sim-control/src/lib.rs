@@ -23,7 +23,7 @@
 //! | POST   | `/quit`                |                                                | |
 //! | GET    | `/console`             | `?since=N`                                     | `{"total", "lines":[{"i","text"}]}` |
 //! | POST   | `/wait`                | see [`WaitSpec`]                               | `{"ok", ...}` or 408 |
-//! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop)                 | `image/png` (gray; RGB on color panels) |
+//! | GET    | `/screenshot`          | `?x=&y=&w=&h=` (optional crop) or `?frame=black\|white` | `image/png` (gray; RGB on color panels; RGBA with a frame) |
 //! | POST   | `/screenshot/compare`  | PNG body; `?x=&y=&w=&h=&tolerance=&max_ratio=` | `{"match", "diff_pixels", "diff_ratio"}` |
 //! | POST   | `/savepoint`           | `{"path": "/abs/file.trmnlsave", "label": "..."}` (both optional) | `{"ok", "savepoint"}`; 409 if not possible |
 //! | POST   | `/restore`             | `{"path": "..."}` or `{"id": 3}` (in-memory slot) | `{"ok", "savepoint"}`; 409 on failure |
@@ -379,8 +379,18 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
             Ok(wait(h, &spec))
         }
         (Method::Get, "/screenshot") => {
-            let (w, hgt, ch, px) = h.frame.lock().viewer(crop(q));
-            let png = encode_png_channels(w, hgt, ch, &px);
+            let png = match q.iter().find(|(k, _)| k == "frame") {
+                Some(_) if crop(q).is_some() => return Err("frame cannot be combined with a crop".into()),
+                Some((_, color)) => {
+                    let touchbar = h.status.lock().board.has_touchbar;
+                    let (w, hgt, px) = h.frame.lock().framed(touchbar, color.parse()?);
+                    encode_png_channels(w, hgt, 4, &px)
+                }
+                None => {
+                    let (w, hgt, ch, px) = h.frame.lock().viewer(crop(q));
+                    encode_png_channels(w, hgt, ch, &px)
+                }
+            };
             Ok(Response::from_data(png).with_header(Header::from_bytes("Content-Type", "image/png").unwrap()))
         }
         (Method::Post, "/screenshot/compare") => {
@@ -690,12 +700,16 @@ pub fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
     encode_png_channels(w, h, 1, px)
 }
 
-/// 8-bit PNG: 1 channel = grayscale, 3 = RGB.
+/// 8-bit PNG: 1 channel = grayscale, 3 = RGB, 4 = RGBA.
 pub fn encode_png_channels(w: usize, h: usize, channels: usize, px: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
-        enc.set_color(if channels == 3 { png::ColorType::Rgb } else { png::ColorType::Grayscale });
+        enc.set_color(match channels {
+            4 => png::ColorType::Rgba,
+            3 => png::ColorType::Rgb,
+            _ => png::ColorType::Grayscale,
+        });
         enc.set_depth(png::BitDepth::Eight);
         let mut wr = enc.write_header().unwrap();
         wr.write_image_data(px).unwrap();
