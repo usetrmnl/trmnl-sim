@@ -89,6 +89,8 @@ pub struct Tca9535 {
     /// board (e.g. from `Tps65185::pwr_good`) with `set_input`.
     pub auto_pwr_good: bool,
     pub pwr_good_delay_ns: u64,
+    /// A panel rail never reaches regulation: the TPS65185 keeps PWR_GOOD low.
+    pub pwr_good_fault: bool,
     pwrup_wakeup_since: Option<u64>,
 
     /// (levels, output-enable) as last reported by `take_output_changes`.
@@ -115,6 +117,7 @@ impl Tca9535 {
             rc_decay_ns: 2 * MS,
             auto_pwr_good: true,
             pwr_good_delay_ns: MS,
+            pwr_good_fault: false,
             pwrup_wakeup_since: None,
             reported_outputs: None,
         };
@@ -125,7 +128,9 @@ impl Tca9535 {
     /// Power-on reset (register defaults; external levels are kept).
     pub fn reset(&mut self, now: u64) {
         let (ext, decay, auto, delay) = (self.external, self.rc_decay_ns, self.auto_pwr_good, self.pwr_good_delay_ns);
+        let fault = self.pwr_good_fault;
         *self = Self::new();
+        self.pwr_good_fault = fault;
         self.external = ext;
         self.rc_decay_ns = decay;
         self.auto_pwr_good = auto;
@@ -198,7 +203,7 @@ impl Tca9535 {
         match pin {
             pins::BAT_DET => self.rc_high_until.is_some_and(|t| now < t),
             pins::TPS_PWR_GOOD if self.auto_pwr_good => {
-                self.pwrup_wakeup_since.is_some_and(|t| now >= t + self.pwr_good_delay_ns)
+                !self.pwr_good_fault && self.pwrup_wakeup_since.is_some_and(|t| now >= t + self.pwr_good_delay_ns)
             }
             _ => self.external >> pin & 1 != 0,
         }
@@ -434,6 +439,10 @@ mod tests {
         assert_eq!(tca(&mut bus).next_event_ns(t), Some(t + MS));
         t += 3_000 * US;
         assert!(f.digital_read(&mut bus, t, TPS_PWR_GOOD));
+        // A rail that never reaches regulation keeps PWR_GOOD low.
+        tca(&mut bus).pwr_good_fault = true;
+        assert!(!f.digital_read(&mut bus, t, TPS_PWR_GOOD));
+        tca(&mut bus).pwr_good_fault = false;
         // Power off: PWRUP low drops PWR_GOOD.
         f.digital_write(&mut bus, t, TPS_PWRUP, false);
         assert!(!f.digital_read(&mut bus, t, TPS_PWR_GOOD));

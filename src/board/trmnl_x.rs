@@ -327,6 +327,7 @@ impl Board for TrmnlX {
         if let Some(tps) = self.i2c.device_mut::<Tps65185>() {
             tps.rail_fault = faults.panel_busy_stuck;
         }
+        self.tca().pwr_good_fault = faults.panel_busy_stuck;
         self.modem.set_unresponsive(faults.modem_unresponsive);
         self.modem.set_at_errors(&faults.modem_at_errors);
         let now = self.last_now;
