@@ -30,9 +30,12 @@ pub fn install(hooks: &mut Hooks, syms: &Symbols, mc: &mut Memcheck) {
     hooks.install(syms, "multi_heap_realloc", heap_realloc);
     hooks.install(syms, "multi_heap_get_allocated_size", heap_allocated_size);
     if !hooks.install(syms, "prvAddNewTaskToReadyList", task_created) {
-        // GCC's IPA-SRA clone (IDF 4.4 on the S3: prvAddNewTaskToReadyList$isra$6) keeps the
-        // TCB as its first argument
-        if let Some(name) = syms.names_with_prefix("prvAddNewTaskToReadyList$isra").into_iter().next()
+        // GCC's IPA-SRA clone keeps the TCB as its first argument. Xtensa names it with '$'
+        // (IDF 4.4 on the S3: prvAddNewTaskToReadyList$isra$6), RISC-V with '.' (IDF 4.4 on the
+        // C3 at -Os: prvAddNewTaskToReadyList.isra.7).
+        if let Some(name) = ["prvAddNewTaskToReadyList$isra", "prvAddNewTaskToReadyList.isra"]
+            .into_iter()
+            .find_map(|p| syms.names_with_prefix(p).into_iter().next())
             && let Some(a) = syms.addr(&name)
         {
             hooks.install_at(a & !1, "prvAddNewTaskToReadyList", task_created);
