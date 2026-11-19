@@ -88,6 +88,7 @@ bin/sim        # build, then run; the window asks for the image and the board
 bin/sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin   # ... or say which
 bin/sim ../trmnl-firmware/.pio/build/TRMNL_X/FW1.8.17-TRMNL_X.bin --erase   # extra arguments go to trmnl-sim
 bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
+bin/release    # bump the minor version (--patch: the patch), commit, tag, push: a GitHub release
 ```
 
 Or by hand:
@@ -568,6 +569,9 @@ coverage. The firmware repository calls that workflow to test its PRs. Adjust th
 `usetrmnl/...` names if the repositories live elsewhere.
 
 ### Releases
+
+`bin/release` bumps `Cargo.toml`'s minor version (`--patch`: the patch version), commits
+`vX.Y.Z`, tags it and, after asking (`-y` doesn't), pushes both from a clean, up-to-date `main`.
 
 [.github/workflows/release.yml](.github/workflows/release.yml) runs on a pushed `v*` tag
 that matches `Cargo.toml`'s version (`v0.1.0`; a suffix like `v0.2.0-rc.1` makes a

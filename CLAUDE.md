@@ -25,6 +25,7 @@ suite); read the relevant section before changing a subsystem.
 | `bin/build` | release build of the simulator |
 | `bin/test` | fmt, clippy (with and without the GUI), unit tests; run before committing |
 | `bin/sim [<FW…-env.bin>] [--env ENV]` | run a firmware image (its `.elf` next to it) in the window; the board comes from `-<env>` in the name or `--env`; without arguments the window asks |
+| `bin/release [--patch]` | bump the version (minor by default), commit, tag `vX.Y.Z`, push: starts the release workflow; the user runs it |
 
 Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's comment
 density and naming; comments explain hardware behaviour and why, with firmware file:line

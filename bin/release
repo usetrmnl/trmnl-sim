@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Cut a release: bump Cargo.toml's version, commit, tag vX.Y.Z and push both, which starts
+# .github/workflows/release.yml (it requires the tag to match Cargo.toml's version).
+#
+#   bin/release            # minor: 0.5.5 -> 0.6.0
+#   bin/release --patch    # patch: 0.5.5 -> 0.5.6
+#   bin/release -y         # don't ask before pushing
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+part=minor yes=0
+for arg in "$@"; do
+  case "$arg" in
+    --patch) part=patch ;;
+    --minor) part=minor ;;
+    -y|--yes) yes=1 ;;
+    -h|--help) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    *) die "unknown argument: $arg (see --help)" ;;
+  esac
+done
+
+# Release from an up-to-date, clean main.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || die "detached HEAD"
+[[ "$branch" == main ]] || die "on branch $branch, not main"
+[[ -z "$(git status --porcelain)" ]] || die "working tree not clean"
+remote=$(git config "branch.main.remote" || echo origin)
+say "git fetch $remote"
+git fetch -q --tags "$remote"
+upstream="$remote/main"
+[[ "$(git rev-list --count "HEAD..$upstream")" == 0 ]] || die "main is behind $upstream; pull first"
+
+# The [package] version is the first top-level `version = "..."` line in Cargo.toml.
+old=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' Cargo.toml | head -n1)
+[[ -n "$old" ]] || die "no X.Y.Z version in Cargo.toml"
+IFS=. read -r major minor patch <<<"$old"
+case "$part" in
+  minor) new="$major.$((minor + 1)).0" ;;
+  patch) new="$major.$minor.$((patch + 1))" ;;
+esac
+tag="v$new"
+git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists"
+
+if ((yes == 0)); then
+  read -r -p "Release $tag (from $old) and push to $remote? [y/N] " answer
+  [[ "$answer" == [yY]* ]] || die "aborted"
+fi
+
+say "$old -> $new"
+# From here on a failure puts Cargo.toml and Cargo.lock back.
+trap 'git checkout -q -- Cargo.toml Cargo.lock' ERR
+# Only the first match: the [package] version, not a dependency's.
+awk -v old="version = \"$old\"" -v new="version = \"$new\"" \
+  '!done && $0 == old { $0 = new; done = 1 } { print }' Cargo.toml >Cargo.toml.new
+mv Cargo.toml.new Cargo.toml
+cargo update --workspace -q # carry the new version into Cargo.lock without touching dependencies
+if git diff --quiet Cargo.lock; then
+  git checkout -q -- Cargo.toml
+  die "Cargo.lock did not change"
+fi
+
+git commit -q -m "$tag" Cargo.toml Cargo.lock
+git tag "$tag"
+trap - ERR
+say "git push $remote main $tag"
+git push --atomic "$remote" main "$tag" ||
+  die "push failed; the commit and tag are local, retry with: git push --atomic $remote main $tag"
+say "released $tag"
