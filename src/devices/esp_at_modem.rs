@@ -219,13 +219,19 @@ enum Op {
     Http {
         rx: Receiver<http::HttpMsg>,
         not_before: u64,
+        /// AT+HTTPCPOST: answers SEND OK / SEND FAIL and prints no body.
+        post: bool,
     },
 }
 
-#[derive(Clone, Copy)]
 enum DataKind {
     Header,
     Url,
+    /// AT+HTTPCPOST's body, for this URL with these inline headers.
+    Post {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
 }
 
 struct DataMode {
@@ -948,6 +954,15 @@ impl EspAtModem {
                 self.info_ok(t, &s);
             }
             ("HTTPCLIENT", Form::Set(p)) => return self.httpclient(t, &p),
+            // AT+HTTPCPOST=<"url">,<length>[,<http_req_header_cnt>][,<"http_req_header">..]
+            ("HTTPCPOST", Form::Set(p)) => {
+                let Some(url) = self.request_url(p.first()) else { return false };
+                let Some(n @ 1..) = p.get(1).and_then(Param::int) else { return false };
+                let headers = p.iter().skip(3).filter_map(Param::str).filter_map(split_header).collect();
+                self.emit(t, b"\r\nOK\r\n\r\n>");
+                self.data_mode =
+                    Some(DataMode { kind: DataKind::Post { url, headers }, remaining: n as usize, buf: Vec::new() });
+            }
             _ => return false,
         }
         true
@@ -964,6 +979,16 @@ impl EspAtModem {
             DataKind::Url => {
                 self.url_cfg = Some(String::from_utf8_lossy(&dm.buf).into_owned());
                 self.emit(t, b"\r\nSET OK\r\n");
+            }
+            DataKind::Post { url, headers: inline } => {
+                let mut headers = self.custom_headers();
+                headers.extend(inline);
+                if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                    headers.push(("Content-Type".into(), "application/x-www-form-urlencoded".into()));
+                }
+                if !self.start_http(t, url, headers, false, Some(dm.buf)) {
+                    self.emit(t, b"\r\nSEND FAIL\r\n");
+                }
             }
         }
     }
@@ -1039,66 +1064,79 @@ impl EspAtModem {
     /// AT+HTTPCLIENT=<opt>,<content-type>,<"url">,[<"host">],[<"path">],<transport>[,<"data">][,<"header">...]
     fn httpclient(&mut self, t: u64, p: &[Param]) -> bool {
         let opt = p.first().and_then(Param::int);
-        let url = match p.get(2) {
-            Some(Param::Str(u)) if !u.is_empty() => u.clone(),
-            Some(Param::Str(_) | Param::Empty) | None => match &self.url_cfg {
-                Some(u) => u.clone(),
-                None => return false,
-            },
-            Some(Param::Int(_)) => return false,
-        };
+        let Some(url) = self.request_url(p.get(2)) else { return false };
         let head_only = match opt {
             Some(1) => true,
             Some(2) => false,
-            _ => return false, // POST/PUT/DELETE: not used by the firmware
+            _ => return false, // POST (as AT+HTTPCPOST), PUT, DELETE: not used by the firmware
         };
-        let mut headers: Vec<(String, String)> = self
-            .headers
-            .iter()
-            .filter_map(|h| {
-                let h = String::from_utf8_lossy(h);
-                let (k, v) = h.split_once(':')?;
-                Some((k.trim().to_string(), v.trim().to_string()))
-            })
-            .collect();
+        let mut headers = self.custom_headers();
         // Extra per-request headers after the data parameter.
-        for h in p.iter().skip(7).filter_map(Param::str) {
-            if let Some((k, v)) = h.split_once(':') {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
-            }
+        headers.extend(p.iter().skip(7).filter_map(Param::str).filter_map(split_header));
+        if !self.start_http(t, url, headers, head_only, None) {
+            self.error(t);
         }
+        true
+    }
+
+    /// The URL parameter, or the one AT+HTTPURLCFG set when it is empty.
+    fn request_url(&self, p: Option<&Param>) -> Option<String> {
+        match p {
+            Some(Param::Str(u)) if !u.is_empty() => Some(u.clone()),
+            Some(Param::Str(_) | Param::Empty) | None => self.url_cfg.clone(),
+            Some(Param::Int(_)) => None,
+        }
+    }
+
+    /// The AT+HTTPCHEAD headers.
+    fn custom_headers(&self) -> Vec<(String, String)> {
+        self.headers.iter().filter_map(|h| split_header(&String::from_utf8_lossy(h))).collect()
+    }
+
+    /// Starts a request on the HTTP worker (a POST when `body` is given); false when not connected.
+    fn start_http(
+        &mut self,
+        t: u64,
+        url: String,
+        headers: Vec<(String, String)>,
+        head_only: bool,
+        body: Option<Vec<u8>>,
+    ) -> bool {
         self.stats.http_requests += 1;
         self.stats.last_url = Some(url.clone());
         self.stats.last_http_status = None;
         self.stats.last_request_headers = headers.clone();
         if self.connected.is_none() {
             self.stats.http_errors += 1;
-            self.error(t);
-            return true;
+            return false;
         }
         log::debug!(target: "modem", "http start {url} connected={}", self.connected.is_some());
+        let post = body.is_some();
         let rx = http::spawn(http::HttpJob {
             url,
             headers,
             head_only,
+            body,
             offline: self.cfg.offline,
             dns_overrides: self.cfg.dns_overrides.clone(),
             host_ports: self.cfg.host_ports.clone(),
             faults: self.net_faults.clone(),
         });
-        self.op = Op::Http { rx, not_before: t.max(self.now) + self.timing.http_min_ns };
+        self.op = Op::Http { rx, not_before: t.max(self.now) + self.timing.http_min_ns, post };
         true
     }
 
     /// Relay whatever the HTTP worker has produced, stamped at the current time.
     fn pump_http(&mut self) {
-        let Op::Http { rx, not_before } = &self.op else { return };
+        let Op::Http { rx, not_before, post } = &self.op else { return };
+        let post = *post;
         let at = self.now.max(*not_before);
         let mut out: Vec<Vec<u8>> = Vec::new();
         let mut done = None;
         loop {
             match rx.try_recv() {
                 Ok(http::HttpMsg::Status(s)) => self.stats.last_http_status = Some(s),
+                Ok(http::HttpMsg::Data(_)) if post => {}
                 Ok(http::HttpMsg::Data(d)) => {
                     self.stats.http_bytes += d.len() as u64;
                     let mut f = format!("+HTTPCLIENT:{},", d.len()).into_bytes();
@@ -1123,12 +1161,16 @@ impl EspAtModem {
         if let Some(ok) = done {
             log::debug!(target: "modem", "http done ok={ok} at={at} bytes={}", self.stats.http_bytes);
             self.op = Op::Idle;
-            if ok {
-                self.emit(at, b"\r\nOK\r\n");
-            } else {
+            if !ok {
                 self.stats.http_errors += 1;
-                self.emit(at, b"\r\nERROR\r\n");
             }
+            let result: &[u8] = match (post, ok) {
+                (true, true) => b"\r\nSEND OK\r\n",
+                (true, false) => b"\r\nSEND FAIL\r\n",
+                (false, true) => b"\r\nOK\r\n",
+                (false, false) => b"\r\nERROR\r\n",
+            };
+            self.emit(at, result);
             self.cmd_free_at = self.cmd_free_at.max(at);
         }
     }
@@ -1139,4 +1181,10 @@ enum Form {
     Query,
     Test,
     Set(Vec<Param>),
+}
+
+/// "Key: Value" as a (key, value) pair.
+fn split_header(h: &str) -> Option<(String, String)> {
+    let (k, v) = h.split_once(':')?;
+    Some((k.trim().to_string(), v.trim().to_string()))
 }

@@ -569,8 +569,10 @@ fn sntp_time_updated_and_time() {
 
 #[derive(Clone, Debug)]
 struct SeenReq {
+    method: String,
     path: String,
     headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 struct TestServer {
@@ -591,14 +593,25 @@ fn serve(mut s: TcpStream, port: u16, seen: Arc<Mutex<Vec<SeenReq>>>) {
             Ok(n) => buf.extend_from_slice(&tmp[..n]),
         }
     }
-    let head = String::from_utf8_lossy(&buf[..find(&buf, b"\r\n\r\n").unwrap()]).into_owned();
+    let end = find(&buf, b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&buf[..end]).into_owned();
     let mut lines = head.split("\r\n");
-    let path = lines.next().unwrap().split(' ').nth(1).unwrap().to_string();
-    let headers = lines
+    let mut request_line = lines.next().unwrap().split(' ');
+    let method = request_line.next().unwrap().to_string();
+    let path = request_line.next().unwrap().to_string();
+    let headers: Vec<(String, String)> = lines
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
-    seen.lock().unwrap().push(SeenReq { path: path.clone(), headers });
+    let length = headers.iter().find(|(k, _)| k == "content-length").map_or(0, |(_, v)| v.parse().unwrap());
+    let mut body = buf[end + 4..].to_vec();
+    while body.len() < length {
+        match s.read(&mut tmp) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => body.extend_from_slice(&tmp[..n]),
+        }
+    }
+    seen.lock().unwrap().push(SeenReq { method, path: path.clone(), headers, body });
     let reply = |s: &mut TcpStream, status: &str, extra: &str, body: &[u8]| {
         let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n", body.len());
         let _ = s.write_all(body);
@@ -716,6 +729,43 @@ fn http_long_url_via_urlcfg_and_redirect() {
     let seen = srv.seen.lock().unwrap();
     assert_eq!(seen[seen.len() - 1].path, "/small");
     assert_eq!(seen[seen.len() - 2].path, "/redirect");
+}
+
+#[test]
+fn http_post_sends_the_body_and_answers_send_ok() {
+    // AT+HTTPCPOST takes <length> raw bytes after its `>` and prints SEND OK or SEND FAIL, never
+    // the response body.
+    let srv = start_server();
+    let mut h = connected(home_cfg());
+    h.flush();
+    let header = "Content-Type: application/json";
+    h.cmd(&format!("AT+HTTPCHEAD={}", header.len()));
+    assert!(h.wait_for(">", 3000).is_some());
+    h.send(header.as_bytes());
+    assert!(h.wait_for("OK", 3000).is_some());
+    let body = br#"{"logs":[{"message":"hi"}]}"#;
+    h.flush();
+    h.cmd(&format!("AT+HTTPCPOST=\"http://10.0.2.2:{}/api/log\",{},1,\"ID: AA\"", srv.port, body.len()));
+    assert!(h.wait_for(">", 3000).is_some());
+    h.send(body);
+    let out = h.wait_for("SEND OK", 30_000).expect("SEND OK");
+    assert!(!out.contains("+HTTPCLIENT") && !out.contains("hello world"), "{out:?}");
+    let seen = srv.seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!((seen.method.as_str(), seen.path.as_str(), seen.body.as_slice()), ("POST", "/api/log", &body[..]));
+    let get = |k: &str| seen.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    assert_eq!((get("content-type"), get("id")), (Some("application/json".into()), Some("AA".into())));
+
+    // Without a Content-Type header ESP-AT sends its form default; a 404 is SEND FAIL.
+    h.cmd("AT+HTTPCHEAD=0");
+    assert!(h.wait_for("OK", 3000).is_some());
+    h.flush();
+    h.cmd(&format!("AT+HTTPCPOST=\"http://10.0.2.2:{}/404\",2", srv.port));
+    assert!(h.wait_for(">", 3000).is_some());
+    h.send(b"a=");
+    assert!(h.wait_for("SEND FAIL", 30_000).is_some());
+    let seen = srv.seen.lock().unwrap().last().unwrap().clone();
+    let content_type = seen.headers.iter().find(|(n, _)| n == "content-type").map(|(_, v)| v.as_str());
+    assert_eq!(content_type, Some("application/x-www-form-urlencoded"));
 }
 
 #[test]
