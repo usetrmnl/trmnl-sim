@@ -192,6 +192,8 @@ struct SimApp {
     /// The user picked a zoom preset (disables the initial auto-fit fallback).
     zoom_user_set: bool,
     white_bezel: bool,
+    /// Saved screenshots show the panel inside the device frame.
+    screenshot_frame: bool,
     /// Show the panel's refresh flashes (boards with `has_refresh_flashing`).
     refresh_flashing: bool,
     touch: TouchInput,
@@ -237,6 +239,7 @@ impl SimApp {
             zoom: if opts.scale > 0.0 { Zoom::Fixed(opts.scale) } else { Zoom::Fit },
             zoom_user_set: false,
             white_bezel: false,
+            screenshot_frame: true,
             refresh_flashing: true,
             touch: TouchInput::default(),
             docked_pending: None,
@@ -436,7 +439,14 @@ impl SimApp {
         let name = format!("trmnl-{}.png", utc_timestamp());
         let path = rfd::FileDialog::new().set_file_name(&name).add_filter("PNG image", &["png"]).save_file();
         let Some(path) = path else { return };
-        match write_png(&path, &frame) {
+        let (width, height, color, data) = if self.screenshot_frame {
+            let (w, h, data) = device::framed_screenshot(&frame, self.board().has_touchbar, self.white_bezel);
+            (w, h, png::ColorType::Rgba, data)
+        } else {
+            let (w, h, channels, data) = frame.viewer(None);
+            (w, h, if channels == 3 { png::ColorType::Rgb } else { png::ColorType::Grayscale }, data)
+        };
+        match write_png(&path, width, height, color, &data) {
             Ok(()) => self.notify(format!("Saved {}", path.display()), false),
             Err(e) => self.notify(format!("Screenshot failed: {e:#}"), true),
         }
@@ -787,6 +797,8 @@ impl SimApp {
             if ui.button("📷 Save screenshot…").on_hover_text("Save the panel as a PNG (⌘S / Ctrl+S)").clicked() {
                 self.save_screenshot();
             }
+            ui.checkbox(&mut self.screenshot_frame, "Frame in screenshots")
+                .on_hover_text("Save the panel inside the device frame, or the panel's pixels alone");
             ui.checkbox(&mut self.show_console, "Show serial console");
         });
     }
@@ -1307,16 +1319,13 @@ fn utc_timestamp() -> String {
     format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, (rem / 60) % 60, rem % 60)
 }
 
-/// Write the frame as a viewer sees it: 8-bit greyscale (white = 255, i.e. `255 - darkness`),
-/// or RGB on color panels.
-fn write_png(path: &Path, frame: &sim_api::Frame) -> anyhow::Result<()> {
+fn write_png(path: &Path, width: usize, height: usize, color: png::ColorType, data: &[u8]) -> anyhow::Result<()> {
     let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let (width, height, ch, data) = frame.viewer(None);
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
-    enc.set_color(if ch == 3 { png::ColorType::Rgb } else { png::ColorType::Grayscale });
+    enc.set_color(color);
     enc.set_depth(png::BitDepth::Eight);
     let mut w = enc.write_header()?;
-    w.write_image_data(&data)?;
+    w.write_image_data(data)?;
     w.finish()?;
     Ok(())
 }
