@@ -134,7 +134,7 @@ faults:
 | Cut connections | `{"net": {"tcp_cut": {"after_bytes": 20000, "stall": false, "port": 8080}}}` | new TCP connections get a RST (or stall) after N bytes towards the device |
 | Power loss | `{"power_loss": {"partition": "nvs", "op": "program", "nth": 3, "cut": "torn"}}` | one-shot power cut at the `nth` flash `op` (`any`, `program`, `erase`) in a partition or `range`; `cut`: `before`, `torn` (half written) or `after` |
 | I2C device absent | `{"i2c_absent": [85]}` | NACKs everything (X: `0x55` gauge, `0x44` touch bar, `0x20` expander, `0x68` PMIC, `0x18` accelerometer) |
-| Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held; X: the PMIC never reports power good |
+| Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held; X: the PMIC never reports power good, on its PWR_GOOD pin or in its register |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands |
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: ERROR for AT commands starting with these |
 | Chip temperature | `{"chip_temp_c": 60}` | the on-chip sensor reads this instead of 25 °C |
