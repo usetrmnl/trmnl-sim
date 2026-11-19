@@ -198,7 +198,10 @@ pub static ENDPOINTS: &[Endpoint] = &[
             body("settle_ms", Ty::Integer, "once satisfied, wait this long (wall ms) and check again"),
         ]),
     ep(Method::Get, "/screenshot", "screenshot", "The screen as a PNG: grayscale with 0 = ink, 255 = paper; RGB on color panels.")
-        .params(&CROP)
+        .params(&[
+            CROP[0], CROP[1], CROP[2], CROP[3],
+            query("frame", Ty::String, "black or white: the whole screen inside the device frame of that color, as RGBA (not with a crop)"),
+        ])
         .png(),
     ep(Method::Post, "/screenshot/compare", "screenshot_compare", "Compare the screen (or a crop of it) with a reference PNG of the same size.")
         .params(&[

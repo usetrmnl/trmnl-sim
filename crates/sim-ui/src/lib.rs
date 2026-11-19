@@ -440,7 +440,8 @@ impl SimApp {
         let path = rfd::FileDialog::new().set_file_name(&name).add_filter("PNG image", &["png"]).save_file();
         let Some(path) = path else { return };
         let (width, height, color, data) = if self.screenshot_frame {
-            let (w, h, data) = device::framed_screenshot(&frame, self.board().has_touchbar, self.white_bezel);
+            let bezel = if self.white_bezel { sim_api::Bezel::White } else { sim_api::Bezel::Black };
+            let (w, h, data) = frame.framed(self.board().has_touchbar, bezel);
             (w, h, png::ColorType::Rgba, data)
         } else {
             let (w, h, channels, data) = frame.viewer(None);

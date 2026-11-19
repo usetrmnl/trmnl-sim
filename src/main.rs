@@ -96,6 +96,9 @@ struct Cli {
     /// Save the e-paper contents as PNG when the run ends.
     #[arg(long)]
     screenshot: Option<PathBuf>,
+    /// Put --screenshot inside the device frame of this color (black or white).
+    #[arg(long, value_name = "COLOR", requires = "screenshot")]
+    screenshot_frame: Option<sim_api::Bezel>,
     /// Initial display zoom (0 = fit to window).
     #[arg(long, default_value_t = 0.0)]
     scale: f32,
@@ -405,6 +408,7 @@ fn main() -> Result<()> {
 
     let frame_for_shot = frame.clone();
     let (handle, ports) = sim_api::channel(frame);
+    let status_for_shot = handle.status.clone();
     let opts = runner::RunnerOptions {
         max_virtual_ns: cli.seconds.map(|s| (s * 1e9) as u64),
         turbo: cli.turbo,
@@ -469,7 +473,8 @@ fn main() -> Result<()> {
         emu.join().ok().and_then(|o| o.halted)
     };
     if let Some(path) = &cli.screenshot {
-        save_png(&frame_for_shot, path)?;
+        let touchbar = status_for_shot.lock().board.has_touchbar;
+        save_png(&frame_for_shot.lock(), path, cli.screenshot_frame, touchbar)?;
         eprintln!("screenshot saved to {}", path.display());
     }
     if let Some(msg) = halted {
@@ -480,10 +485,50 @@ fn main() -> Result<()> {
 }
 
 /// Write the panel as seen by a viewer (gray: 0 = black ink, 255 = paper; or RGB).
-fn save_png(frame: &sim_api::SharedFrame, path: &std::path::Path) -> Result<()> {
-    let (w, h, ch, px) = frame.lock().viewer(None);
+/// The panel as a viewer sees it, or inside the device frame when a bezel color is given.
+fn save_png(
+    frame: &sim_api::Frame,
+    path: &std::path::Path,
+    bezel: Option<sim_api::Bezel>,
+    touchbar: bool,
+) -> Result<()> {
+    let (w, h, ch, px) = match bezel {
+        Some(bezel) => {
+            let (w, h, px) = frame.framed(touchbar, bezel);
+            (w, h, 4, px)
+        }
+        None => frame.viewer(None),
+    };
     std::fs::write(path, sim_control::encode_png_channels(w, h, ch, &px))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Width, height and PNG color type (0 = grayscale, 6 = RGBA) of what `args` saves.
+    fn saved(args: &[&str]) -> (u32, u32, u8) {
+        let path = std::env::temp_dir().join(format!("trmnl-sim-shot-{}-{}.png", std::process::id(), args.len()));
+        let cli = Cli::parse_from(
+            ["trmnl-sim", "--screenshot", path.to_str().unwrap()].into_iter().chain(args.iter().copied()),
+        );
+        save_png(&sim_api::Frame::new(800, 480), cli.screenshot.as_ref().unwrap(), cli.screenshot_frame, false)
+            .unwrap();
+        let png = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+        (be(16), be(20), png[25])
+    }
+
+    #[test]
+    fn screenshot_is_the_panel_unless_a_frame_is_asked_for() {
+        assert_eq!(saved(&[]), (800, 480, 0));
+        assert_eq!(saved(&["--screenshot-frame", "black"]), (848, 566, 6));
+        assert!(Cli::try_parse_from(["trmnl-sim", "--screenshot-frame", "black"]).is_err(), "needs --screenshot");
+        assert!(Cli::try_parse_from(["trmnl-sim", "--screenshot", "a.png", "--screenshot-frame", "red"]).is_err());
+    }
 }
 
 #[cfg(all(test, feature = "gui"))]

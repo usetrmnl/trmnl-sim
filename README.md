@@ -209,6 +209,7 @@ the current one.
 | `--elf-dir DIR` | Also look here for the ELF of a build an OTA update installs (repeatable; see [HLE and OTA](#architecture)) |
 | `--seconds S` | Stop after S seconds of virtual time |
 | `--screenshot PNG` | Save the display when the run ends |
+| `--screenshot-frame COLOR` | Put `--screenshot` inside the device frame: `black` or `white` |
 | `--panel-rev HEX` | What the panel's REV command returns (the `Panel-Rev` header) |
 | `--rom PATH` | ROM ELF for the build's chip (or `$TRMNL_SIM_ROM`) |
 | `--trace f1,f2` | Log every call to these firmware functions |
@@ -417,7 +418,7 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 | `POST /debug` | dump CPU state, backtrace, FreeRTOS task and board diagnostics to the console |
 | `GET /console?since=N` | serial lines with absolute indices |
 | `POST /wait {...}` | block on conditions, `timeout_s`, `settle_ms`; 408 on timeout, 409 if the CPU halted |
-| `GET /screenshot[?x=&y=&w=&h=]` | grayscale PNG (0 = ink); RGB on color panels |
+| `GET /screenshot[?x=&y=&w=&h=]` | grayscale PNG (0 = ink); RGB on color panels. `?frame=black` or `?frame=white` gives the whole screen inside the device frame, as RGBA |
 | `POST /screenshot/compare?tolerance=&max_ratio=[&x=&y=&w=&h=]` | PNG body in; `{"match", "diff_pixels", "diff_ratio"}` |
 | `GET /mock` | built-in mock server state |
 | `POST /mock/start {"port": N}`, `/mock/stop` | start (returns `device_url`) or stop it |

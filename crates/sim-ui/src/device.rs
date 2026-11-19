@@ -6,18 +6,7 @@ use egui::{
     Color32, CornerRadius, Pos2, Rect, Stroke, StrokeKind, TextureFilter, TextureHandle, TextureId, TextureOptions,
     Vec2,
 };
-use sim_api::{Frame, SharedFrame};
-
-/// Paper and ink colours used to render darkness 0..=255.
-pub const PAPER: [u8; 3] = [0xe8, 0xe6, 0xdf];
-pub const INK: [u8; 3] = [0x1d, 0x1d, 0x1b];
-
-/// Bezel border as a fraction of the screen width.
-pub const BEZEL_RATIO: f32 = 0.03;
-/// Bezel below the screen as a fraction of the screen height (TRMNL OG / BWRY).
-pub const CHIN_RATIO: f32 = 0.13;
-/// The same for the TRMNL X.
-pub const CHIN_RATIO_X: f32 = 0.12;
+use sim_api::{Bezel, INK, PAPER, SharedFrame};
 
 pub struct Screen {
     frame: SharedFrame,
@@ -116,14 +105,14 @@ impl Screen {
         };
         painter.shadow(shadow, body, radius);
 
-        let (fill, edge, lip) = body_colors(white);
+        let (fill, edge, lip) = colors(bezel(white).body_colors());
         painter.rect_filled(body, radius, fill);
         painter.rect_stroke(body, radius, Stroke::new(1.0, edge), StrokeKind::Inside);
 
         let screen = geom.screen_rect(body, zoom, self.size());
         let screen = Rect::from_min_max(snap(screen.min), snap(screen.max));
         // A thin recessed lip around the glass.
-        let lip_w = lip_width(border);
+        let lip_w = sim_api::lip_width(border);
         painter.rect_filled(screen.expand(lip_w), CornerRadius::same(1), lip);
         match &self.tex {
             Some(t) => painter.image(t.id(), screen),
@@ -167,16 +156,12 @@ pub struct Geometry {
 
 impl Geometry {
     pub fn new(scr: Vec2, touchbar: bool) -> Self {
-        let border = if touchbar { scr.x * 0.018 } else { scr.x * BEZEL_RATIO };
-        // Measured on product photos: below the screen, the body is about 13% of the screen
-        // height on the OG/BWRY and 12% on the X, against a thinner bezel elsewhere.
-        let bottom = scr.y * if touchbar { CHIN_RATIO_X } else { CHIN_RATIO };
-        let chin = (bottom - border).max(0.0);
+        let (border, chin) = sim_api::border_and_chin(scr.x, scr.y, touchbar);
         Geometry { border, chin, touchbar }
     }
 
     pub fn corner_radius(&self, zoom: f32) -> f32 {
-        (self.border * zoom * if self.touchbar { 0.8 } else { 0.55 }).clamp(3.0, 40.0)
+        sim_api::corner_radius(self.border * zoom, self.touchbar)
     }
 
     /// Body (bezel + chin) size at zoom 1.
@@ -209,86 +194,19 @@ impl Geometry {
     }
 }
 
-/// Body fill, body edge and the lip around the glass.
-fn body_colors(white: bool) -> (Color32, Color32, Color32) {
-    if white {
-        (Color32::from_rgb(0xf3, 0xf2, 0xee), Color32::from_rgb(0xc9, 0xc7, 0xc0), Color32::from_rgb(0xd6, 0xd4, 0xcd))
-    } else {
-        (Color32::from_rgb(0x23, 0x23, 0x24), Color32::from_rgb(0x3c, 0x3c, 0x3e), Color32::from_rgb(0x12, 0x12, 0x13))
-    }
+fn bezel(white: bool) -> Bezel {
+    if white { Bezel::White } else { Bezel::Black }
 }
 
-/// Touch bar strip, its edge and its zone glyphs.
-fn touchbar_colors(white: bool) -> (Color32, Color32, Color32) {
-    if white {
-        (Color32::from_rgb(0xe7, 0xe6, 0xe1), Color32::from_rgb(0xcc, 0xca, 0xc3), Color32::from_rgb(0x9a, 0x98, 0x92))
-    } else {
-        (Color32::from_rgb(0x2c, 0x2c, 0x2e), Color32::from_rgb(0x3a, 0x3a, 0x3d), Color32::from_rgb(0x7a, 0x7a, 0x80))
-    }
-}
-
-/// Width of the recessed lip around the glass.
-fn lip_width(border: f32) -> f32 {
-    (border * 0.12).clamp(1.0, 3.0)
-}
-
-/// The frame inside the device body for a screenshot: one image pixel per panel pixel, RGBA,
-/// transparent outside the body's rounded corners. Returns (width, height, data).
-pub fn framed_screenshot(frame: &Frame, touchbar: bool, white: bool) -> (usize, usize, Vec<u8>) {
-    let scr = Vec2::new(frame.width as f32, frame.height as f32);
-    let geom = Geometry::new(scr, touchbar);
-    let border = geom.border.round();
-    let body = Rect::from_min_size(Pos2::ZERO, (scr + Vec2::new(2.0 * border, 2.0 * border + geom.chin)).round());
-    let screen = Rect::from_min_size(Pos2::new(border, border), scr);
-    let width = body.width() as usize;
-    let mut image = vec![0u8; width * body.height() as usize * 4];
-    let (fill, _, lip) = body_colors(white);
-    fill_rounded_rect(&mut image, width, body, geom.corner_radius(1.0), fill);
-    fill_rounded_rect(&mut image, width, screen.expand(lip_width(border)), 1.0, lip);
-    if touchbar {
-        let strip = geom.zone_rects(body, 1.0, scr);
-        let strip = strip[0].union(strip[2]);
-        fill_rounded_rect(&mut image, width, strip, strip.height() / 2.0, touchbar_colors(white).0);
-    }
-    // Paper and ink tones as in the window, so the screen stands out from a white bezel.
-    let (_, _, channels, seen) = frame.viewer(None);
-    let tone = |i: usize, v: u8| (INK[i] as f32 + (PAPER[i] as f32 - INK[i] as f32) * v as f32 / 255.0).round() as u8;
-    for (n, px) in seen.chunks(channels).enumerate() {
-        let at = ((border as usize + n / frame.width) * width + border as usize + n % frame.width) * 4;
-        for i in 0..3 {
-            image[at + i] = tone(i, px[i % channels]);
-        }
-    }
-    (width, body.height() as usize, image)
-}
-
-/// Blend an anti-aliased rounded rectangle over `image` (RGBA, `width` pixels per row).
-fn fill_rounded_rect(image: &mut [u8], width: usize, rect: Rect, radius: f32, color: Color32) {
-    let height = image.len() / 4 / width;
-    let inner = rect.shrink(radius);
-    for y in (rect.min.y.floor().max(0.0) as usize)..(rect.max.y.ceil() as usize).min(height) {
-        for x in (rect.min.x.floor().max(0.0) as usize)..(rect.max.x.ceil() as usize).min(width) {
-            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-            let dx = (inner.min.x - cx).max(cx - inner.max.x).max(0.0);
-            let dy = (inner.min.y - cy).max(cy - inner.max.y).max(0.0);
-            let cover = (radius - dx.hypot(dy) + 0.5).clamp(0.0, 1.0);
-            let px = &mut image[(y * width + x) * 4..][..4];
-            let under = px[3] as f32 / 255.0 * (1.0 - cover);
-            let alpha = cover + under;
-            if alpha > 0.0 {
-                for (i, c) in [color.r(), color.g(), color.b()].into_iter().enumerate() {
-                    px[i] = ((c as f32 * cover + px[i] as f32 * under) / alpha).round() as u8;
-                }
-                px[3] = (alpha * 255.0).round() as u8;
-            }
-        }
-    }
+fn colors(rgb: [[u8; 3]; 3]) -> (Color32, Color32, Color32) {
+    let c = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
+    (c(rgb[0]), c(rgb[1]), c(rgb[2]))
 }
 
 fn paint_touchbar(painter: &Turned, zones: &[Rect; 3], vis: &[ZoneVis; 3], white: bool, accent: Color32) {
     let strip = zones[0].union(zones[2]);
     let r = strip.height() / 2.0;
-    let (base, edge, mark) = touchbar_colors(white);
+    let (base, edge, mark) = colors(bezel(white).touchbar_colors());
     painter.rect_filled(strip, r, base);
     for (i, (z, v)) in zones.iter().zip(vis).enumerate() {
         let cr = match i {
@@ -447,20 +365,6 @@ impl Turned<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn framed_screenshot_puts_the_panel_inside_the_bezel() {
-        let mut frame = Frame::new(800, 480);
-        frame.pixels[0] = 255;
-        let (width, height, image) = framed_screenshot(&frame, false, false);
-        let px = |x: usize, y: usize| image[(y * width + x) * 4..][..4].to_vec();
-        assert_eq!((width, height), (848, 566));
-        assert_eq!(px(0, 0)[3], 0, "outside the rounded corner");
-        assert_eq!(px(424, 2), [0x23, 0x23, 0x24, 255], "bezel");
-        assert_eq!(px(24, 24), [INK[0], INK[1], INK[2], 255]);
-        assert_eq!(px(823, 503), [PAPER[0], PAPER[1], PAPER[2], 255]);
-        assert_eq!(px(424, 530), [0x23, 0x23, 0x24, 255], "chin");
-    }
 
     fn with_turned(turn: u8, f: impl FnOnce(&TurnMap)) {
         let local = Rect::from_min_size(Pos2::ZERO, Vec2::new(40.0, 30.0));

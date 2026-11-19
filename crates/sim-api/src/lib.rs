@@ -10,6 +10,9 @@ pub use bluetooth::*;
 mod debug;
 pub use debug::*;
 
+mod framed;
+pub use framed::*;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
