@@ -159,7 +159,7 @@ pub static ENDPOINTS: &[Endpoint] = &[
         .params(&[body("gesture", Ty::Enum(&["swipe_next", "swipe_back", "flick_next", "flick_back"]), "the slide").required()]),
     ep(Method::Post, "/dock", "dock", "Put the TRMNL X on (docked: true) or off its magnetic dock.")
         .params(&[body("docked", Ty::Boolean, "on the dock").required()]),
-    ep(Method::Post, "/ethernet", "ethernet", "ESP32-S3 boards (the TRMNL X): plug a USB Ethernet adapter (Realtek RTL8153, CDC-ECM, VID 0x0BDA PID 0x8153) into the USB port or unplug it, or change its cable and network. Keys left out keep their value; /status reports the adapter, whether the firmware enabled it (active) and the address it leased (ip, on 10.0.2.0/24 behind the same router as WiFi).")
+    ep(Method::Post, "/ethernet", "ethernet", "ESP32-S3 boards (the TRMNL X): plug a USB Ethernet adapter (Realtek RTL8153, CDC-ECM, VID 0x0BDA PID 0x8153) into the USB port or unplug it, or change its cable and network. Keys left out keep their value; /status reports the adapter, whether the firmware enabled it (active) and the address it leased (ip: 10.0.2.16, on a wired network with the same router, DNS and servers as WiFi's).")
         .params(&[
             body("plugged", Ty::Boolean, "in the USB port (default false)"),
             body("link", Ty::Boolean, "a cable to the network is in the jack (default true); false reports no link"),

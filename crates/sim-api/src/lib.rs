@@ -221,8 +221,6 @@ impl WifiNetwork {
     }
 }
 
-/// The EAP credentials a WPA2-Enterprise network accepts (the inner, phase 2 ones a
-/// PEAP/TTLS server checks; the outer identity may be anonymous).
 /// A USB Ethernet adapter (RTL8153, CDC-ECM) on an ESP32-S3's USB port, as the control API and
 /// `--ethernet` set it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +253,8 @@ pub struct EthernetStatus {
     pub rx_frames: u64,
 }
 
+/// The EAP credentials a WPA2-Enterprise network accepts (the inner, phase 2 ones a
+/// PEAP/TTLS server checks; the outer identity may be anonymous).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Enterprise {
     /// None: any username is accepted, except [`FAIL_PASSWORD`].
