@@ -19,6 +19,7 @@
 #![allow(dead_code)] // Public API used by board glue / tests; not every item is wired up yet.
 
 mod http;
+mod image;
 mod params;
 mod rom;
 #[cfg(test)]
@@ -284,7 +285,14 @@ pub struct EspAtModem {
     /// Fault: AT commands starting with one of these answer ERROR.
     at_errors: Vec<String>,
     net_faults: vnet::NetFaults,
+    /// Fault: AT+FWVER? reports this instead of the flashed image's version.
+    fw_version_fault: Option<String>,
+    /// Fault: a flash operation fails once it has written this many bytes.
+    flash_fail_after: Option<u64>,
+    /// None: never written here, i.e. the image the factory put there (boots, no AT+FWVER).
     flash: Option<Vec<u8>>,
+    /// The ROM loader changed `flash` since [`take_flash_dirty`](Self::take_flash_dirty).
+    flash_dirty: bool,
     stats: ModemStats,
 }
 
@@ -326,7 +334,10 @@ impl EspAtModem {
             unresponsive: false,
             at_errors: Vec::new(),
             net_faults: vnet::NetFaults::default(),
+            fw_version_fault: None,
+            flash_fail_after: None,
             flash: None,
+            flash_dirty: false,
             stats: ModemStats::default(),
         }
     }
@@ -450,6 +461,17 @@ impl EspAtModem {
         self.unresponsive = on;
     }
 
+    /// Fault: `AT+FWVER?` answers this version whatever is in the flash (None: off).
+    pub fn set_fw_version_fault(&mut self, version: Option<String>) {
+        self.fw_version_fault = version;
+    }
+
+    /// Fault: the ROM loader answers FLASH_DATA with an error once a flash operation has
+    /// written this many bytes (None: off), as when the flash chip or the UART link fails.
+    pub fn set_flash_fail_after(&mut self, bytes: Option<u64>) {
+        self.flash_fail_after = bytes;
+    }
+
     /// Network faults for the HTTP requests started from now on.
     pub fn set_net_faults(&mut self, faults: vnet::NetFaults) {
         self.net_faults = faults;
@@ -484,6 +506,23 @@ impl EspAtModem {
         self.flash.as_deref()
     }
 
+    /// Put an image in the modem's flash, as a programmer would (None: back to the factory's).
+    /// A powered modem keeps running what it booted.
+    pub fn set_flash_image(&mut self, image: Option<Vec<u8>>) {
+        self.flash = image;
+    }
+
+    /// True once after the ROM loader erased or wrote flash, for the owner to persist it.
+    pub fn take_flash_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.flash_dirty)
+    }
+
+    /// The version `AT+FWVER?` reports: the flashed image's (see `image.rs`), or a fault's.
+    /// None: the firmware has no such command and answers ERROR.
+    pub fn fw_version(&self) -> Option<String> {
+        self.fw_version_fault.clone().or_else(|| self.flash.as_deref().and_then(image::fw_version))
+    }
+
     pub fn wifi_available(&self) -> bool {
         self.wifi_available
     }
@@ -505,6 +544,7 @@ impl EspAtModem {
         self.cfg.mac = r.array()?;
         self.wifi_available = r.bool()?;
         self.flash = r.opt_bytes()?.map(<[u8]>::to_vec);
+        self.flash_dirty = self.flash.is_some();
         Ok(())
     }
 
@@ -651,8 +691,14 @@ impl EspAtModem {
         self.emit(t + self.timing.banner_ns, banner.as_bytes());
         if download {
             self.schedule(t + self.timing.rom_boot_ns, Ev::RomReady);
-        } else {
+        } else if self.flash.as_deref().is_none_or(image::bootable) {
             self.schedule(t + self.timing.boot_ns, Ev::BootReady);
+        } else {
+            // Erased or half written (a failed flash): the ROM finds no bootloader, or the
+            // bootloader no application, and the chip resets over and over. ESP-AT never
+            // comes up, so nothing answers.
+            log::debug!(target: "modem", "flash is not bootable");
+            self.emit(t + 2 * self.timing.banner_ns, b"invalid header: 0xffffffff\r\n");
         }
     }
 
@@ -664,6 +710,8 @@ impl EspAtModem {
         for pkt in self.rom.slip.feed(data) {
             let ctx = rom::RomCtx {
                 flash: &mut self.flash,
+                flash_dirty: &mut self.flash_dirty,
+                fail_after: self.flash_fail_after,
                 flash_size_id: self.cfg.flash_size_id,
                 mac: self.cfg.mac,
                 stats: &mut self.stats,
@@ -796,6 +844,11 @@ impl EspAtModem {
                 t,
                 "AT version:4.1.1.0(sim)\r\nSDK version:v5.4.1\r\ncompile time:Jan 21 2025 00:00:00\r\nBin version:v4.1.1.0(ESP32C5-4MB)",
             ),
+            // The TRMNL build's custom command (Modem::getFirmwareVersion, modem.cpp).
+            ("FWVER", Form::Query) => match self.fw_version() {
+                Some(v) => self.info_ok(t, &format!("+FWVER:\"{v}\"")),
+                None => return false,
+            },
             ("CWMODE", Form::Set(p)) => match p.first().and_then(Param::int) {
                 Some(m @ 0..=3) => {
                     self.cwmode = m;

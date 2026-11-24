@@ -11,6 +11,8 @@
 //!  "panel_busy_stuck": true,
 //!  "modem_unresponsive": true,
 //!  "modem_at_errors": ["AT+CWMODE", "AT+HTTPCHEAD"],
+//!  "modem_fw_version": "0.9.0",
+//!  "modem_flash_fail_after": 1048576,
 //!  "touch_bar": "reset" | "lockup" | "ati_error",
 //!  "gauge_reset": true,
 //!  "chip_temp_c": 60}
@@ -53,6 +55,19 @@ pub fn merge_faults(base: &Faults, v: &Value) -> Result<Faults, String> {
                         .map(|p| p.as_str().map(String::from).ok_or("modem_at_errors: strings"))
                         .collect::<Result<_, _>>()?,
                     _ => return Err("modem_at_errors: a list of command prefixes".into()),
+                }
+            }
+            "modem_fw_version" => {
+                f.modem_fw_version = match v {
+                    Value::Null => None,
+                    Value::String(s) => Some(s.clone()),
+                    _ => return Err("modem_fw_version: a string".into()),
+                }
+            }
+            "modem_flash_fail_after" => {
+                f.modem_flash_fail_after = match v {
+                    Value::Null => None,
+                    _ => Some(v.as_u64().ok_or("modem_flash_fail_after: a number of bytes")?),
                 }
             }
             "touch_bar" => {
@@ -193,6 +208,8 @@ pub fn faults_json(f: &Faults) -> Value {
         "panel_busy_stuck": f.panel_busy_stuck,
         "modem_unresponsive": f.modem_unresponsive,
         "modem_at_errors": f.modem_at_errors,
+        "modem_fw_version": f.modem_fw_version,
+        "modem_flash_fail_after": f.modem_flash_fail_after,
         "touch_bar": f.touch_bar.map(|t| t.name()),
         "gauge_reset": f.gauge_reset,
         "chip_temp_c": f.chip_temp_c,

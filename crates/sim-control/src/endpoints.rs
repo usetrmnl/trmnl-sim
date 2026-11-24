@@ -245,6 +245,8 @@ pub static ENDPOINTS: &[Endpoint] = &[
             body("panel_busy_stuck", Ty::Boolean, "the panel's BUSY line never releases").nullable(),
             body("modem_unresponsive", Ty::Boolean, "the TRMNL X's ESP-AT modem doesn't answer").nullable(),
             body("modem_at_errors", Ty::Strings, "AT command prefixes the modem answers with ERROR").nullable(),
+            body("modem_fw_version", Ty::String, "firmware version the TRMNL X's modem reports (AT+FWVER?) whatever was flashed").nullable(),
+            body("modem_flash_fail_after", Ty::Integer, "flashing the TRMNL X's modem fails after this many bytes").nullable(),
             body("touch_bar", Ty::Enum(&["reset", "lockup", "ati_error"]), "touch bar controller fault").nullable(),
             body("gauge_reset", Ty::Boolean, "the fuel gauge lost its state").nullable(),
             body("chip_temp_c", Ty::Number, "chip temperature sensor reading (°C)").nullable(),

@@ -526,7 +526,13 @@ mod tests {
     fn x_board_round_trips() {
         use crate::board::trmnl_x::TrmnlX;
         board_round_trip(
-            || Box::new(TrmnlX::new([2, 0, 0, 0, 0, 9], &vnet::NetConfig { offline: true, ..Default::default() })),
+            || {
+                Box::new(TrmnlX::new(
+                    [2, 0, 0, 0, 0, 9],
+                    &vnet::NetConfig { offline: true, ..Default::default() },
+                    None,
+                ))
+            },
             |b| {
                 b.set_docked(true);
                 b.set_battery_mv(3800);

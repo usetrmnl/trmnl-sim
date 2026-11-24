@@ -81,7 +81,8 @@ struct Cli {
     /// Hermetic networking: only the host (10.0.2.2 = 127.0.0.1) is reachable from the device.
     #[arg(long)]
     offline: bool,
-    /// Answer DNS for NAME with IP, e.g. --dns api.example.com=10.0.2.2 (repeatable).
+    /// Answer DNS for NAME with IP, e.g. --dns api.example.com=10.0.2.2 (repeatable). NAME can
+    /// be an address, for URLs with an IP literal: --dns 192.168.1.20=10.0.2.2.
     #[arg(long, value_parser = parse_dns)]
     dns: Vec<(String, std::net::Ipv4Addr)>,
     /// Send the device's connections to 10.0.2.2:GUEST to host port HOST instead, e.g.
@@ -332,7 +333,15 @@ fn main() -> Result<()> {
                 m[5] = m[5].wrapping_add(2);
                 m
             });
-            let b = board::trmnl_x::TrmnlX::new(modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]), &net);
+            // The modem's flash lives next to the S3's: `<flash>.modem`.
+            let mut modem_flash = flash_path.clone().into_os_string();
+            modem_flash.push(".modem");
+            let modem_flash = std::path::PathBuf::from(modem_flash);
+            if cli.erase {
+                let _ = std::fs::remove_file(&modem_flash);
+            }
+            let modem_mac = modem_mac.unwrap_or([0x7c, 0xdf, 0xa1, 0x5e, 0x1a, 0x2d]);
+            let b = board::trmnl_x::TrmnlX::new(modem_mac, &net, Some(modem_flash));
             let frame = b.panel.frame();
             (Box::new(b), frame, mock_trmnl::Panel::X)
         }

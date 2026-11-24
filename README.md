@@ -138,6 +138,8 @@ faults:
 | Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held; X: the PMIC never reports power good, on its PWR_GOOD pin or in its register |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands |
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: ERROR for AT commands starting with these |
+| Modem firmware version | `{"modem_fw_version": "0.9.0"}` | X: `AT+FWVER?` reports this whatever image is flashed |
+| Modem flash failure | `{"modem_flash_fail_after": 1048576}` | X: flashing the modem fails after this many bytes, leaving it half written (it no longer boots) |
 | Chip temperature | `{"chip_temp_c": 60}` | the on-chip sensor reads this instead of 25 °C |
 | Fuel gauge | `{"gauge_reset": true}` | X: the BQ27427 has a power-on reset (once) |
 | Touch bar | `{"touch_bar": "reset"}` | X: the IQS323 resets (once); `"lockup"`, `"ati_error"` |
@@ -177,6 +179,15 @@ console (`[sim] log I: src/bl.cpp [701]: …`) for tests to wait on.
 **A factory-fresh TRMNL X** (`--erase`) flashes its modem (about 13 s of virtual time), then
 waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
+**The TRMNL X's modem has its own flash**, kept in `<flash>.modem` next to the flash image
+(copy both to copy a device; `--erase` removes it). It is written when the firmware flashes
+the modem and decides what the modem does afterwards: `AT+FWVER?` reports the version found
+in the image (ERROR for an image without the command, and for a modem that was never
+flashed here, like the firmware the first units shipped with), and a flash that is erased
+or half written (see the `modem_flash_fail_after` fault) doesn't boot, so the modem stays
+silent until it is flashed again. For a modem firmware update, serve the image from the
+host and point the firmware's URL at it with `--dns` (and `--host-port`).
+
 **The TRMNL X's pose** feeds its BMA530 accelerometer (I2C `0x18`): it stands in landscape,
 leaning back 15°, until `POST /orientation` (or the window's Orientation controls) turns it
 to one of the firmware's orientations (`portrait_upright`, `landscape_left`,
@@ -201,7 +212,7 @@ the current one.
 | `--turbo` | Don't pace to wall-clock time (see [Time](#time)) |
 | `--fast-sleep` | Fast-forward deep sleeps |
 | `--offline` | Only the host (`10.0.2.2`) and the NTP server are reachable |
-| `--dns NAME=IP` | Answer DNS for NAME locally (repeatable) |
+| `--dns NAME=IP` | Answer DNS for NAME locally (repeatable). NAME can be an address, which redirects connections to it: `--dns 192.168.1.20=10.0.2.2` |
 | `--portal-port N` | Host port for the captive portal (default 8080, 0 = any) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
 | `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
