@@ -12,6 +12,7 @@
 //! | POST   | `/touch`               | `{"zone": "left"\|"center"\|"right", "ms": 120}` tap, returns after lift; `"down": bool` holds / lifts instead | |
 //! | POST   | `/gesture`             | `{"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | |
 //! | POST   | `/dock`                | `{"docked": true}`                             | |
+//! | POST   | `/ethernet`            | `{"plugged": true, "link": true, "dhcp": true}` (merged, see [`ethernet`]) | adapter state |
 //! | POST   | `/orientation`         | `{"orientation": "portrait_upright"\|"flat"\|...}` or `{"rotation": 90, "tilt": 15}` | |
 //! | POST   | `/reset`               |                                                | |
 //! | POST   | `/power-cycle`         |                                                | |
@@ -45,6 +46,7 @@
 //! the MCP server offers each as a tool, so a new endpoint is added there (and here).
 
 pub mod endpoints;
+pub mod ethernet;
 pub mod faults;
 mod mcp;
 mod mock;
@@ -224,6 +226,15 @@ fn route(h: &SimHandle, method: &Method, path: &str, q: &[(String, String)], bod
                 .ok_or("need {\"gesture\": \"swipe_next\"|\"swipe_back\"|\"flick_next\"|\"flick_back\"}")?;
             h.send(Command::Gesture(g));
             ok()
+        }
+        (Method::Post, "/ethernet") => {
+            let b = body_json(body)?;
+            let Some(cur) = h.status.lock().ethernet.clone() else {
+                return Ok(err(409, "this device has no USB host port"));
+            };
+            let a = ethernet::merge(cur.adapter, &b)?;
+            h.send(Command::SetEthernet(a));
+            Ok(json_reply(200, json!({"ok": true, "ethernet": adapter_json(&a)})))
         }
         (Method::Post, "/dock") => {
             let docked = body_json(body)?["docked"].as_bool().ok_or("need {\"docked\": bool}")?;
@@ -476,6 +487,14 @@ fn status_json(h: &SimHandle) -> Value {
         "wifi_available": st.wifi_available,
         "wifi_connected": st.wifi_connected,
         "ip": st.ip,
+        "ethernet": st.ethernet.as_ref().map(|e| {
+            let mut v = adapter_json(&e.adapter);
+            v["active"] = json!(e.active);
+            v["ip"] = json!(e.ip);
+            v["tx_frames"] = json!(e.tx_frames);
+            v["rx_frames"] = json!(e.rx_frames);
+            v
+        }),
         "portal_url": st.portal_url,
         "display_busy": st.display_busy,
         "display_refreshes": st.display_refreshes,
@@ -487,6 +506,10 @@ fn status_json(h: &SimHandle) -> Value {
         "power_losses": st.power_losses,
         "console_total": total,
     })
+}
+
+fn adapter_json(a: &sim_api::EthernetAdapter) -> Value {
+    json!({"plugged": a.plugged, "link": a.link, "dhcp": a.dhcp})
 }
 
 // ---- save points -------------------------------------------------------------------------------

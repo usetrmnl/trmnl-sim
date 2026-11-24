@@ -63,6 +63,7 @@ Common to all devices:
 | Boot | The real mask ROM (from Espressif's ROM ELFs) and your 2nd-stage bootloader: partition table, OTA slot selection, SHA-256 check, flash MMU, deep-sleep wake stubs |
 | WiFi | A high-level model replaces the binary driver (scans, joins, soft-AP); lwIP, DHCP, DNS, TLS, AsyncTCP and the captive portal are the firmware's own |
 | Network | A user-mode router/NAT (`vnet`) to the internet, or `--offline`. The host is `10.0.2.2`; an NTP server at `10.0.2.123` gives the host's clock (offline, NTP names resolve to it) |
+| USB Ethernet | ESP32-S3: the USB OTG controller (DWC2) in host mode, with an optional RTL8153 adapter (CDC-ECM) on the same network as WiFi; the firmware's USB host library and CDC-ECM driver run for real (see [USB Ethernet](#usb-ethernet)) |
 | Sleep | Deep sleep (timer and GPIO wake, RTC memory, correct wake cause) and light sleep (the radio is off: over 36 s of it with no 103 ms awake in between loses the AP, as a long screen wipe does) |
 | Persistence | Flash is a file, so credentials, API key and SPIFFS/LittleFS survive restarts; `--erase` gives a factory-fresh device |
 
@@ -146,7 +147,7 @@ faults:
 
 `POST /faults` merges (`null` clears one) and `DELETE /faults` clears all. Faults are the
 environment, not device state: save points don't record them. Network faults also apply to
-the X's modem requests (but packet loss). HTTP faults (500s, bad JSON, cut or slow bodies) are
+the X's modem requests (but packet loss) and to the [USB Ethernet](#usb-ethernet) adapter's network. HTTP faults (500s, bad JSON, cut or slow bodies) are
 set per path on the Ruby mock server: `mock.set_fault("/api/display", status: 500)`.
 
 A power cut shows on the console as `[sim] power lost: program #3 at 0xa060 ...`;
@@ -187,6 +188,40 @@ flashed here, like the firmware the first units shipped with), and a flash that 
 or half written (see the `modem_flash_fail_after` fault) doesn't boot, so the modem stays
 silent until it is flashed again. For a modem firmware update, serve the image from the
 host and point the firmware's URL at it with `--dns` (and `--host-port`).
+
+### USB Ethernet
+
+ESP32-S3 boards (the TRMNL X's Ethernet over USB, firmware PR #749) can have a **Realtek RTL8153
+USB Ethernet adapter** (VID `0x0BDA`, PID `0x8153`) in their USB port: `--ethernet` from the
+start, or `POST /ethernet {"plugged": true}` at any time. None is plugged in by default. The
+simulator models the S3's USB OTG controller (Synopsys DWC2 in host mode, scatter/gather DMA:
+`src/periph/usb_dwc.rs`) and the adapter behind its port (`src/devices/usb_ethernet.rs`), so the
+firmware's own USB host library (enumeration, `usbh`, the HCD) and CDC-ECM driver run
+unmodified: the adapter enumerates in its vendor configuration, the driver switches it to
+configuration 2 (CDC-ECM), reads its MAC string, enables the data interface and gets the link
+notification, and lwIP's DHCP client and TCP run over bulk transfers.
+
+The adapter's frames go to a `vnet` router of their own, with the same addressing, DNS, NTP,
+`--dns`, `--host-port` and `--offline` as WiFi: the host is `10.0.2.2` either way, and the device
+gets `10.0.2.16` on Ethernet (`10.0.2.15` on WiFi), like a LAN with a wired and a wireless side.
+
+| `POST /ethernet` key | |
+|---|---|
+| `plugged` | in the USB port (unplugging is a disconnect on the port) |
+| `link` | a cable in the adapter's jack (default `true`); `false` reports no link (CDC NETWORK_CONNECTION 0) and passes no frames |
+| `dhcp` | the router answers DHCP (default `true`); `false` gives link but never an address |
+
+Keys left out keep their value; `--ethernet` takes the same JSON (`--ethernet='{"dhcp":false}'`).
+`/status` reports `ethernet`: those three keys, `active` (the firmware enabled the CDC-ECM data
+interface), `ip` (its DHCP lease), and the frames sent and received; it is `null` on chips
+without a USB host port (C3, C5), where `POST /ethernet` answers 409. The console notes the data
+interface being enabled, and frames the adapter mishandles as a real one would (a frame a multiple
+of 64 bytes long that the host doesn't end with a zero-length packet is joined to the next).
+
+The adapter is part of the environment, like the WiFi networks: a save point doesn't record it,
+and restoring one keeps the current adapter. Every boot (and deep-sleep wake) powers the port off
+and on, so the firmware enumerates it again. The S3's USB serial console keeps working while the
+controller is in host mode (on the chip the PHY is switched over to the OTG controller).
 
 **The TRMNL X's pose** feeds its BMA530 accelerometer (I2C `0x18`): it stands in landscape,
 leaning back 15°, until `POST /orientation` (or the window's Orientation controls) turns it
@@ -237,6 +272,7 @@ the current one.
 | `--restore FILE` | Start from a [save point](#save-points) (its flash and MAC replace `--flash`/`--mac`) |
 | `--sensor NAME` | Environment sensor on an SPI-panel board's I2C (repeatable): `scd41`, `aht20` |
 | `--wifi-networks JSON` | Access points in range, replacing the defaults (`ssid`, `password`, `rssi`, `channel`, `open`, `internet`, `enterprise`) |
+| `--ethernet[=JSON]` | ESP32-S3: a [USB Ethernet](#usb-ethernet) adapter in the USB port from the start; JSON as for `POST /ethernet` (`{"link": false}`, `{"dhcp": false}`) |
 | `--faults JSON` | Inject [faults](#fault-injection) from the start (repeatable, merged) |
 
 The default networks are **TRMNL-Sim** (any password) and **Neighbors WiFi** (`hunter2hunter2`);
@@ -414,12 +450,13 @@ build; restoring onto another build, or saving mid-refresh, is refused.
 
 | | |
 |---|---|
-| `GET /status` | state, virtual time, display busy and refresh count, WiFi/IP, portal URL, boot count, … |
+| `GET /status` | state, virtual time, display busy and refresh count, WiFi/IP, USB Ethernet adapter, portal URL, boot count, … |
 | `POST /button {"down": bool}` | hold or release the button |
 | `POST /press {"ms": N}` | press for N virtual ms; returns after release (`"count": 2, "gap_ms": 150`: a double click) |
 | `POST /touch {"zone": "left"\|"center"\|"right", "ms": N}` | TRMNL X touch bar tap (`"down": true/false`: hold / lift a finger) |
 | `POST /gesture {"gesture": "swipe_next"\|"swipe_back"\|"flick_next"\|"flick_back"}` | TRMNL X slide (slide mode only) |
 | `POST /dock {"docked": bool}` | TRMNL X magnetic dock |
+| `POST /ethernet {"plugged": bool, "link": bool, "dhcp": bool}` | ESP32-S3: plug a [USB Ethernet](#usb-ethernet) adapter in or out, change its cable or DHCP (merged; 409 without a USB host port) |
 | `POST /orientation {"orientation": "portrait_upright"}` | TRMNL X pose: a named orientation or `flat`, or `{"rotation": deg, "tilt": deg}` |
 | `POST /reset`, `/power-cycle`, `/wake`, `/quit` | |
 | `POST /wifi {"available": bool}` | network in or out of range; `{"networks": [...]}` replaces the access points; `{"portal_client": false}` lets an unattended portal run ahead in turbo |
@@ -604,12 +641,13 @@ trmnl-sim (bin)        CLI, runner (pacing, power states, commands)
 │  ├─ esp32c3/         memory map, peripherals, crypto/GDMA, boot flow, interrupt routing
 │  ├─ esp32s3/         the same for the dual-core S3, plus PSRAM, LCD_CAM, USB console
 │  └─ esp32c5/         the C5: CLIC, PCR/LP domain, cache MMU, AHB DMA, ECC/ECDSA, USB console
-├─ periph/             IP blocks shared by chips (SYSTIMER, I2C engine, SHA, AES/RSA math, EC math)
+├─ periph/             IP blocks shared by chips (SYSTIMER, I2C engine, SHA, AES/RSA math, EC math,
+│                      the DWC2 USB OTG host controller)
 ├─ board/              what's wired to the pins (spi_epd.rs: OG, BWRY and SPI-panel BYOD boards;
 │                      trmnl_x.rs; parallel_byod.rs: PaperS3, T5 Pro); Board trait
 ├─ devices/            e-paper controllers (UC8179/UC81xx, SSD16xx, dual-CS, parallel), SPI NOR flash,
 │                      ESP-AT modem, I2C chips (TCA9535, TPS65185, IQS323, BQ27427, BMA530, BQ27220,
-│                      AXP2101, M5Stack PY32 and M5IOE1)
+│                      AXP2101, M5Stack PY32 and M5IOE1), USB devices (the RTL8153 Ethernet adapter)
 ├─ coverage/           executed-instruction bitmaps, DWARF line mapping, lcov output
 ├─ hle/                ESP-IDF function replacements by ELF symbol (WiFi driver, sleep,
 │                      ADC), ISA-neutral; hooks can call back into guest code or wrap it
@@ -647,7 +685,14 @@ found this way.
 - ESP32-C5: no ADC (HLE'd through `analogRead*`), LP core or PARLIO RX; the ECDSA accelerator
   only verifies; no WiFi 6 details or BLE.
 - WiFi is modelled at the IDF driver API, not 802.11: signal, roaming and power save are canned.
-- TRMNL OG: nothing on the I2C bus. No USB data or serial input on any device.
+- TRMNL OG: nothing on the I2C bus. No serial input on any device; USB data only as the S3's
+  host port with the USB Ethernet adapter (no USB device mode, no other USB devices).
+- USB Ethernet: the DWC2 model has no isochronous or split transfers, slave (FIFO) mode,
+  suspend/resume signalling or packet-level errors, and polls interrupt endpoints like bulk ones
+  (the periodic frame list's timing is not followed). The adapter models CDC-ECM only (its vendor
+  configuration's endpoints NAK, Realtek's register requests STALL), passes every frame whatever
+  its destination MAC (no packet filter), and its network is a separate NAT from WiFi's: with both
+  up, a connection only works over the interface that opened it.
 - TRMNL X: the accelerometer gives raw samples only (no orientation engine or INT1); the
   modem does station mode and HTTP GET only.
 - Timing counts instructions (1 per cycle), not cycles; flash operations are instant.

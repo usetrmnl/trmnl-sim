@@ -9,6 +9,7 @@ use crate::periph::crypto_math::{aes_block, aes_blocks, rsa_op};
 use crate::periph::i2c::I2c;
 use crate::periph::sha::Sha;
 use crate::periph::systimer::Systimer;
+use crate::periph::usb_dwc::{self, UsbDwc};
 use crate::soc::Console;
 
 /// Interrupt sources (soc/interrupts.h for the S3), = map register offset / 4.
@@ -16,6 +17,7 @@ pub mod src {
     pub const GPIO: usize = 16;
     pub const LCD_CAM: usize = 24;
     pub const UART0: usize = 27;
+    pub const USB_OTG: usize = 38;
     pub const I2C_EXT0: usize = 42;
     pub const SYSTIMER_TARGET0: usize = 57;
     pub const DMA_IN_CH0: usize = 66;
@@ -48,6 +50,7 @@ const SHA_BASE: u32 = 0x6003_B000;
 const RSA: u32 = 0x6003_C000;
 const GDMA: u32 = 0x6003_F000;
 const LCD_CAM: u32 = 0x6004_1000;
+const USB_OTG: u32 = 0x6008_0000;
 const SYSTEM: u32 = 0x600C_0000;
 const INTC: u32 = 0x600C_2000;
 const EXTMEM: u32 = 0x600C_4000;
@@ -164,6 +167,9 @@ pub struct Periph {
     usb_raw: u32,
     usb_last_sof: u64,
     pub lcd_raw: u32,
+    /// The USB OTG controller in host mode, with whatever is plugged into the port. Taken out
+    /// while it does DMA (see `S3Bus::with_usb`).
+    pub usb_otg: Option<Box<UsbDwc>>,
     pub reset_request: Option<ResetRequest>,
     pub reset_reason: ResetReason,
     pub wakeup_cause: u32,
@@ -202,6 +208,7 @@ impl Periph {
             usb_raw: 0,
             usb_last_sof: 0,
             lcd_raw: 0,
+            usb_otg: Some(Box::default()),
             reset_request: None,
             reset_reason: ResetReason::PowerOn,
             wakeup_cause: 0,
@@ -256,6 +263,9 @@ impl Periph {
         self.gpio_status = 0;
         self.usb_raw = 0;
         self.lcd_raw = 0;
+        if let Some(u) = self.usb_otg.as_mut() {
+            u.chip_reset();
+        }
         self.reset_request = None;
         // Core 1 comes out of reset held in reset, clock-gated.
         self.store_set(SYSTEM, 1 << 2);
@@ -304,12 +314,24 @@ fn uart_index(a: u32) -> Option<(usize, u32)> {
     }
 }
 
+impl usb_dwc::Dma for S3Bus {
+    fn dma_read(&self, addr: u32, len: usize) -> Option<Vec<u8>> {
+        self.peek_bytes(addr, len)
+    }
+    fn dma_write(&mut self, addr: u32, data: &[u8]) -> bool {
+        self.load_bytes(addr, data)
+    }
+}
+
 impl S3Bus {
     pub fn periph_read(&mut self, a: u32) -> u32 {
         let now = self.clock.ns();
         let stored = self.p.store_get(a);
         if let Some((u, off)) = uart_index(a) {
             return self.uart_read(u, off, stored);
+        }
+        if (USB_OTG..USB_OTG + usb_dwc::SIZE).contains(&a) {
+            return self.p.usb_otg.as_ref().map_or(0, |u| u.read(a - USB_OTG, now));
         }
         match a {
             // ---- SPI flash controller ----
@@ -443,6 +465,11 @@ impl S3Bus {
         self.p.store_set(a, v);
         if let Some((u, off)) = uart_index(a) {
             return self.uart_write(u, off, v, now);
+        }
+        if (USB_OTG..USB_OTG + usb_dwc::SIZE).contains(&a) {
+            self.with_usb(|u, bus| u.write(a - USB_OTG, v, bus));
+            self.irq_dirty = true;
+            return;
         }
         match a {
             _ if a == SPI1 => self.spi1_command(v),
@@ -631,6 +658,7 @@ impl S3Bus {
         set(src::I2C_EXT0, self.p.i2c.raw & self.p.store_get(I2C0 + 0x28) != 0);
         set(src::LCD_CAM, self.p.lcd_raw & self.p.store_get(LCD_CAM + 0x64) != 0);
         set(src::USB_DEVICE, self.usb_raw() & self.p.store_get(USB_JTAG + 0x10) != 0);
+        set(src::USB_OTG, self.p.usb_otg.as_ref().is_some_and(|u| u.irq()));
         for ch in 0..GDMA_CHANNELS {
             let b = GDMA + ch * GDMA_CH_STRIDE;
             set(src::DMA_IN_CH0 + ch as usize, self.p.store_get(b + 0x08) & self.p.store_get(b + 0x10) != 0);
@@ -731,6 +759,23 @@ impl S3Bus {
     fn usb_raw(&self) -> u32 {
         // SERIAL_IN_EMPTY (bit 3): the IN FIFO is always drained immediately.
         self.p.usb_raw | 1 << 3
+    }
+
+    // ---- USB OTG (host) ------------------------------------------------------------------------
+
+    /// Run `f` on the USB controller with the bus as its DMA memory.
+    pub fn with_usb<R>(&mut self, f: impl FnOnce(&mut UsbDwc, &mut S3Bus) -> R) -> Option<R> {
+        let mut u = self.p.usb_otg.take()?;
+        let r = f(&mut u, self);
+        self.p.usb_otg = Some(u);
+        Some(r)
+    }
+
+    /// Let the plugged device's time pass (its network answers), retrying NAKed transfers.
+    pub fn usb_poll(&mut self, now: u64) {
+        if self.with_usb(|u, bus| u.poll(now, bus)).is_some() {
+            self.irq_dirty = true;
+        }
     }
 
     // ---- clocks -------------------------------------------------------------------------------

@@ -78,6 +78,14 @@ pub trait Machine: Send {
     /// Replace the injected faults. Errors (e.g. an unknown partition) are reported; the
     /// other faults still apply.
     fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String>;
+    /// Plug a USB Ethernet adapter in or out, or change its link (chips with a USB host port).
+    fn set_ethernet(&mut self, _adapter: sim_api::EthernetAdapter) -> Result<(), String> {
+        Err("this chip has no USB host port".into())
+    }
+    /// The USB Ethernet adapter's state (None: the chip has no USB host port).
+    fn ethernet(&self) -> Option<sim_api::EthernetStatus> {
+        None
+    }
     /// Flash (page programs, erases) so far.
     fn flash_stats(&self) -> (u64, u64);
     /// The partition table in flash.

@@ -221,6 +221,38 @@ impl WifiNetwork {
     }
 }
 
+/// A USB Ethernet adapter (RTL8153, CDC-ECM) on an ESP32-S3's USB port, as the control API and
+/// `--ethernet` set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EthernetAdapter {
+    /// In the USB port.
+    pub plugged: bool,
+    /// A cable to a live network is in the adapter's jack.
+    pub link: bool,
+    /// The network's DHCP server answers (without it the device gets link but no address).
+    pub dhcp: bool,
+}
+
+impl Default for EthernetAdapter {
+    /// Not plugged in; plugging it in gives link and DHCP unless said otherwise.
+    fn default() -> Self {
+        EthernetAdapter { plugged: false, link: true, dhcp: true }
+    }
+}
+
+/// The adapter and what the firmware did with it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EthernetStatus {
+    pub adapter: EthernetAdapter,
+    /// The host enumerated the adapter and enabled its CDC-ECM data interface.
+    pub active: bool,
+    /// The address the network's DHCP server gave the device.
+    pub ip: Option<String>,
+    /// Ethernet frames the device sent and received.
+    pub tx_frames: u64,
+    pub rx_frames: u64,
+}
+
 /// The EAP credentials a WPA2-Enterprise network accepts (the inner, phase 2 ones a
 /// PEAP/TTLS server checks; the outer identity may be anonymous).
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -628,6 +660,8 @@ pub enum Command {
     SetBatteryMv(u32),
     /// Turn or tilt the device (what its accelerometer reads).
     SetPose(Pose),
+    /// Plug a USB Ethernet adapter in or out of the ESP32-S3's USB port, or change its link.
+    SetEthernet(EthernetAdapter),
     /// Show the black/white flashes of a (4-color) panel refresh (true, the default), or
     /// keep the old image until the new one appears (false). Refresh timing is unchanged.
     SetRefreshFlashing(bool),
@@ -742,6 +776,8 @@ pub struct Status {
     pub wifi_available: bool,
     pub wifi_connected: bool,
     pub ip: Option<String>,
+    /// The USB Ethernet adapter (None: the chip has no USB host port).
+    pub ethernet: Option<EthernetStatus>,
     /// Host URL of the device's captive portal while it runs its setup access point.
     pub portal_url: Option<String>,
     /// True while the e-paper panel reports BUSY (refreshing).
@@ -785,6 +821,7 @@ impl Default for Status {
             wifi_available: true,
             wifi_connected: false,
             ip: None,
+            ethernet: None,
             portal_url: None,
             display_busy: false,
             display_refreshes: 0,

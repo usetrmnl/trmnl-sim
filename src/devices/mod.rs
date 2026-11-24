@@ -6,3 +6,5 @@ pub mod parallel_epd;
 pub mod spi_flash;
 pub mod ssd16xx;
 pub mod uc8179;
+pub mod usb;
+pub mod usb_ethernet;

@@ -164,6 +164,11 @@ struct Cli {
     /// (keys: ssid, password, rssi, channel, open, internet).
     #[arg(long, value_name = "JSON")]
     wifi_networks: Option<String>,
+    /// Plug a USB Ethernet adapter (RTL8153, CDC-ECM) into an ESP32-S3's USB port from the start:
+    /// `--ethernet` with link and DHCP, or JSON as for POST /ethernet, e.g.
+    /// `--ethernet='{"dhcp":false}'` (link but no address) or `'{"link":false}'` (no cable).
+    #[arg(long, value_name = "JSON", num_args = 0..=1, require_equals = true, default_missing_value = "{}")]
+    ethernet: Option<String>,
     /// Inject faults from the start: JSON as for POST /faults, e.g. '{"net":{"dns":"servfail"}}'
     /// (repeatable; later ones are merged into earlier ones).
     #[arg(long, value_name = "JSON")]
@@ -389,6 +394,10 @@ fn main() -> Result<()> {
     if let Some(json) = &cli.wifi_networks {
         let nets = sim_control::wifi::parse_networks_str(json).map_err(|e| anyhow::anyhow!("--wifi-networks: {e}"))?;
         machine.set_wifi_networks(&nets);
+    }
+    if let Some(json) = &cli.ethernet {
+        let a = sim_control::ethernet::parse_str(json).map_err(|e| anyhow::anyhow!("--ethernet: {e}"))?;
+        machine.set_ethernet(a).map_err(|e| anyhow::anyhow!("--ethernet: {e}"))?;
     }
 
     let fw_id = savepoint::FirmwareId { name: fw.name.clone(), elf_sha256: fw.elf_sha256 };

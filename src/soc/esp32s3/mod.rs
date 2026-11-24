@@ -494,6 +494,12 @@ impl Esp32s3 {
         self.bus.gpio_sample(now);
         self.bus.uart_poll(now);
         self.bus.usb_sof(now);
+        self.bus.usb_poll(now);
+        if let Some(msgs) = self.bus.p.usb_otg.as_mut().map(|u| u.take_messages()) {
+            for m in msgs {
+                self.msg(m);
+            }
+        }
         let mut next = now + SERVICE_NS;
         if let Some(t) = self.bus.p.systimer.next_ns(now) {
             next = next.min(t);
@@ -1125,7 +1131,10 @@ impl Machine for Esp32s3 {
     fn realtime_required(&self) -> bool {
         // A light sleep without a timer only ends on an external event (e.g. docking):
         // fast-forwarding it would just burn virtual time.
-        self.waiting_for_external() || self.hle.wifi.net_busy() || self.bus.board.realtime_required()
+        self.waiting_for_external()
+            || self.hle.wifi.net_busy()
+            || self.bus.board.realtime_required()
+            || self.bus.p.usb_otg.as_ref().is_some_and(|u| u.net_busy())
     }
     fn waiting_for_external(&self) -> bool {
         matches!(self.light_sleep, Some((w, opt)) if w.is_none() || opt & (1 << 3) == 0)
@@ -1192,11 +1201,43 @@ impl Machine for Esp32s3 {
 
     fn set_faults(&mut self, faults: &sim_api::Faults) -> Result<(), String> {
         self.bus.p.chip_temp_c = faults.chip_temp_c.unwrap_or(25.0);
+        if let Some(e) = self.bus.p.usb_otg.as_mut().and_then(|u| u.device_mut()).and_then(|d| d.ethernet()) {
+            e.set_net_faults(crate::faults::net_faults(&faults.net));
+        }
         crate::faults::apply(faults, &mut self.bus.flash, &mut self.hle.wifi, self.bus.board.as_mut())
     }
 
     fn flash_stats(&self) -> (u64, u64) {
         (self.bus.flash.programs, self.bus.flash.erases)
+    }
+
+    fn set_ethernet(&mut self, a: sim_api::EthernetAdapter) -> Result<(), String> {
+        use crate::devices::usb_ethernet::{Link, UsbEthernet};
+        let link = Link { up: a.link, dhcp: a.dhcp };
+        let (net, faults, mac) = (&self.hle.wifi.net_config, self.hle.wifi.net_faults(), self.bus.p.mac);
+        let usb = self.bus.p.usb_otg.as_mut().ok_or("the USB controller is busy")?;
+        match (a.plugged, usb.device_mut().and_then(|d| d.ethernet())) {
+            (true, Some(e)) => e.set_link(link),
+            (true, None) => usb.attach(Box::new(UsbEthernet::new(link, net, faults.clone(), mac))),
+            (false, _) => drop(usb.detach()),
+        }
+        self.bus.irq_dirty = true;
+        Ok(())
+    }
+
+    fn ethernet(&self) -> Option<sim_api::EthernetStatus> {
+        let usb = self.bus.p.usb_otg.as_ref()?;
+        let Some(e) = usb.device().and_then(|d| d.ethernet_ref()) else {
+            return Some(sim_api::EthernetStatus::default());
+        };
+        let link = e.link();
+        Some(sim_api::EthernetStatus {
+            adapter: sim_api::EthernetAdapter { plugged: true, link: link.up, dhcp: link.dhcp },
+            active: e.active(),
+            ip: e.lease().map(|i| i.to_string()),
+            tx_frames: e.tx_frames,
+            rx_frames: e.rx_frames,
+        })
     }
 
     fn change_preference(&mut self, change: &sim_api::PreferenceChange) -> Result<(), String> {

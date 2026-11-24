@@ -6,3 +6,4 @@ pub mod ec;
 pub mod i2c;
 pub mod sha;
 pub mod systimer;
+pub mod usb_dwc;
