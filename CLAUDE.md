@@ -12,8 +12,9 @@ suite); read the relevant section before changing a subsystem.
 - Commit after each coherent improvement. Commit messages: a subject line, a body saying
   why, and end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Never run `pio` unless asked; the user builds firmware. Never edit `../trmnl-firmware`
-  from here (read it freely: `src/`, `lib/`, `.pio/libdeps/<env>/`, and the IDF/Arduino
-  sources under `~/.platformio/packages` are the reference for what the hardware must do).
+  from here, apart from its integration tests in `spec/` (read the rest freely: `src/`,
+  `lib/`, `.pio/libdeps/<env>/`, and the IDF/Arduino sources under `~/.platformio/packages`
+  are the reference for what the hardware must do).
 - Never run `pio run -c <other.ini>` in the firmware checkout: a different project config
   makes PlatformIO wipe every env's `.pio/build`. Use a separate `[platformio] build_dir`.
 
@@ -31,26 +32,28 @@ Style: `cargo fmt` (max_width 120), clippy clean. Match the surrounding code's c
 density and naming; comments explain hardware behaviour and why, with firmware file:line
 references where relevant.
 
-## Integration tests (../trmnl-spec)
+## Integration tests (../trmnl-firmware/spec)
 
-- The integration tests live in their own repository, `../trmnl-spec` (RSpec; its CLAUDE.md
-  and README say how to run and write them): they run firmware builds in this simulator's
-  release build (`target/release/trmnl-sim`, via the control API). After changing the
-  simulator, `cargo build --release`, then run the affected specs there, ONE group or example
-  at a time under a hard limit:
-  `cd ../trmnl-spec && perl -e 'alarm 90; exec @ARGV' bundle exec rspec spec/general/setup/portal_spec.rb:42; pkill -f target/release/trmnl-sim`
+- The integration tests live in the firmware repository, `../trmnl-firmware/spec` (RSpec; its
+  CLAUDE.md and README say how to run and write them): they run firmware builds in this
+  simulator's release build (`target/release/trmnl-sim`, via the control API). The separate
+  `trmnl-spec` repository is their abandoned predecessor: don't run or change it. After
+  changing the simulator, `cargo build --release`, then run the affected specs there, ONE
+  group or example at a time under a hard limit:
+  `cd ../trmnl-firmware/spec && perl -e 'alarm 90; exec @ARGV' bundle exec rspec spec/general/setup/portal_spec.rb:42; pkill -f target/release/trmnl-sim`
   (`ENVS=<env>:full` for one device). A full run (`rake spec` there) is a final regression
   check, run in the background.
 - A test that fails because the simulator is wrong gets the simulator fixed here: general,
   minimal changes that keep the other chips and boards behaving identically. A test that
-  fails because the firmware is wrong is marked in trmnl-spec (`known_failure:`), never
-  worked around in the simulator.
+  fails because the firmware is wrong stays in the suite and fails; it is never worked
+  around in the simulator.
 - The control API and its MCP server (`/mcp`) are kept at feature parity by construction:
   every endpoint is one row in `crates/sim-control/src/endpoints.rs` (its MCP tool and input
   schema come from the row, its calls go through the HTTP router). A new or changed
   endpoint updates that row's parameters and description too.
 - A change to the control API or the built-in behaviour the tests rely on needs the matching
-  change in trmnl-spec's client library (`lib/trmnl_sim/`); commit each repository on its own.
+  change in the suite's client library (`../trmnl-firmware/spec/lib/trmnl_sim/`); the
+  firmware repository is the user's to commit.
 
 ## Where things are
 
@@ -67,5 +70,5 @@ references where relevant.
 ## Adding a board
 
 Add a `BoardSpec` row (or a board module for non-SPI panels) and update the README's
-supported-device tables; then add the board's tests in ../trmnl-spec (a `Device` and a
+supported-device tables; then add the board's tests in ../trmnl-firmware/spec (a `Device` and a
 board group, see its CLAUDE.md), run them there and classify every failure as above.
