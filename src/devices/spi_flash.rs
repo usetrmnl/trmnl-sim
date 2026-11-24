@@ -238,7 +238,7 @@ impl SpiFlash {
 
 /// Write through a renamed temp file, so a reader of `path` sees the old image or the new one,
 /// never a truncated one.
-fn write_atomically(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let path = if path.exists() { path.canonicalize()? } else { path.to_path_buf() };
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));

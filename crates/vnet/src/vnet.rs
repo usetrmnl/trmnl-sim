@@ -187,6 +187,10 @@ impl VirtualNet {
 
     /// Map a guest-visible destination to the host destination (None = unreachable).
     fn host_target(&self, dst: Ipv4Addr, port: u16) -> Option<SocketAddrV4> {
+        // A `dns_overrides` entry named by an address redirects connections to that address
+        // (a URL with an IP literal never asks DNS).
+        let literal = dst.to_string();
+        let dst = self.cfg.dns_overrides.iter().find(|(h, _)| *h == literal).map_or(dst, |&(_, ip)| ip);
         if dst == self.cfg.gateway_ip {
             let port = self.cfg.host_ports.iter().find(|&&(g, _)| g == port).map_or(port, |&(_, h)| h);
             Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))

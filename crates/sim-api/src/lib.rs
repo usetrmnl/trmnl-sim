@@ -281,6 +281,11 @@ pub struct Faults {
     /// The TRMNL X modem answers ERROR to AT commands starting with one of these
     /// (e.g. "AT+CWMODE").
     pub modem_at_errors: Vec<String>,
+    /// The TRMNL X modem reports this firmware version (`AT+FWVER?`) whatever was flashed.
+    pub modem_fw_version: Option<String>,
+    /// Flashing the TRMNL X modem fails once this many bytes of an image are written (the
+    /// ROM loader answers FLASH_DATA with an error); the flash is left half written.
+    pub modem_flash_fail_after: Option<u64>,
     /// The TRMNL X touch controller (IQS323) misbehaves.
     pub touch_bar: Option<TouchBarFault>,
     /// The TRMNL X fuel gauge (BQ27427) has a power-on reset, once, when the fault is set
@@ -375,6 +380,12 @@ impl Faults {
         }
         if !self.modem_at_errors.is_empty() {
             v.push(format!("modem ERROR for {}", self.modem_at_errors.join(", ")));
+        }
+        if let Some(ver) = &self.modem_fw_version {
+            v.push(format!("modem reports firmware {ver}"));
+        }
+        if let Some(n) = self.modem_flash_fail_after {
+            v.push(format!("modem flash fails after {n} bytes"));
         }
         if let Some(t) = self.touch_bar {
             v.push(format!("touch bar {}", t.name()));

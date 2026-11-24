@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the fast checks CI runs: fmt, clippy (with and without the GUI) and unit tests.
-# No firmware builds needed. The integration tests are in ../trmnl-spec.
+# No firmware builds needed. The integration tests are in ../trmnl-firmware/spec.
 #
 #   bin/test
 set -euo pipefail

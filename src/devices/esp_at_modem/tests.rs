@@ -898,7 +898,8 @@ impl H {
         self.send(&rom_req(cmd, data, chk));
         let mut slip = Slip::default();
         let mut frames = Vec::new();
-        let deadline = self.now + 5_000 * MS;
+        // esp-serial-flasher allows FLASH_BEGIN's erase 30 s per megabyte.
+        let deadline = self.now + if cmd == rom::FLASH_BEGIN { 120_000 } else { 5_000 } * MS;
         while frames.len() < n {
             assert!(self.now < deadline, "timeout waiting for response to {cmd:#x}");
             self.step(deadline);
@@ -1021,15 +1022,130 @@ fn rom_loader_flash_sequence() {
     assert_eq!((st.flash_data_packets, st.rom_checksum_errors, st.flash_ends), (N as u64, 1, 1));
     assert_eq!(st.flash_bytes_written, (BLK * N) as u64);
 
-    // FLASH_END(run) boots the AT firmware; then modem_reset_target() power cycles anyway.
-    assert!(h.wait_for("ready", 1000).is_some());
+    // FLASH_END(run) leaves the loader, but this was no firmware: nothing comes up, and
+    // modem_reset_target()'s power cycle doesn't change that.
+    assert!(h.wait_for("ready", 1000).is_none());
     assert!(!h.m.in_download_mode());
     h.power(false, false);
     h.now += 100 * MS;
     h.power(true, false);
     h.cmd("AT");
-    assert!(h.wait_for("OK", 1000).is_some());
+    assert!(h.wait_for("OK", 6000).is_none());
     assert!(h.m.flash_image().is_some(), "flash survives power cycles");
+}
+
+impl H {
+    /// Modem::flashFromFile(): the whole image at offset 0 in 4 KiB blocks, then FLASH_END(run).
+    /// Returns the block whose FLASH_DATA failed, if one did (the firmware stops there).
+    fn flash(&mut self, image: &[u8]) -> Option<usize> {
+        const BLK: usize = 4096;
+        self.enter_bootloader();
+        self.m.poll(self.now);
+        let blocks = image.len().div_ceil(BLK);
+        let r = self.rom(rom::FLASH_BEGIN, &words(&[image.len() as u32, blocks as u32, BLK as u32, 0, 0]), 0, 0, 1);
+        assert_eq!(r[0].failed, 0);
+        for (seq, blk) in image.chunks(BLK).enumerate() {
+            let mut d = words(&[BLK as u32, seq as u32, 0, 0]);
+            d.extend_from_slice(blk);
+            let r = self.rom(rom::FLASH_DATA, &d, rom::checksum(blk), 0, 1);
+            if r[0].failed != 0 {
+                assert_eq!(r[0].error, rom::ERR_COMMAND_FAILED);
+                return Some(seq);
+            }
+        }
+        let r = self.rom(rom::FLASH_END, &words(&[0]), 0, 0, 1);
+        assert_eq!(r[0].failed, 0);
+        None
+    }
+
+    /// Modem::getFirmwareVersion(): None when the firmware answers ERROR.
+    fn fw_version(&mut self) -> Option<String> {
+        self.flush();
+        self.cmd("AT+FWVER?");
+        let resp = self.wait_for("OK", 3000)?;
+        let start = resp.find("+FWVER:\"")? + 8;
+        Some(resp[start..start + resp[start..].find('"')?].to_string())
+    }
+}
+
+#[test]
+fn firmware_version_follows_the_flashed_image() {
+    let mut h = H::new(home_cfg());
+    // As shipped: the factory's firmware predates AT+FWVER.
+    h.firmware_init();
+    assert_eq!(h.fw_version(), None);
+    assert_eq!(h.m.stats().last_unknown_command.as_deref(), Some("AT+FWVER?"));
+    assert!(!h.m.take_flash_dirty());
+
+    // Flashed with a newer image, it reports that image's version from then on.
+    assert_eq!(h.flash(&image::test_image(Some("1.0.1"))), None);
+    assert!(h.m.take_flash_dirty());
+    h.firmware_init();
+    assert_eq!(h.fw_version().as_deref(), Some("1.0.1"));
+    assert_eq!(h.m.fw_version().as_deref(), Some("1.0.1"));
+    assert_eq!(h.flash(&image::test_image(Some("1.2.0-rc1"))), None);
+    h.firmware_init();
+    assert_eq!(h.fw_version().as_deref(), Some("1.2.0-rc1"));
+
+    // An image without the command, and the version fault on top of either.
+    assert_eq!(h.flash(&image::test_image(None)), None);
+    h.firmware_init();
+    assert_eq!(h.fw_version(), None);
+    h.m.set_fw_version_fault(Some("0.9.0".into()));
+    assert_eq!(h.fw_version().as_deref(), Some("0.9.0"));
+    h.m.set_fw_version_fault(None);
+    assert_eq!(h.fw_version(), None);
+}
+
+#[test]
+fn failed_flash_leaves_a_modem_that_does_not_boot() {
+    let mut h = H::new(home_cfg());
+    let image = image::test_image(Some("1.0.1"));
+    // The application is at 64 KiB in the test image: fail before it is written.
+    h.m.set_flash_fail_after(Some(0x1_0000));
+    assert_eq!(h.flash(&image), Some(16));
+    assert!(h.m.take_flash_dirty());
+    assert_eq!(h.m.stats().flash_ends, 0);
+    // modem_reset_target(), then the Modem constructor's AT: no answer in its 5 s.
+    h.power(false, false);
+    h.now += 100 * MS;
+    h.power(true, false);
+    h.cmd("AT");
+    assert!(h.wait_for("OK", 5000).is_none());
+    assert_eq!(h.m.stats().at_commands, 0);
+
+    // The ROM loader still works, so flashing again (the fault gone) repairs it.
+    h.m.set_flash_fail_after(None);
+    assert_eq!(h.flash(&image), None);
+    h.firmware_init();
+    assert_eq!(h.fw_version().as_deref(), Some("1.0.1"));
+}
+
+#[test]
+fn flash_image_checks() {
+    let good = image::test_image(Some("1.0.1"));
+    assert!(image::bootable(&good));
+    assert!(!image::bootable(&vec![0xff; 4 << 20]));
+    // One flipped bit in the application fails its checksum.
+    let mut bad = good.clone();
+    bad[0x1_0020] ^= 1;
+    assert!(!image::bootable(&bad));
+    // No partition table.
+    let mut bad = good.clone();
+    bad[0xc000] = 0xff;
+    assert!(!image::bootable(&bad));
+    assert_eq!(image::fw_version(&good).as_deref(), Some("1.0.1"));
+    assert_eq!(image::fw_version(&image::test_image(None)), None);
+    assert_eq!(image::fw_version(&[0xff; 64]), None);
+
+    // The image in the firmware checkout, when there is one next to this repository.
+    let real = concat!(env!("CARGO_MANIFEST_DIR"), "/../trmnl-firmware/data/system/factory_ESP32C5-4MB.bin");
+    if let Ok(real) = std::fs::read(real) {
+        assert!(image::bootable(&real));
+        if let Some(v) = image::fw_version(&real) {
+            assert!(v.split('.').count() >= 2, "{v}");
+        }
+    }
 }
 
 #[test]

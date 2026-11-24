@@ -136,6 +136,10 @@ struct FlashWrite {
 /// Everything outside the loader the command handler touches.
 pub(super) struct RomCtx<'a> {
     pub flash: &'a mut Option<Vec<u8>>,
+    /// Set when `flash` changes.
+    pub flash_dirty: &'a mut bool,
+    /// Fault: FLASH_DATA fails once the operation has written this many bytes.
+    pub fail_after: Option<u64>,
     pub flash_size_id: u8,
     pub mac: [u8; 6],
     pub stats: &'a mut ModemStats,
@@ -236,6 +240,7 @@ impl RomLoader {
                     let start = (offset as usize).min(flash.len());
                     let end = (offset as usize).saturating_add(erase_size as usize).min(flash.len());
                     flash[start..end].fill(0xff);
+                    *ctx.flash_dirty = true;
                     // The ROM erases 64 KiB blocks where it can, 4 KiB sectors otherwise.
                     let sectors = u64::from(erase_size).div_ceil(4096);
                     cost += sectors / 16 * t.rom_erase_block_ns + sectors % 16 * t.rom_erase_sector_ns;
@@ -255,6 +260,10 @@ impl RomLoader {
                     one(0, &[], Some(ERR_INVALID_CRC))
                 } else if cmd == MEM_DATA {
                     if self.mem_active { one(0, &[], None) } else { one(0, &[], Some(ERR_COMMAND_FAILED)) }
+                } else if let Some(fw) = &self.flash_write
+                    && ctx.fail_after.is_some_and(|n| u64::from(fw.written) * u64::from(fw.packet_size) >= n)
+                {
+                    one(0, &[], Some(ERR_COMMAND_FAILED))
                 } else if let Some(fw) = &mut self.flash_write {
                     let flash = ctx.flash.get_or_insert_with(|| vec![0xff; 1usize << ctx.flash_size_id.min(28)]);
                     let addr = fw.offset as usize + fw.written as usize * fw.packet_size as usize;
@@ -265,6 +274,7 @@ impl RomLoader {
                         *d &= *s;
                     }
                     fw.written += 1;
+                    *ctx.flash_dirty = true;
                     ctx.stats.flash_data_packets += 1;
                     ctx.stats.flash_bytes_written += payload.len() as u64;
                     cost += t.rom_write_ns_per_kb * payload.len() as u64 / 1024;

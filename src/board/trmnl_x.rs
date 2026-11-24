@@ -4,6 +4,8 @@
 //! modem straps); BQ27427 fuel gauge; BMA530 accelerometer (the device's pose);
 //! ESP32-C5 ESP-AT modem on UART0 for 5 GHz.
 
+use std::path::PathBuf;
+
 use sim_api::{BoardInfo, Pose, TouchZone};
 
 use super::Board;
@@ -42,12 +44,17 @@ pub struct TrmnlX {
     battery_mv: u32,
     pose: Pose,
     modem_power: (bool, bool),
+    /// Where the modem's flash is kept between runs (see [`TrmnlX::new`]).
+    modem_flash: Option<PathBuf>,
     last_now: u64,
 }
 
 impl TrmnlX {
-    pub fn new(modem_mac: [u8; 6], net: &vnet::NetConfig) -> Self {
-        let modem = EspAtModem::new(ModemConfig {
+    /// `modem_flash`: file holding the modem's own 4 MB flash, the device's second flash
+    /// chip. It is read now if it exists and written whenever the firmware has flashed the
+    /// modem; without one the modem runs what the factory put there (no `AT+FWVER`).
+    pub fn new(modem_mac: [u8; 6], net: &vnet::NetConfig, modem_flash: Option<PathBuf>) -> Self {
+        let mut modem = EspAtModem::new(ModemConfig {
             mac: modem_mac,
             networks: vec![
                 ModemAp {
@@ -72,6 +79,9 @@ impl TrmnlX {
             host_ports: net.host_ports.clone(),
             flash_size_id: 0x16,
         });
+        if let Some(image) = modem_flash.as_ref().and_then(|p| std::fs::read(p).ok()) {
+            modem.set_flash_image(Some(image));
+        }
         let mut b = TrmnlX {
             panel: ParallelEpd::new(PanelGeometry::TRMNL_X),
             i2c: Self::new_i2c(),
@@ -81,10 +91,22 @@ impl TrmnlX {
             battery_mv: 4000,
             pose: Pose::default(),
             modem_power: (false, false),
+            modem_flash,
             last_now: 0,
         };
         b.apply_inputs();
         b
+    }
+
+    /// Write the modem's flash to its file if the ROM loader changed it.
+    fn persist_modem_flash(&mut self) {
+        if !self.modem.take_flash_dirty() {
+            return;
+        }
+        let (Some(path), Some(image)) = (&self.modem_flash, self.modem.flash_image()) else { return };
+        if let Err(e) = crate::devices::spi_flash::write_atomically(path, image) {
+            log::warn!("cannot write the modem's flash to {}: {e}", path.display());
+        }
     }
 
     /// The I2C chips as they come out of power-on.
@@ -145,6 +167,8 @@ impl TrmnlX {
         if (en, strap_low) != self.modem_power {
             self.modem_power = (en, strap_low);
             self.modem.set_power(now, en, strap_low);
+            // The firmware resets the modem after flashing it, successfully or not.
+            self.persist_modem_flash();
         }
     }
 }
@@ -330,6 +354,8 @@ impl Board for TrmnlX {
         self.tca().pwr_good_fault = faults.panel_busy_stuck;
         self.modem.set_unresponsive(faults.modem_unresponsive);
         self.modem.set_at_errors(&faults.modem_at_errors);
+        self.modem.set_fw_version_fault(faults.modem_fw_version.clone());
+        self.modem.set_flash_fail_after(faults.modem_flash_fail_after);
         let now = self.last_now;
         let iqs = self.iqs();
         iqs.lockup = faults.touch_bar == Some(sim_api::TouchBarFault::Lockup);
@@ -388,6 +414,7 @@ impl Board for TrmnlX {
         r.section(|r| self.panel.restore_state(r, powered))?;
         let now = self.last_now;
         r.section(|r| self.modem.restore_state(r, now))?;
+        self.persist_modem_flash();
         self.modem_power = (false, false);
         self.bitbang = BitBangI2cSlave::new();
         self.i2c = Self::new_i2c();

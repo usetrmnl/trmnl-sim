@@ -3,7 +3,7 @@
 A simulator for TRMNL devices that runs **unmodified compiled firmware**: the merged image
 you would flash at 0 (e.g. `FW1.8.17-trmnl.bin`), plus its ELF, the same path with the `.elf`
 extension (`FW1.8.17-trmnl.elf`). It gives you a window with the e-paper display and an HTTP
-control API for automated tests ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)),
+control API for automated tests (the firmware's [integration suite](https://github.com/usetrmnl/trmnl-firmware/tree/main/spec)),
 locally or in GitHub Actions.
 
 You always say which image to run (`trmnl-sim <image>`). The board is the PlatformIO env the
@@ -76,8 +76,8 @@ Common to all devices:
   [esp-rom-elfs](https://github.com/espressif/esp-rom-elfs/releases), which
   `scripts/fetch-rom-elfs.sh` (run by `bin/setup`) puts in `rom/`. `--rom` or `TRMNL_SIM_ROM`
   overrides the search.
-- PlatformIO needs Python; the integration tests
-  ([trmnl-spec](https://github.com/usetrmnl/trmnl-spec)) need Ruby 3.2+ with Bundler.
+- PlatformIO needs Python; the integration tests (the firmware's
+  [spec/](https://github.com/usetrmnl/trmnl-firmware/tree/main/spec)) need Ruby 3.2+ with Bundler.
 
 ## Quick start
 
@@ -87,7 +87,7 @@ bin/build      # cargo build --release
 bin/sim        # build, then run; the window asks for the image and the board
 bin/sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin   # ... or say which
 bin/sim ../trmnl-firmware/.pio/build/TRMNL_X/FW1.8.17-TRMNL_X.bin --erase   # extra arguments go to trmnl-sim
-bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-spec, rake spec)
+bin/test       # fmt, clippy, unit tests (the integration tests: ../trmnl-firmware/spec, rake spec)
 bin/release    # bump the minor version (--patch: the patch), commit, tag, push: a GitHub release
 ```
 
@@ -138,6 +138,8 @@ faults:
 | Panel stuck | `{"panel_busy_stuck": true}` | OG/BWRY: BUSY held; X: the PMIC never reports power good, on its PWR_GOOD pin or in its register |
 | Modem unresponsive | `{"modem_unresponsive": true}` | X: the modem ignores AT commands |
 | Modem AT errors | `{"modem_at_errors": ["AT+CWMODE"]}` | X: ERROR for AT commands starting with these |
+| Modem firmware version | `{"modem_fw_version": "0.9.0"}` | X: `AT+FWVER?` reports this whatever image is flashed |
+| Modem flash failure | `{"modem_flash_fail_after": 1048576}` | X: flashing the modem fails after this many bytes, leaving it half written (it no longer boots) |
 | Chip temperature | `{"chip_temp_c": 60}` | the on-chip sensor reads this instead of 25 °C |
 | Fuel gauge | `{"gauge_reset": true}` | X: the BQ27427 has a power-on reset (once) |
 | Touch bar | `{"touch_bar": "reset"}` | X: the IQS323 resets (once); `"lockup"`, `"ati_error"` |
@@ -177,6 +179,15 @@ console (`[sim] log I: src/bl.cpp [701]: …`) for tests to wait on.
 **A factory-fresh TRMNL X** (`--erase`) flashes its modem (about 13 s of virtual time), then
 waits in shipment mode until docked (`POST /dock`) and restarts into setup.
 
+**The TRMNL X's modem has its own flash**, kept in `<flash>.modem` next to the flash image
+(copy both to copy a device; `--erase` removes it). It is written when the firmware flashes
+the modem and decides what the modem does afterwards: `AT+FWVER?` reports the version found
+in the image (ERROR for an image without the command, and for a modem that was never
+flashed here, like the firmware the first units shipped with), and a flash that is erased
+or half written (see the `modem_flash_fail_after` fault) doesn't boot, so the modem stays
+silent until it is flashed again. For a modem firmware update, serve the image from the
+host and point the firmware's URL at it with `--dns` (and `--host-port`).
+
 **The TRMNL X's pose** feeds its BMA530 accelerometer (I2C `0x18`): it stands in landscape,
 leaning back 15°, until `POST /orientation` (or the window's Orientation controls) turns it
 to one of the firmware's orientations (`portrait_upright`, `landscape_left`,
@@ -201,7 +212,7 @@ the current one.
 | `--turbo` | Don't pace to wall-clock time (see [Time](#time)) |
 | `--fast-sleep` | Fast-forward deep sleeps |
 | `--offline` | Only the host (`10.0.2.2`) and the NTP server are reachable |
-| `--dns NAME=IP` | Answer DNS for NAME locally (repeatable) |
+| `--dns NAME=IP` | Answer DNS for NAME locally (repeatable). NAME can be an address, which redirects connections to it: `--dns 192.168.1.20=10.0.2.2` |
 | `--portal-port N` | Host port for the captive portal (default 8080, 0 = any) |
 | `--mock-server[=PORT]` | Start the [built-in mock server](#built-in-mock-server) (default 8090, 0 = any) |
 | `--ota-firmware PATH` | App image (`firmware.bin`) the built-in server offers at `/firmware.bin` for OTA; its ELF (same path, `.elf`) is loaded too |
@@ -312,15 +323,14 @@ The implemented radio is peripheral-only, one link, without SMP/link encryption;
 application-layer Security 1 still executes in full. Central-role scanning and
 whitelists are not implemented.
 
-Firmware integration coverage lives in [trmnl-spec](https://github.com/usetrmnl/trmnl-spec),
+Firmware integration coverage lives in the firmware's [spec/](https://github.com/usetrmnl/trmnl-firmware/tree/main/spec),
 with the shared Ruby simulator client and TLS mock. Its OG Bluetooth specs cover discovery,
 QR-based Security 1, encrypted status, long writes, oversize rejection, reconnect,
 wrong proof, reset invalidation, and encrypted WiFi/setup-code handoff:
 
 ```sh
-cd ../trmnl-spec
-ENVS=trmnl:full FIRMWARE_REPO=../firmware SIM_REPO=../trmnl-sim \
-  bundle exec rspec spec/core/og_bluetooth_spec.rb
+cd ../trmnl-firmware/spec
+ENVS=trmnl:full bundle exec rspec spec/core/og_bluetooth_spec.rb
 ```
 
 See that repository's setup instructions for the QR decoder and `PAIRING_HOST` override
@@ -365,13 +375,12 @@ and disallowed power states return HTTP 409 without applying the change. Malform
 requests return 400; a missing emulator response returns 504. Host edits bypass
 simulated flash faults and do not count as guest program/erase operations.
 
-Firmware integration coverage lives in `trmnl-spec`, using its onboarded-device fixtures
+Firmware integration coverage lives in the firmware's `spec/`, using its onboarded-device fixtures
 and temporary flash copies:
 
 ```sh
-cd ../trmnl-spec
-ENVS=trmnl:full FIRMWARE_REPO=../firmware SIM_REPO=../trmnl-sim \
-  bundle exec rspec spec/general/tooling/preferences_spec.rb
+cd ../trmnl-firmware/spec
+ENVS=trmnl:full bundle exec rspec spec/general/tooling/preferences_spec.rb
 ```
 
 The specs cover typed edits, validation, multi-page blobs, unchanged unrelated values,
@@ -522,7 +531,7 @@ trmnl-sim ../trmnl-firmware/.pio/build/trmnl/FW1.8.17-trmnl.bin --headless --sec
 ```
 
 `POST /coverage` (Ruby: `sim.write_coverage`) writes one mid-run; after an OTA both builds
-are reported. trmnl-spec records coverage on every run and merges it into one report.
+are reported. The firmware's suite records coverage on every run and merges it into one report.
 
 It costs about 5-8% of emulation speed. Not covered: the bootloader and ROM (no line
 tables) and functions replaced by [HLE](#architecture) hooks (left out, not counted as
@@ -548,7 +557,7 @@ missed). A killed simulator writes no tracefile.
 
 Each distinct violation is reported once. `--memcheck=halt` stops at the first (`sim.wait`
 then fails); `GET /memcheck` (Ruby: `sim.memcheck`) returns the full report, and a summary
-prints at exit. trmnl-spec runs every simulator with `--memcheck=halt`.
+prints at exit. The firmware's suite runs every simulator with `--memcheck=halt`.
 
 How it works: HLE hooks on the IDF heap's `multi_heap_*` layer see every block. A shadow
 byte per byte of SRAM and PSRAM marks live, freed, header and never-allocated bytes, and
@@ -563,9 +572,10 @@ into another live block aren't seen, and static buffers and non-heap stacks aren
 ### CI
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs format, clippy and unit tests, then
-calls trmnl-spec's workflow with this commit: it builds the firmware and the headless
-simulator (`--no-default-features`, no GUI), runs the suite and uploads logs, screens and
-coverage. The firmware repository calls that workflow to test its PRs. Adjust the
+calls the firmware repository's integration workflow with this commit: it builds the firmware
+and the headless simulator (`--no-default-features`, no GUI), runs the suite in its `spec/`
+and uploads logs, screens and coverage. The firmware repository runs the same workflow on its
+PRs. Adjust the
 `usetrmnl/...` names if the repositories live elsewhere.
 
 ### Releases

@@ -1,6 +1,6 @@
 //! A mock TRMNL server built into the simulator: `/api/setup`, `/api/display`, `/api/log`,
 //! image downloads and firmware files for OTA, with images you add at runtime (from the
-//! GUI, the control API or code). It mirrors trmnl-spec's `lib/trmnl_sim/mock_trmnl.rb`.
+//! GUI, the control API or code). It mirrors `lib/trmnl_sim/mock_trmnl.rb` in the firmware's `spec/`.
 //!
 //! The device reaches the host at 10.0.2.2, so the server URL to give the device is
 //! [`MockServer::device_url`], e.g. `http://10.0.2.2:8090`.
