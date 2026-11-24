@@ -234,7 +234,8 @@ impl Fake {
             Command::SetRefreshFlashing(_)
             | Command::Gesture(_)
             | Command::SetWifiNetworks(_)
-            | Command::SetPortalClient(_) => {}
+            | Command::SetPortalClient(_)
+            | Command::SetEthernet(_) => {}
             Command::PressRepeat { ms: dur, .. } => {
                 self.press_until = Some(self.t + ms(dur));
                 self.p.status.lock().button_down = true;

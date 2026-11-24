@@ -322,6 +322,7 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
         st.firmware = opts.firmware_name.clone();
         st.turbo = turbo;
         st.partitions = m.partitions();
+        st.ethernet = m.ethernet();
     }
     if let Some(sp) = &opts.restore {
         // The power-on boot being replaced printed its ROM banner already.
@@ -426,6 +427,31 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                         pose.tilt_deg
                     ));
                     ports.status.lock().pose = pose;
+                }
+                Command::SetEthernet(a) => {
+                    let was = m.ethernet().map(|e| e.adapter);
+                    match m.set_ethernet(a) {
+                        Ok(()) => {
+                            let what = match (was.is_some_and(|w| w.plugged), a.plugged) {
+                                (false, true) => "USB Ethernet adapter plugged in",
+                                (true, false) => "USB Ethernet adapter unplugged",
+                                (false, false) => "USB Ethernet adapter not plugged in",
+                                (true, true) => "USB Ethernet adapter",
+                            };
+                            let detail = if a.plugged {
+                                format!(
+                                    " ({}, {})",
+                                    if a.link { "link" } else { "no link" },
+                                    if a.dhcp { "DHCP" } else { "no DHCP" }
+                                )
+                            } else {
+                                String::new()
+                            };
+                            ports.console.lock().push_sim(&format!("{what}{detail}"));
+                        }
+                        Err(e) => ports.console.lock().push_sim(&format!("USB Ethernet adapter: {e}")),
+                    }
+                    ports.status.lock().ethernet = m.ethernet();
                 }
                 Command::SetRefreshFlashing(on) => {
                     m.board().set_refresh_flashing(on);
@@ -841,7 +867,9 @@ pub fn run(mut m: Box<dyn Machine>, ports: SimPorts, mut opts: RunnerOptions) ->
                 }
                 last_portal = net.portal_url.clone();
             }
+            let ethernet = m.ethernet();
             let mut st = ports.status.lock();
+            st.ethernet = ethernet;
             st.bluetooth = bluetooth;
             st.wifi_connected = net.connected;
             st.ip = net.ip;

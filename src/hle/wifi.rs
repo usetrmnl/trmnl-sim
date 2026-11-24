@@ -280,6 +280,10 @@ impl WifiState {
         self.net_faults = faults;
     }
 
+    pub fn net_faults(&self) -> &NetFaults {
+        &self.net_faults
+    }
+
     /// Guest time must track wall time: host-side network activity is in flight,
     /// or the setup portal is up (the device is waiting for a person/browser).
     pub fn net_busy(&self) -> bool {
